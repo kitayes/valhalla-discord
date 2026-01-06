@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"valhalla/internal/models"
 
 	"github.com/google/generative-ai-go/genai"
@@ -21,15 +20,27 @@ func NewGeminiClient(apiKey string) (*GeminiClient, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	model := client.GenerativeModel("gemini-1.5-flash")
+
+	model.ResponseMIMEType = "application/json"
+
+	model.SetTemperature(0.1)
+
 	return &GeminiClient{model: model}, nil
 }
 
 func (g *GeminiClient) AnalyzeScreenshot(data []byte) ([]models.PlayerResult, error) {
+	promptText := `Analyze this MOBA scoreboard screenshot.
+	Extract data for ALL players visible in the list.
+	For each player extract: player_name, result (WIN or LOSE), kills, deaths, assists, champion.
+	
+	Return a JSON array of objects with these exact keys:
+	"player_name" (string), "result" (string), "kills" (int), "deaths" (int), "assists" (int), "champion" (string).`
+
 	prompt := []genai.Part{
 		genai.ImageData("png", data),
-		genai.Text(`Analyze this MOBA scoreboard. Return JSON array ONLY: 
-        [{"player_name":"...","result":"WIN" or "LOSE","kills":0,"deaths":0,"assists":0,"champion":"..."}]`),
+		genai.Text(promptText),
 	}
 
 	resp, err := g.model.GenerateContent(context.Background(), prompt...)
@@ -41,13 +52,15 @@ func (g *GeminiClient) AnalyzeScreenshot(data []byte) ([]models.PlayerResult, er
 		return nil, fmt.Errorf("empty response from AI")
 	}
 
-	raw := fmt.Sprintf("%v", resp.Candidates[0].Content.Parts[0])
-	raw = strings.TrimPrefix(raw, "```json")
-	raw = strings.TrimSuffix(raw, "```")
+	rawText, ok := resp.Candidates[0].Content.Parts[0].(genai.Text)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response format")
+	}
 
 	var results []models.PlayerResult
-	if err := json.Unmarshal([]byte(raw), &results); err != nil {
-		return nil, err
+	if err := json.Unmarshal([]byte(rawText), &results); err != nil {
+		return nil, fmt.Errorf("json unmarshal error: %w | raw: %s", err, rawText)
 	}
+
 	return results, nil
 }
