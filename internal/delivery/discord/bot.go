@@ -62,7 +62,7 @@ func (b *Bot) isAdmin(userID string) bool {
 }
 
 func (b *Bot) handleExport(s *discordgo.Session, m *discordgo.MessageCreate) {
-	s.ChannelMessageSend(m.ChannelID, "Генерирую отчет... 📊")
+	s.ChannelMessageSend(m.ChannelID, "Генерирую отчет...")
 
 	data, err := b.services.MatchService.GetExcelReport()
 	if err != nil {
@@ -93,13 +93,13 @@ func (b *Bot) handleScreenshot(s *discordgo.Session, m *discordgo.MessageCreate)
 	err = b.services.MatchService.ProcessImage(data)
 	if err != nil {
 		if err.Error() == "duplicate match detected" {
-			s.ChannelMessageSend(m.ChannelID, "⚠️ Этот матч уже был загружен ранее.")
+			s.ChannelMessageSend(m.ChannelID, "Этот матч уже был загружен ранее.")
 		} else {
 			s.ChannelMessageSend(m.ChannelID, "Ошибка анализа: "+err.Error())
 			b.logger.Error("Analysis error: %v", err)
 		}
 	} else {
-		s.ChannelMessageSend(m.ChannelID, "Результаты матча успешно записаны! ✅")
+		s.ChannelMessageSend(m.ChannelID, "Результаты матча успешно записаны!")
 	}
 }
 
@@ -108,7 +108,7 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
-	if strings.HasPrefix(m.Content, "!") {
+	if strings.HasPrefix(m.Content, "/") {
 		if !b.isAdmin(m.Author.ID) {
 			return
 		}
@@ -120,32 +120,32 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		cmd := args[0]
 
 		switch cmd {
-		case "!export":
+		case "/export":
 			b.handleExport(s, m)
 
-		case "!set_timer":
+		case "/set_timer":
 			if len(args) < 2 {
-				s.ChannelMessageSend(m.ChannelID, "⚠️ Формат: `!set_timer YYYY-MM-DD`")
+				s.ChannelMessageSend(m.ChannelID, "Формат: `/set_timer YYYY-MM-DD`")
 				return
 			}
 			err := b.services.MatchService.SetTimer(args[1])
 			if err != nil {
 				s.ChannelMessageSend(m.ChannelID, "Ошибка: "+err.Error())
 			} else {
-				s.ChannelMessageSend(m.ChannelID, "📅 Таймер статистики установлен на "+args[1])
+				s.ChannelMessageSend(m.ChannelID, "Таймер статистики установлен на "+args[1])
 			}
 
-		case "!reset":
+		case "/reset":
 			err := b.services.MatchService.ResetGlobal()
 			if err != nil {
 				s.ChannelMessageSend(m.ChannelID, "Ошибка: "+err.Error())
 			} else {
-				s.ChannelMessageSend(m.ChannelID, "🔄 Статистика сброшена (таймер установлен на сейчас).")
+				s.ChannelMessageSend(m.ChannelID, "Статистика сброшена (таймер установлен на сейчас).")
 			}
 
-		case "!reset_player":
+		case "/reset_player":
 			if len(args) < 2 {
-				s.ChannelMessageSend(m.ChannelID, "⚠️ Формат: `!reset_player Nickname`")
+				s.ChannelMessageSend(m.ChannelID, "Формат: `/reset_player Nickname`")
 				return
 			}
 			dateArg := "now"
@@ -156,7 +156,7 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 			if err != nil {
 				s.ChannelMessageSend(m.ChannelID, "Ошибка: "+err.Error())
 			} else {
-				s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("👤 Статистика игрока **%s** сброшена.", args[1]))
+				s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("Статистика игрока %s сброшена.", args[1]))
 			}
 		}
 		return
