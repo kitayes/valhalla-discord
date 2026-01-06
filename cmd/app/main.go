@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"embed"
 	"os"
 	"os/signal"
 	"syscall"
@@ -16,6 +17,9 @@ import (
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
+
+//go:embed migrations/*.sql
+var migrationFS embed.FS
 
 func main() {
 	_ = godotenv.Load()
@@ -34,7 +38,19 @@ func main() {
 	}
 	defer db.Close()
 
+	log.Info("Running migrations...")
+	if err := repository.RunMigrations(db, migrationFS); err != nil {
+		log.Error("failed to run migrations: %s", err.Error())
+		return
+	}
+	log.Info("Migrations applied successfully")
+
 	repos := repository.NewRepository(&cfg.Repo, db)
+	if err != nil {
+		log.Error("failed to init db: %s", err.Error())
+		return
+	}
+	defer db.Close()
 
 	gemini, err := ai.NewGeminiClient(cfg.GeminiKey)
 	if err != nil {
