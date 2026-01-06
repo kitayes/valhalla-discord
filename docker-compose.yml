@@ -1,0 +1,34 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: valhalla_bot
+    restart: always
+    depends_on:
+      - db
+    env_file:
+      - .env
+    environment:
+      - REPO_DB_HOST=db
+      - REPO_DB_PORT=5432
+      - REPO_DB_USERNAME=postgres
+      - REPO_DB_PASSWORD=valhalla
+      - REPO_DB_NAME=valhalla_db
+      - REPO_DB_SSLMODE=disable
+
+  db:
+    image: postgres:15-alpine
+    container_name: valhalla_db
+    restart: always
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=valhalla
+      - POSTGRES_DB=valhalla_db
+    ports:
+      - "5435:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
