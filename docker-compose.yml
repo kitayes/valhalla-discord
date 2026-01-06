@@ -22,13 +22,15 @@ services:
     container_name: valhalla_db
     restart: always
     environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=valhalla
-      - POSTGRES_DB=valhalla_db
+    - POSTGRES_USER=postgres
+    - POSTGRES_PASSWORD=valhalla
+    - POSTGRES_DB=valhalla_db
     ports:
-      - "5435:5432"
+    - "5435:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+    - pgdata:/var/lib/postgresql/data
+    - ./migrations/000001_init.up.sql:/docker-entrypoint-initdb.d/1_init.sql
+    - ./migrations/000002_add_settings.up.sql:/docker-entrypoint-initdb.d/2_settings.sql
 
 volumes:
   pgdata:
