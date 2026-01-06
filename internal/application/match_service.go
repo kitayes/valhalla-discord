@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"valhalla/internal/integration"
 	"valhalla/internal/models"
 	"valhalla/internal/repository"
 
@@ -14,13 +15,31 @@ import (
 )
 
 type MatchServiceImpl struct {
-	repo   repository.Match
-	ai     AIProvider
-	logger Logger
+	repo       repository.Match
+	ai         AIProvider
+	logger     Logger
+	sheets     *integration.SheetService
+	ownerEmail string
 }
 
-func NewMatchServiceImpl(repo repository.Match, ai AIProvider, logger Logger) *MatchServiceImpl {
-	return &MatchServiceImpl{repo: repo, ai: ai, logger: logger}
+func NewMatchServiceImpl(repo repository.Match, ai AIProvider, sheets *integration.SheetService, ownerEmail string, logger Logger) *MatchServiceImpl {
+	return &MatchServiceImpl{
+		repo:       repo,
+		ai:         ai,
+		sheets:     sheets,
+		ownerEmail: ownerEmail,
+		logger:     logger,
+	}
+}
+
+type PlayerStats struct {
+	Name    string
+	Matches int
+	Wins    int
+	Losses  int
+	Kills   int
+	Deaths  int
+	Assists int
 }
 
 func (s *MatchServiceImpl) ProcessImage(data []byte) error {
@@ -89,7 +108,7 @@ func (s *MatchServiceImpl) ResetPlayer(playerName string, dateStr string) error 
 	return s.repo.SetPlayerResetDate(playerName, date)
 }
 
-func (s *MatchServiceImpl) GetExcelReport() ([]byte, error) {
+func (s *MatchServiceImpl) calculateStats() ([]*PlayerStats, error) {
 	seasonStart, err := s.repo.GetSeasonStartDate()
 	if err != nil {
 		return nil, err
@@ -103,16 +122,6 @@ func (s *MatchServiceImpl) GetExcelReport() ([]byte, error) {
 	playerResets, _ := s.repo.GetPlayerResetDates()
 	if playerResets == nil {
 		playerResets = make(map[string]time.Time)
-	}
-
-	type PlayerStats struct {
-		Name    string
-		Matches int
-		Wins    int
-		Losses  int
-		Kills   int
-		Deaths  int
-		Assists int
 	}
 
 	statsMap := make(map[string]*PlayerStats)
@@ -144,8 +153,8 @@ func (s *MatchServiceImpl) GetExcelReport() ([]byte, error) {
 	}
 
 	var statsList []*PlayerStats
-	for _, s := range statsMap {
-		statsList = append(statsList, s)
+	for _, st := range statsMap {
+		statsList = append(statsList, st)
 	}
 
 	sort.Slice(statsList, func(i, j int) bool {
@@ -167,6 +176,64 @@ func (s *MatchServiceImpl) GetExcelReport() ([]byte, error) {
 		return statsList[i].Wins > statsList[j].Wins
 	})
 
+	return statsList, nil
+}
+
+func (s *MatchServiceImpl) SyncToGoogleSheet() (string, error) {
+	if s.sheets == nil {
+		return "", fmt.Errorf("google sheets service is not disabled or not configured")
+	}
+
+	statsList, err := s.calculateStats()
+	if err != nil {
+		return "", err
+	}
+
+	var rows [][]interface{}
+
+	rows = append(rows, []interface{}{"Rank", "Player", "Matches", "Wins", "Losses", "WinRate %", "KDA"})
+
+	for i, st := range statsList {
+		winRate := 0.0
+		if st.Matches > 0 {
+			winRate = (float64(st.Wins) / float64(st.Matches)) * 100
+		}
+
+		deaths := st.Deaths
+		if deaths == 0 {
+			deaths = 1
+		}
+		kdaRatio := float64(st.Kills+st.Assists) / float64(deaths)
+
+		rows = append(rows, []interface{}{
+			i + 1,
+			st.Name,
+			st.Matches,
+			st.Wins,
+			st.Losses,
+			fmt.Sprintf("%.1f%%", winRate),
+			fmt.Sprintf("%.2f", kdaRatio),
+		})
+	}
+
+	_, url, err := s.sheets.EnsureSheetExists("Valhalla Leaderboard ", s.ownerEmail)
+	if err != nil {
+		return "", fmt.Errorf("failed to ensure sheet: %w", err)
+	}
+
+	if err := s.sheets.UpdateStats(rows); err != nil {
+		return "", fmt.Errorf("failed to update stats: %w", err)
+	}
+
+	return url, nil
+}
+
+func (s *MatchServiceImpl) GetExcelReport() ([]byte, error) {
+	statsList, err := s.calculateStats()
+	if err != nil {
+		return nil, err
+	}
+
 	f := excelize.NewFile()
 	sheet := "Leaderboard"
 	f.NewSheet(sheet)
@@ -179,24 +246,22 @@ func (s *MatchServiceImpl) GetExcelReport() ([]byte, error) {
 	}
 
 	row := 2
-	for _, s := range statsList {
+	for _, st := range statsList {
 		winRate := 0.0
-		if s.Matches > 0 {
-			winRate = (float64(s.Wins) / float64(s.Matches)) * 100
+		if st.Matches > 0 {
+			winRate = (float64(st.Wins) / float64(st.Matches)) * 100
 		}
-
-		deaths := s.Deaths
+		deaths := st.Deaths
 		if deaths == 0 {
 			deaths = 1
 		}
-		kdaRatio := float64(s.Kills+s.Assists) / float64(deaths)
+		kdaRatio := float64(st.Kills+st.Assists) / float64(deaths)
 
-		f.SetCellValue(sheet, fmt.Sprintf("A%d", row), s.Name)
-		f.SetCellValue(sheet, fmt.Sprintf("B%d", row), s.Matches)
-		f.SetCellValue(sheet, fmt.Sprintf("C%d", row), s.Wins)
-		f.SetCellValue(sheet, fmt.Sprintf("D%d", row), s.Losses)
+		f.SetCellValue(sheet, fmt.Sprintf("A%d", row), st.Name)
+		f.SetCellValue(sheet, fmt.Sprintf("B%d", row), st.Matches)
+		f.SetCellValue(sheet, fmt.Sprintf("C%d", row), st.Wins)
+		f.SetCellValue(sheet, fmt.Sprintf("D%d", row), st.Losses)
 		f.SetCellValue(sheet, fmt.Sprintf("E%d", row), fmt.Sprintf("%.1f%%", winRate))
-
 		f.SetCellValue(sheet, fmt.Sprintf("F%d", row), fmt.Sprintf("%.2f", kdaRatio))
 		row++
 	}

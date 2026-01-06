@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"valhalla/internal/integration"
 	"valhalla/migrations"
 
 	"valhalla/internal/ai"
@@ -43,11 +44,6 @@ func main() {
 	log.Info("Migrations applied successfully")
 
 	repos := repository.NewRepository(&cfg.Repo, db)
-	if err != nil {
-		log.Error("failed to init db: %s", err.Error())
-		return
-	}
-	defer db.Close()
 
 	gemini, err := ai.NewGeminiClient(cfg.GeminiKey)
 	if err != nil {
@@ -55,7 +51,19 @@ func main() {
 		return
 	}
 
-	services := application.NewService(repos, gemini, log)
+	var sheetService *integration.SheetService
+	if _, err := os.Stat("google-credentials.json"); err == nil {
+		sheetService, err = integration.NewSheetService("google-credentials.json")
+		if err != nil {
+			log.Error("failed to init google sheets: %s", err.Error())
+		} else {
+			log.Info("Google Sheets service initialized")
+		}
+	} else {
+		log.Warn("google-credentials.json not found, sheets integration disabled")
+	}
+
+	services := application.NewService(repos, gemini, sheetService, cfg.GoogleOwnerEmail, log)
 
 	bot := discord.NewBot(&cfg, services, log)
 

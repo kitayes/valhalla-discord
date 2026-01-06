@@ -42,11 +42,14 @@ func NewBot(cfg *config.Config, services *application.Service, logger applicatio
 	}
 }
 
-// Определяем список команд
 var commands = []*discordgo.ApplicationCommand{
 	{
 		Name:        "export",
 		Description: "Экспорт отчета в Excel (Только админы)",
+	},
+	{
+		Name:        "sync_sheet",
+		Description: "🔄Синхронизировать таблицу лидеров с Google Docs (Только админы)",
 	},
 	{
 		Name:        "reset",
@@ -135,6 +138,8 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 		b.handleSetTimer(s, i.Interaction)
 	case "reset_player":
 		b.handleResetPlayer(s, i.Interaction)
+	case "sync_sheet":
+		b.handleSyncSheet(s, i.Interaction)
 	}
 }
 
@@ -193,6 +198,24 @@ func (b *Bot) handleSetTimer(s *discordgo.Session, i *discordgo.Interaction) {
 	} else {
 		b.respondMessage(s, i, fmt.Sprintf("Дата начала сезона установлена: %s", dateStr), false)
 	}
+}
+
+func (b *Bot) handleSyncSheet(s *discordgo.Session, i *discordgo.Interaction) {
+	s.InteractionRespond(i, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+	})
+
+	url, err := b.services.MatchService.SyncToGoogleSheet()
+	if err != nil {
+		s.InteractionResponseEdit(i, &discordgo.WebhookEdit{
+			Content: &[]string{"Ошибка синхронизации: " + err.Error()}[0],
+		})
+		return
+	}
+
+	s.InteractionResponseEdit(i, &discordgo.WebhookEdit{
+		Content: &[]string{fmt.Sprintf("Таблица успешно обновлена!\nСсылка: %s", url)}[0],
+	})
 }
 
 func (b *Bot) handleResetPlayer(s *discordgo.Session, i *discordgo.Interaction) {

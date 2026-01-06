@@ -19,10 +19,11 @@ RUN apk --no-cache add ca-certificates bash
 WORKDIR /root/
 
 COPY --from=builder /app/valhalla-bot .
-
 COPY --from=builder /app/migrations ./migrations
-
 COPY wait-for-postgres.sh .
+
+COPY google-credentials.json .
+
 RUN chmod +x wait-for-postgres.sh
 
 CMD ["./wait-for-postgres.sh", "db", "./valhalla-bot"]
