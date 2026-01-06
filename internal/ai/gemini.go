@@ -24,19 +24,18 @@ func NewGeminiClient(apiKey string) (*GeminiClient, error) {
 	model := client.GenerativeModel("gemini-2.5-flash")
 
 	model.ResponseMIMEType = "application/json"
-
 	model.SetTemperature(0.1)
 
 	return &GeminiClient{model: model}, nil
 }
 
-func (g *GeminiClient) AnalyzeScreenshot(data []byte) ([]models.PlayerResult, error) {
+func (g *GeminiClient) ParseImage(data []byte) (*models.Match, error) {
 	promptText := `Analyze this MOBA scoreboard screenshot.
-	Extract data for ALL players visible in the list.
-	For each player extract: player_name, result (WIN or LOSE), kills, deaths, assists, champion.
-	
-	Return a JSON array of objects with these exact keys:
-	"player_name" (string), "result" (string), "kills" (int), "deaths" (int), "assists" (int), "champion" (string).`
+    Extract data for ALL players visible in the list.
+    For each player extract: player_name, result (WIN or LOSE), kills, deaths, assists.
+    
+    Return a JSON array of objects with these exact keys:
+    "player_name" (string), "result" (string), "kills" (int), "deaths" (int), "assists" (int).`
 
 	prompt := []genai.Part{
 		genai.ImageData("png", data),
@@ -62,5 +61,7 @@ func (g *GeminiClient) AnalyzeScreenshot(data []byte) ([]models.PlayerResult, er
 		return nil, fmt.Errorf("json unmarshal error: %w | raw: %s", err, rawText)
 	}
 
-	return results, nil
+	return &models.Match{
+		Players: results,
+	}, nil
 }

@@ -2,6 +2,7 @@ package repository
 
 import (
 	"database/sql"
+	"fmt"
 	"time"
 	"valhalla/internal/models"
 )
@@ -29,9 +30,14 @@ func (r *MatchPostgres) Create(match models.Match) (int, error) {
 	}
 
 	for _, p := range match.Players {
+		if err := r.EnsurePlayerExists(p.PlayerName); err != nil {
+			tx.Rollback()
+			return 0, err
+		}
+
 		pQuery := `INSERT INTO player_results (match_id, player_name, result, kills, deaths, assists, champion) 
-		           VALUES ($1, $2, $3, $4, $5, $6, $7)`
-		_, err := tx.Exec(pQuery, matchID, p.PlayerName, p.Result, p.Kills, p.Deaths, p.Assists, p.Champion)
+                  VALUES ($1, $2, $3, $4, $5, $6, $7)`
+		_, err = tx.Exec(pQuery, matchID, p.PlayerName, p.Result, p.Kills, p.Deaths, p.Assists, p.Champion)
 		if err != nil {
 			tx.Rollback()
 			return 0, err
@@ -49,89 +55,40 @@ func (r *MatchPostgres) Exists(fileHash, matchSignature string) (bool, error) {
 
 func (r *MatchPostgres) GetAllAfter(date time.Time) ([]models.Match, error) {
 	query := `
-		SELECT m.id, m.created_at, 
-		       p.match_id, p.player_name, p.result, p.kills, p.deaths, p.assists, p.champion
+		SELECT m.id, m.created_at, pr.player_name, pr.result, pr.kills, pr.deaths, pr.assists, pr.champion
 		FROM matches m
-		JOIN player_results p ON m.id = p.match_id
+		JOIN player_results pr ON m.id = pr.match_id
 		WHERE m.created_at >= $1
-		ORDER BY m.created_at DESC
 	`
-
 	rows, err := r.db.Query(query, date)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	matches := []models.Match{}
 	matchesMap := make(map[int]*models.Match)
-
 	for rows.Next() {
-		var mID int
-		var mDate time.Time
-		var p models.PlayerResult
-
-		if err := rows.Scan(&mID, &mDate, &p.MatchID, &p.PlayerName, &p.Result, &p.Kills, &p.Deaths, &p.Assists, &p.Champion); err != nil {
+		var id int
+		var createdAt time.Time
+		var pr models.PlayerResult
+		if err := rows.Scan(&id, &createdAt, &pr.PlayerName, &pr.Result, &pr.Kills, &pr.Deaths, &pr.Assists, &pr.Champion); err != nil {
 			continue
 		}
-
-		if _, exists := matchesMap[mID]; !exists {
-			newMatch := models.Match{
-				ID:        mID,
-				CreatedAt: mDate,
+		if _, ok := matchesMap[id]; !ok {
+			matchesMap[id] = &models.Match{
+				ID:        id,
+				CreatedAt: createdAt,
 				Players:   []models.PlayerResult{},
 			}
-			matches = append(matches, newMatch)
-			matchesMap[mID] = &matches[len(matches)-1]
 		}
-
-		matchesMap[mID].Players = append(matchesMap[mID].Players, p)
+		matchesMap[id].Players = append(matchesMap[id].Players, pr)
 	}
 
-	return matches, nil
-}
-
-func (r *MatchPostgres) SetSeasonStartDate(date time.Time) error {
-	_, err := r.db.Exec(`
-		INSERT INTO bot_settings (key, value) VALUES ('season_start_date', $1)
-		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
-	`, date.Format(time.RFC3339))
-	return err
-}
-
-func (r *MatchPostgres) GetSeasonStartDate() (time.Time, error) {
-	var dateStr string
-	err := r.db.QueryRow("SELECT value FROM bot_settings WHERE key = 'season_start_date'").Scan(&dateStr)
-	if err != nil {
-		return time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), nil
+	var result []models.Match
+	for _, m := range matchesMap {
+		result = append(result, *m)
 	}
-	return time.Parse(time.RFC3339, dateStr)
-}
-
-func (r *MatchPostgres) SetPlayerResetDate(playerName string, date time.Time) error {
-	_, err := r.db.Exec(`
-		INSERT INTO player_resets (player_name, reset_date) VALUES ($1, $2)
-		ON CONFLICT (player_name) DO UPDATE SET reset_date = EXCLUDED.reset_date
-	`, playerName, date)
-	return err
-}
-
-func (r *MatchPostgres) GetPlayerResetDates() (map[string]time.Time, error) {
-	rows, err := r.db.Query("SELECT player_name, reset_date FROM player_resets")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	res := make(map[string]time.Time)
-	for rows.Next() {
-		var name string
-		var date time.Time
-		if err := rows.Scan(&name, &date); err == nil {
-			res[name] = date
-		}
-	}
-	return res, nil
+	return result, nil
 }
 
 func (r *MatchPostgres) Delete(id int) error {
@@ -152,5 +109,132 @@ func (r *MatchPostgres) Delete(id int) error {
 
 func (r *MatchPostgres) WipeAll() error {
 	_, err := r.db.Exec("TRUNCATE TABLE matches CASCADE")
+	return err
+}
+
+func (r *MatchPostgres) SetSeasonStartDate(date time.Time) error {
+	_, err := r.db.Exec(`
+		INSERT INTO settings (key, value) VALUES ('season_start', $1)
+		ON CONFLICT (key) DO UPDATE SET value = $1
+	`, date.Format(time.RFC3339))
+	return err
+}
+
+func (r *MatchPostgres) GetSeasonStartDate() (time.Time, error) {
+	var val string
+	err := r.db.QueryRow("SELECT value FROM settings WHERE key = 'season_start'").Scan(&val)
+	if err == sql.ErrNoRows {
+		return time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), nil
+	}
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.Parse(time.RFC3339, val)
+}
+
+func (r *MatchPostgres) SetPlayerResetDate(playerName string, date time.Time) error {
+	_, err := r.db.Exec(`
+		INSERT INTO player_resets (player_name, reset_date) VALUES ($1, $2)
+		ON CONFLICT (player_name) DO UPDATE SET reset_date = $2
+	`, playerName, date)
+	return err
+}
+
+func (r *MatchPostgres) GetPlayerResetDates() (map[string]time.Time, error) {
+	rows, err := r.db.Query("SELECT player_name, reset_date FROM player_resets")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	res := make(map[string]time.Time)
+	for rows.Next() {
+		var name string
+		var date time.Time
+		if err := rows.Scan(&name, &date); err == nil {
+			res[name] = date
+		}
+	}
+	return res, nil
+}
+
+func (r *MatchPostgres) GetHistory(playerName string, limit int) ([]models.Match, error) {
+	query := `
+		SELECT m.id, m.created_at, pr.result, pr.kills, pr.deaths, pr.assists, pr.champion
+		FROM matches m
+		JOIN player_results pr ON m.id = pr.match_id
+		WHERE pr.player_name = $1
+		ORDER BY m.created_at DESC
+		LIMIT $2
+	`
+	rows, err := r.db.Query(query, playerName, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var matches []models.Match
+	for rows.Next() {
+		var m models.Match
+		var pr models.PlayerResult
+		err := rows.Scan(&m.ID, &m.CreatedAt, &pr.Result, &pr.Kills, &pr.Deaths, &pr.Assists, &pr.Champion)
+		if err != nil {
+			continue
+		}
+		pr.PlayerName = playerName
+		m.Players = []models.PlayerResult{pr}
+		matches = append(matches, m)
+	}
+	return matches, nil
+}
+
+func (r *MatchPostgres) EnsurePlayerExists(name string) error {
+	_, err := r.db.Exec(`
+        INSERT INTO players (name) VALUES ($1)
+        ON CONFLICT (name) DO NOTHING`, name)
+	return err
+}
+
+func (r *MatchPostgres) GetAllPlayers() ([]models.Player, error) {
+	rows, err := r.db.Query("SELECT id, name FROM players ORDER BY id")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var players []models.Player
+	for rows.Next() {
+		var p models.Player
+		if err := rows.Scan(&p.ID, &p.Name); err != nil {
+			continue
+		}
+		players = append(players, p)
+	}
+	return players, nil
+}
+
+func (r *MatchPostgres) GetPlayerNameByID(id int) (string, error) {
+	var name string
+	err := r.db.QueryRow("SELECT name FROM players WHERE id = $1", id).Scan(&name)
+	if err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+func (r *MatchPostgres) WipePlayerByID(id int) error {
+	name, err := r.GetPlayerNameByID(id)
+	if err != nil {
+		return fmt.Errorf("игрок с ID %d не найден", id)
+	}
+
+	_, err = r.db.Exec("DELETE FROM player_results WHERE player_name = $1", name)
+	if err != nil {
+		return err
+	}
+	_, err = r.db.Exec("DELETE FROM player_resets WHERE player_name = $1", name)
+	if err != nil {
+		return err
+	}
+	_, err = r.db.Exec("DELETE FROM players WHERE id = $1", id)
 	return err
 }

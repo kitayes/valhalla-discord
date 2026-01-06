@@ -17,9 +17,9 @@ import (
 type MatchServiceImpl struct {
 	repo       repository.Match
 	ai         AIProvider
-	logger     Logger
 	sheets     *integration.SheetService
 	ownerEmail string
+	logger     Logger
 }
 
 func NewMatchServiceImpl(repo repository.Match, ai AIProvider, sheets *integration.SheetService, ownerEmail string, logger Logger) *MatchServiceImpl {
@@ -43,17 +43,10 @@ type PlayerStats struct {
 }
 
 func (s *MatchServiceImpl) ProcessImage(data []byte) error {
-	fHash := sha256.Sum256(data)
-	fileHashStr := hex.EncodeToString(fHash[:])
+	hash := sha256.Sum256(data)
+	fileHash := hex.EncodeToString(hash[:])
 
-	players, err := s.ai.AnalyzeScreenshot(data)
-	if err != nil {
-		return fmt.Errorf("AI Error: %w", err)
-	}
-
-	sig := s.generateSignature(players)
-
-	exists, err := s.repo.Exists(fileHashStr, sig)
+	exists, err := s.repo.Exists(fileHash, "")
 	if err != nil {
 		return err
 	}
@@ -61,71 +54,192 @@ func (s *MatchServiceImpl) ProcessImage(data []byte) error {
 		return fmt.Errorf("duplicate match detected")
 	}
 
-	match := models.Match{
-		FileHash:       fileHashStr,
-		MatchSignature: sig,
-		Players:        players,
-	}
-	_, err = s.repo.Create(match)
-	return err
-}
-
-func (s *MatchServiceImpl) generateSignature(players []models.PlayerResult) string {
-	var parts []string
-	for _, p := range players {
-		parts = append(parts, fmt.Sprintf("%s|%d/%d/%d|%s", p.PlayerName, p.Kills, p.Deaths, p.Assists, p.Result))
-	}
-	sort.Strings(parts)
-	raw := strings.Join(parts, ";")
-	h := sha256.Sum256([]byte(raw))
-	return hex.EncodeToString(h[:])
-}
-
-func (s *MatchServiceImpl) SetTimer(dateStr string) error {
-	date, err := time.Parse("2006-01-02", dateStr)
+	match, err := s.ai.ParseImage(data)
 	if err != nil {
-		return fmt.Errorf("неверный формат даты, используйте YYYY-MM-DD")
+		return err
 	}
-	return s.repo.SetSeasonStartDate(date)
-}
+	match.FileHash = fileHash
 
-func (s *MatchServiceImpl) ResetGlobal() error {
-	return s.repo.SetSeasonStartDate(time.Now())
-}
-
-func (s *MatchServiceImpl) ResetPlayer(playerName string, dateStr string) error {
-	var date time.Time
-	var err error
-
-	if dateStr == "" || dateStr == "now" {
-		date = time.Now()
-	} else {
-		date, err = time.Parse("2006-01-02", dateStr)
-		if err != nil {
-			return fmt.Errorf("неверный формат даты")
-		}
+	matchSig := generateSignature(match)
+	match.MatchSignature = matchSig
+	sigExists, err := s.repo.Exists("", matchSig)
+	if err != nil {
+		return err
 	}
-	return s.repo.SetPlayerResetDate(playerName, date)
-}
+	if sigExists {
+		return fmt.Errorf("duplicate match detected")
+	}
 
-func (s *MatchServiceImpl) WipeAllData() error {
-	if err := s.repo.WipeAll(); err != nil {
-		return fmt.Errorf("ошибка очистки БД: %w", err)
+	_, err = s.repo.Create(*match)
+	if err != nil {
+		return err
 	}
 
 	if s.sheets != nil {
-		headers := [][]interface{}{
-			{"Rank", "Player", "Matches", "Wins", "Losses", "WinRate %", "KDA"},
-		}
-
-		if err := s.sheets.UpdateStats(headers); err != nil {
-			s.logger.Error("Failed to clear Google Sheet: %v", err)
-		}
+		s.sheets.SetSpreadsheetID("1ZDBqKL1Sgr8-JPXChMafyiHmzHXVJB0aFKXgoTjEfR8")
+		go func() {
+			_, err := s.SyncToGoogleSheet()
+			if err != nil {
+				s.logger.Error("Auto-sync failed: %v", err)
+			}
+		}()
 	}
 
-	_ = s.repo.SetSeasonStartDate(time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
-
 	return nil
+}
+
+func (s *MatchServiceImpl) GetLeaderboard(sortBy string) ([]*PlayerStats, error) {
+	statsList, err := s.calculateStats()
+	if err != nil {
+		return nil, err
+	}
+
+	sort.Slice(statsList, func(i, j int) bool {
+		d1 := statsList[i].Deaths
+		if d1 == 0 {
+			d1 = 1
+		}
+		kda1 := float64(statsList[i].Kills+statsList[i].Assists) / float64(d1)
+
+		d2 := statsList[j].Deaths
+		if d2 == 0 {
+			d2 = 1
+		}
+		kda2 := float64(statsList[j].Kills+statsList[j].Assists) / float64(d2)
+
+		wr1 := 0.0
+		if statsList[i].Matches > 0 {
+			wr1 = float64(statsList[i].Wins) / float64(statsList[i].Matches)
+		}
+
+		wr2 := 0.0
+		if statsList[j].Matches > 0 {
+			wr2 = float64(statsList[j].Wins) / float64(statsList[j].Matches)
+		}
+
+		if sortBy == "winrate" {
+			if wr1 != wr2 {
+				return wr1 > wr2
+			}
+			return kda1 > kda2
+		}
+
+		if kda1 != kda2 {
+			return kda1 > kda2
+		}
+		return wr1 > wr2
+	})
+
+	return statsList, nil
+}
+
+func (s *MatchServiceImpl) GetPlayerList() ([]models.Player, error) {
+	return s.repo.GetAllPlayers()
+}
+
+func (s *MatchServiceImpl) GetPlayerNameByID(id int) (string, error) {
+	return s.repo.GetPlayerNameByID(id)
+}
+
+func (s *MatchServiceImpl) GetHistoryByID(id int) ([]string, error) {
+	name, err := s.repo.GetPlayerNameByID(id)
+	if err != nil {
+		return nil, fmt.Errorf("игрок не найден")
+	}
+
+	matches, err := s.repo.GetHistory(name, 10)
+	if err != nil {
+		return nil, err
+	}
+
+	var lines []string
+	for _, m := range matches {
+		p := m.Players[0]
+		line := fmt.Sprintf("🆔 **%d** | %s | ⚔️ %d/%d/%d | %s",
+			m.ID, p.Result, p.Kills, p.Deaths, p.Assists, m.CreatedAt.Format("02.01"))
+		lines = append(lines, line)
+	}
+	return lines, nil
+}
+
+func (s *MatchServiceImpl) WipePlayerByID(id int) error {
+	return s.repo.WipePlayerByID(id)
+}
+
+func (s *MatchServiceImpl) GetPlayerStats(name string) (*PlayerStats, error) {
+	stats, err := s.calculateStats()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, st := range stats {
+		if strings.EqualFold(st.Name, name) {
+			return st, nil
+		}
+	}
+	return nil, fmt.Errorf("игрок не найден")
+}
+
+func (s *MatchServiceImpl) SyncToGoogleSheet() (string, error) {
+	if s.sheets == nil {
+		return "", fmt.Errorf("google sheets service is not disabled")
+	}
+
+	s.sheets.SetSpreadsheetID("1ZDBqKL1Sgr8-JPXChMafyiHmzHXVJB0aFKXgoTjEfR8")
+
+	statsList, err := s.calculateStats()
+	if err != nil {
+		return "", err
+	}
+
+	sort.Slice(statsList, func(i, j int) bool {
+		d1 := statsList[i].Deaths
+		if d1 == 0 {
+			d1 = 1
+		}
+		kda1 := float64(statsList[i].Kills+statsList[i].Assists) / float64(d1)
+		d2 := statsList[j].Deaths
+		if d2 == 0 {
+			d2 = 1
+		}
+		kda2 := float64(statsList[j].Kills+statsList[j].Assists) / float64(d2)
+		return kda1 > kda2
+	})
+
+	var rows [][]interface{}
+	rows = append(rows, []interface{}{"Rank", "Player", "Matches", "Wins", "Losses", "WinRate %", "KDA"})
+
+	for i, st := range statsList {
+		winRate := 0.0
+		if st.Matches > 0 {
+			winRate = (float64(st.Wins) / float64(st.Matches)) * 100
+		}
+
+		deaths := st.Deaths
+		if deaths == 0 {
+			deaths = 1
+		}
+		kdaRatio := float64(st.Kills+st.Assists) / float64(deaths)
+
+		rows = append(rows, []interface{}{
+			i + 1,
+			st.Name,
+			st.Matches,
+			st.Wins,
+			st.Losses,
+			fmt.Sprintf("%.1f%%", winRate),
+			fmt.Sprintf("%.2f", kdaRatio),
+		})
+	}
+
+	if _, _, err := s.sheets.EnsureSheetExists("Valhalla Leaderboard 🏆", s.ownerEmail); err != nil {
+	}
+
+	if err := s.sheets.UpdateStats(rows); err != nil {
+		return "", fmt.Errorf("failed to update stats: %w", err)
+	}
+
+	return fmt.Sprintf("https://docs.google.com/spreadsheets/d/%s", "1ZDBqKL1Sgr8-JPXChMafyiHmzHXVJB0aFKXgoTjEfR8"), nil
 }
 
 func (s *MatchServiceImpl) calculateStats() ([]*PlayerStats, error) {
@@ -176,78 +290,60 @@ func (s *MatchServiceImpl) calculateStats() ([]*PlayerStats, error) {
 	for _, st := range statsMap {
 		statsList = append(statsList, st)
 	}
-
-	sort.Slice(statsList, func(i, j int) bool {
-		d1 := statsList[i].Deaths
-		if d1 == 0 {
-			d1 = 1
-		}
-		kda1 := float64(statsList[i].Kills+statsList[i].Assists) / float64(d1)
-
-		d2 := statsList[j].Deaths
-		if d2 == 0 {
-			d2 = 1
-		}
-		kda2 := float64(statsList[j].Kills+statsList[j].Assists) / float64(d2)
-
-		if kda1 != kda2 {
-			return kda1 > kda2
-		}
-		return statsList[i].Wins > statsList[j].Wins
-	})
-
 	return statsList, nil
 }
 
-func (s *MatchServiceImpl) SyncToGoogleSheet() (string, error) {
-	if s.sheets == nil {
-		return "", fmt.Errorf("google sheets service is not disabled or not configured")
+func generateSignature(m *models.Match) string {
+	var sb strings.Builder
+	for _, p := range m.Players {
+		sb.WriteString(fmt.Sprintf("%s-%s-%d-%d-%d|", p.PlayerName, p.Result, p.Kills, p.Deaths, p.Assists))
 	}
+	return sb.String()
+}
 
-	s.sheets.SetSpreadsheetID("1ZDBqKL1Sgr8-JPXChMafyiHmzHXVJB0aFKXgoTjEfR8")
-
-	statsList, err := s.calculateStats()
+func (s *MatchServiceImpl) SetTimer(dateStr string) error {
+	layout := "2006-01-02"
+	t, err := time.Parse(layout, dateStr)
 	if err != nil {
-		return "", err
+		return fmt.Errorf("неверный формат даты, используйте YYYY-MM-DD")
 	}
+	return s.repo.SetSeasonStartDate(t)
+}
 
-	var rows [][]interface{}
+func (s *MatchServiceImpl) ResetGlobal() error {
+	return s.repo.SetSeasonStartDate(time.Now())
+}
 
-	rows = append(rows, []interface{}{"Rank", "Player", "Matches", "Wins", "Losses", "WinRate %", "KDA"})
-
-	for i, st := range statsList {
-		winRate := 0.0
-		if st.Matches > 0 {
-			winRate = (float64(st.Wins) / float64(st.Matches)) * 100
+func (s *MatchServiceImpl) ResetPlayer(name, dateStr string) error {
+	var t time.Time
+	if dateStr == "now" {
+		t = time.Now()
+	} else {
+		var err error
+		t, err = time.Parse("2006-01-02", dateStr)
+		if err != nil {
+			return fmt.Errorf("неверный формат даты")
 		}
+	}
+	return s.repo.SetPlayerResetDate(name, t)
+}
 
-		deaths := st.Deaths
-		if deaths == 0 {
-			deaths = 1
+func (s *MatchServiceImpl) DeleteMatch(id int) error {
+	return s.repo.Delete(id)
+}
+
+func (s *MatchServiceImpl) WipeAllData() error {
+	if err := s.repo.WipeAll(); err != nil {
+		return fmt.Errorf("ошибка очистки БД: %w", err)
+	}
+	if s.sheets != nil {
+		headers := [][]interface{}{
+			{"Rank", "Player", "Matches", "Wins", "Losses", "WinRate %", "KDA"},
 		}
-		kdaRatio := float64(st.Kills+st.Assists) / float64(deaths)
-
-		rows = append(rows, []interface{}{
-			i + 1,
-			st.Name,
-			st.Matches,
-			st.Wins,
-			st.Losses,
-			fmt.Sprintf("%.1f%%", winRate),
-			fmt.Sprintf("%.2f", kdaRatio),
-		})
+		_ = s.sheets.UpdateStats(headers)
 	}
-
-	_, url, err := s.sheets.EnsureSheetExists("Valhalla Leaderboard ", s.ownerEmail)
-	if err != nil {
-		return "", fmt.Errorf("failed to ensure sheet: %w", err)
-	}
-
-	if err := s.sheets.UpdateStats(rows); err != nil {
-		return "", fmt.Errorf("failed to update stats: %w", err)
-	}
-
-	return url, nil
+	_ = s.repo.SetSeasonStartDate(time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
+	return nil
 }
 
 func (s *MatchServiceImpl) GetExcelReport() ([]byte, error) {
@@ -296,26 +392,4 @@ func (s *MatchServiceImpl) GetExcelReport() ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
-}
-
-func (s *MatchServiceImpl) DeleteMatch(id int) error {
-	return s.repo.Delete(id)
-}
-
-func (s *MatchServiceImpl) GetLeaderboard() ([]*PlayerStats, error) {
-	return s.calculateStats()
-}
-
-func (s *MatchServiceImpl) GetPlayerStats(name string) (*PlayerStats, error) {
-	stats, err := s.calculateStats()
-	if err != nil {
-		return nil, err
-	}
-
-	for _, st := range stats {
-		if strings.EqualFold(st.Name, name) {
-			return st, nil
-		}
-	}
-	return nil, fmt.Errorf("игрок не найден (возможно, нет сыгранных матчей в этом сезоне)")
 }

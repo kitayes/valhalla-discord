@@ -7,14 +7,14 @@ import (
 )
 
 type AIProvider interface {
-	AnalyzeScreenshot(data []byte) ([]models.PlayerResult, error)
+	ParseImage(data []byte) (*models.Match, error)
 }
 
 type Logger interface {
-	Error(format string, v ...interface{})
-	Warn(format string, v ...interface{})
-	Info(format string, v ...interface{})
-	Debug(format string, v ...interface{})
+	Info(msg string, args ...interface{})
+	Error(msg string, args ...interface{})
+	Debug(msg string, args ...interface{})
+	Warn(msg string, args ...interface{})
 }
 
 type MatchService interface {
@@ -25,9 +25,15 @@ type MatchService interface {
 	ResetGlobal() error
 	ResetPlayer(name, dateStr string) error
 	DeleteMatch(id int) error
-	GetLeaderboard() ([]*PlayerStats, error)
-	GetPlayerStats(name string) (*PlayerStats, error)
 	WipeAllData() error
+
+	GetLeaderboard(sortBy string) ([]*PlayerStats, error)
+
+	GetPlayerList() ([]models.Player, error)
+	GetPlayerNameByID(id int) (string, error)
+	GetHistoryByID(id int) ([]string, error)
+	WipePlayerByID(id int) error
+	GetPlayerStats(name string) (*PlayerStats, error)
 }
 
 type Service struct {
