@@ -108,6 +108,26 @@ func (s *MatchServiceImpl) ResetPlayer(playerName string, dateStr string) error 
 	return s.repo.SetPlayerResetDate(playerName, date)
 }
 
+func (s *MatchServiceImpl) WipeAllData() error {
+	if err := s.repo.WipeAll(); err != nil {
+		return fmt.Errorf("ошибка очистки БД: %w", err)
+	}
+
+	if s.sheets != nil {
+		headers := [][]interface{}{
+			{"Rank", "Player", "Matches", "Wins", "Losses", "WinRate %", "KDA"},
+		}
+
+		if err := s.sheets.UpdateStats(headers); err != nil {
+			s.logger.Error("Failed to clear Google Sheet: %v", err)
+		}
+	}
+
+	_ = s.repo.SetSeasonStartDate(time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
+
+	return nil
+}
+
 func (s *MatchServiceImpl) calculateStats() ([]*PlayerStats, error) {
 	seasonStart, err := s.repo.GetSeasonStartDate()
 	if err != nil {
@@ -183,6 +203,8 @@ func (s *MatchServiceImpl) SyncToGoogleSheet() (string, error) {
 	if s.sheets == nil {
 		return "", fmt.Errorf("google sheets service is not disabled or not configured")
 	}
+
+	s.sheets.SetSpreadsheetID("1ZDBqKL1Sgr8-JPXChMafyiHmzHXVJB0aFKXgoTjEfR8")
 
 	statsList, err := s.calculateStats()
 	if err != nil {
@@ -274,4 +296,26 @@ func (s *MatchServiceImpl) GetExcelReport() ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+func (s *MatchServiceImpl) DeleteMatch(id int) error {
+	return s.repo.Delete(id)
+}
+
+func (s *MatchServiceImpl) GetLeaderboard() ([]*PlayerStats, error) {
+	return s.calculateStats()
+}
+
+func (s *MatchServiceImpl) GetPlayerStats(name string) (*PlayerStats, error) {
+	stats, err := s.calculateStats()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, st := range stats {
+		if strings.EqualFold(st.Name, name) {
+			return st, nil
+		}
+	}
+	return nil, fmt.Errorf("игрок не найден (возможно, нет сыгранных матчей в этом сезоне)")
 }

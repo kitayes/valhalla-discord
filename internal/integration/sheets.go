@@ -34,6 +34,10 @@ func NewSheetService(credJSON string) (*SheetService, error) {
 	}, nil
 }
 
+func (s *SheetService) SetSpreadsheetID(id string) {
+	s.sheetID = id
+}
+
 func (s *SheetService) EnsureSheetExists(title, ownerEmail string) (string, string, error) {
 	if s.sheetID != "" {
 		return s.sheetID, fmt.Sprintf("https://docs.google.com/spreadsheets/d/%s", s.sheetID), nil

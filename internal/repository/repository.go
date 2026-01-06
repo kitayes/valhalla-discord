@@ -14,6 +14,9 @@ type Match interface {
 	SetSeasonStartDate(date time.Time) error
 	GetSeasonStartDate() (time.Time, error)
 
+	Delete(id int) error
+	WipeAll() error
+
 	SetPlayerResetDate(playerName string, date time.Time) error
 	GetPlayerResetDates() (map[string]time.Time, error)
 }

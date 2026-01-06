@@ -43,47 +43,45 @@ func NewBot(cfg *config.Config, services *application.Service, logger applicatio
 }
 
 var commands = []*discordgo.ApplicationCommand{
-	{
-		Name:        "export",
-		Description: "Экспорт отчета в Excel (Только админы)",
-	},
-	{
-		Name:        "sync_sheet",
-		Description: "🔄Синхронизировать таблицу лидеров с Google Docs (Только админы)",
-	},
-	{
-		Name:        "reset",
-		Description: "Сброс всей статистики сезона (Только админы)",
-	},
+	{Name: "export", Description: "Экспорт отчета в Excel (Только админы)"},
+	{Name: "reset", Description: "Сброс сезона (Только админы)"},
 	{
 		Name:        "set_timer",
 		Description: "Установить дату начала сезона (Только админы)",
 		Options: []*discordgo.ApplicationCommandOption{
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
-				Name:        "date",
-				Description: "Формат: YYYY-MM-DD",
-				Required:    true,
-			},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "date", Description: "YYYY-MM-DD", Required: true},
 		},
 	},
 	{
 		Name:        "reset_player",
-		Description: "Сброс статистики конкретного игрока (Только админы)",
+		Description: "Сброс игрока (Только админы)",
 		Options: []*discordgo.ApplicationCommandOption{
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
-				Name:        "nickname",
-				Description: "Никнейм игрока",
-				Required:    true,
-			},
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
-				Name:        "date",
-				Description: "Дата сброса (YYYY-MM-DD) или оставьте пустым для 'сейчас'",
-				Required:    false,
-			},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "nickname", Description: "Никнейм", Required: true},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "date", Description: "YYYY-MM-DD", Required: false},
 		},
+	},
+	{Name: "sync_sheet", Description: "Синхронизация с Google Sheet (Только админы)"},
+	{
+		Name:        "top",
+		Description: "Топ-10 игроков сезона",
+	},
+	{
+		Name:        "profile",
+		Description: "Статистика игрока",
+		Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionString, Name: "nickname", Description: "Никнейм", Required: true},
+		},
+	},
+	{
+		Name:        "delete_match",
+		Description: "Удалить матч по ID (Только админы)",
+		Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionInteger, Name: "id", Description: "ID матча", Required: true},
+		},
+	},
+	{
+		Name:        "wipe",
+		Description: "ПОЛНОЕ УДАЛЕНИЕ всех данных и очистка таблиц",
 	},
 }
 
@@ -124,12 +122,23 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 		return
 	}
 
-	if !b.isAdmin(i.Member.User.ID) {
-		b.respondMessage(s, i.Interaction, "У вас нет прав для выполнения этой команды.", true)
+	name := i.ApplicationCommandData().Name
+
+	switch name {
+	case "top":
+		b.handleTop(s, i.Interaction)
+		return
+	case "profile":
+		b.handleProfile(s, i.Interaction)
 		return
 	}
 
-	switch i.ApplicationCommandData().Name {
+	if !b.isAdmin(i.Member.User.ID) {
+		b.respondMessage(s, i.Interaction, "У вас нет прав.", true)
+		return
+	}
+
+	switch name {
 	case "export":
 		b.handleExport(s, i.Interaction)
 	case "reset":
@@ -140,7 +149,32 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 		b.handleResetPlayer(s, i.Interaction)
 	case "sync_sheet":
 		b.handleSyncSheet(s, i.Interaction)
+	case "delete_match":
+		b.handleDeleteMatch(s, i.Interaction)
+	case "wipe":
+		b.handleWipe(s, i.Interaction)
 	}
+}
+
+func (b *Bot) handleWipe(s *discordgo.Session, i *discordgo.Interaction) {
+	s.InteractionRespond(i, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Flags: discordgo.MessageFlagsEphemeral,
+		},
+	})
+
+	err := b.services.MatchService.WipeAllData()
+	if err != nil {
+		s.InteractionResponseEdit(i, &discordgo.WebhookEdit{
+			Content: &[]string{"Ошибка при очистке: " + err.Error()}[0],
+		})
+		return
+	}
+
+	s.InteractionResponseEdit(i, &discordgo.WebhookEdit{
+		Content: &[]string{"УСПЕШНО! База данных полностью очищена, Google Таблица сброшена."}[0],
+	})
 }
 
 func (b *Bot) respondMessage(s *discordgo.Session, i *discordgo.Interaction, msg string, ephemeral bool) {
@@ -174,7 +208,7 @@ func (b *Bot) handleExport(s *discordgo.Session, i *discordgo.Interaction) {
 	s.InteractionResponseEdit(i, &discordgo.WebhookEdit{
 		Content: &[]string{"Ваш отчет готов!"}[0],
 		Files: []*discordgo.File{
-			{Name: "report.xlsx", Reader: bytes.NewReader(data)},
+			{Name: "статистика.xlsx", Reader: bytes.NewReader(data)},
 		},
 	})
 }
@@ -282,4 +316,122 @@ func (b *Bot) handleScreenshot(s *discordgo.Session, m *discordgo.MessageCreate)
 	} else {
 		s.ChannelMessageSend(m.ChannelID, "Результаты матча успешно записаны!")
 	}
+}
+
+func (b *Bot) handleTop(s *discordgo.Session, i *discordgo.Interaction) {
+	stats, err := b.services.MatchService.GetLeaderboard()
+	if err != nil {
+		b.respondMessage(s, i, "Ошибка: "+err.Error(), true)
+		return
+	}
+
+	if len(stats) == 0 {
+		b.respondMessage(s, i, "Статистики пока нет. Сыграйте матч!", false)
+		return
+	}
+
+	topCount := 10
+	if len(stats) < topCount {
+		topCount = len(stats)
+	}
+
+	var sb strings.Builder
+	for idx, p := range stats[:topCount] {
+		medal := "▪️"
+		switch idx {
+		case 0:
+			medal = "🥇"
+		case 1:
+			medal = "🥈"
+		case 2:
+			medal = "🥉"
+		}
+
+		wr := 0.0
+		if p.Matches > 0 {
+			wr = (float64(p.Wins) / float64(p.Matches)) * 100
+		}
+
+		d := p.Deaths
+		if d == 0 {
+			d = 1
+		}
+		kda := float64(p.Kills+p.Assists) / float64(d)
+
+		sb.WriteString(fmt.Sprintf("%s %s — WR: `%.0f%%` | KDA: `%.2f` (%d игр)\n",
+			medal, p.Name, wr, kda, p.Matches))
+	}
+
+	embed := &discordgo.MessageEmbed{
+		Title:       "🏆 Таблица лидеров (Топ-10)",
+		Description: sb.String(),
+		Color:       0xFFD700,
+		Footer:      &discordgo.MessageEmbedFooter{Text: "Valhalla Ranked Season"},
+	}
+
+	s.InteractionRespond(i, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{Embeds: []*discordgo.MessageEmbed{embed}},
+	})
+}
+
+func (b *Bot) handleProfile(s *discordgo.Session, i *discordgo.Interaction) {
+	name := i.ApplicationCommandData().Options[0].StringValue()
+
+	p, err := b.services.MatchService.GetPlayerStats(name)
+	if err != nil {
+		b.respondMessage(s, i, fmt.Sprintf("Игрок %s не найден.", name), true)
+		return
+	}
+
+	wr := 0.0
+	if p.Matches > 0 {
+		wr = (float64(p.Wins) / float64(p.Matches)) * 100
+	}
+
+	d := p.Deaths
+	if d == 0 {
+		d = 1
+	}
+	kda := float64(p.Kills+p.Assists) / float64(d)
+
+	color := 0x95A5A6
+	if wr >= 60 {
+		color = 0x2ECC71
+	}
+	if wr >= 75 {
+		color = 0x9B59B6
+	}
+	if wr < 40 {
+		color = 0xE74C3C
+	}
+
+	embed := &discordgo.MessageEmbed{
+		Title: fmt.Sprintf("Профиль: %s", p.Name),
+		Color: color,
+		Fields: []*discordgo.MessageEmbedField{
+			{Name: "Матчей", Value: fmt.Sprintf("%d", p.Matches), Inline: true},
+			{Name: "Винрейт", Value: fmt.Sprintf("%.1f%%", wr), Inline: true},
+			{Name: "KDA", Value: fmt.Sprintf("%.2f", kda), Inline: true},
+			{Name: "Статистика", Value: fmt.Sprintf("⚔️ K: %d | 💀 D: %d | 🤝 A: %d", p.Kills, p.Deaths, p.Assists), Inline: false},
+			{Name: "Результаты", Value: fmt.Sprintf("✅ Побед: %d | ❌ Поражений: %d", p.Wins, p.Losses), Inline: false},
+		},
+	}
+
+	s.InteractionRespond(i, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{Embeds: []*discordgo.MessageEmbed{embed}},
+	})
+}
+
+func (b *Bot) handleDeleteMatch(s *discordgo.Session, i *discordgo.Interaction) {
+	id := i.ApplicationCommandData().Options[0].IntValue()
+
+	err := b.services.MatchService.DeleteMatch(int(id))
+	if err != nil {
+		b.respondMessage(s, i, fmt.Sprintf("Ошибка удаления: %v", err), true)
+		return
+	}
+
+	b.respondMessage(s, i, fmt.Sprintf("Матч #%d успешно удален из базы.", id), false)
 }

@@ -133,3 +133,24 @@ func (r *MatchPostgres) GetPlayerResetDates() (map[string]time.Time, error) {
 	}
 	return res, nil
 }
+
+func (r *MatchPostgres) Delete(id int) error {
+	query := "DELETE FROM matches WHERE id = $1"
+	res, err := r.db.Exec(query, id)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (r *MatchPostgres) WipeAll() error {
+	_, err := r.db.Exec("TRUNCATE TABLE matches CASCADE")
+	return err
+}

@@ -24,6 +24,10 @@ type MatchService interface {
 	SetTimer(dateStr string) error
 	ResetGlobal() error
 	ResetPlayer(name, dateStr string) error
+	DeleteMatch(id int) error
+	GetLeaderboard() ([]*PlayerStats, error)
+	GetPlayerStats(name string) (*PlayerStats, error)
+	WipeAllData() error
 }
 
 type Service struct {
