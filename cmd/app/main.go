@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
-	"embed"
 	"os"
 	"os/signal"
 	"syscall"
+	"valhalla/migrations"
 
 	"valhalla/internal/ai"
 	"valhalla/internal/application"
@@ -17,9 +17,6 @@ import (
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
-
-//go:embed migrations/*.sql
-var migrationFS embed.FS
 
 func main() {
 	_ = godotenv.Load()
@@ -39,7 +36,7 @@ func main() {
 	defer db.Close()
 
 	log.Info("Running migrations...")
-	if err := repository.RunMigrations(db, migrationFS); err != nil {
+	if err := repository.RunMigrations(db, migrations.FS); err != nil {
 		log.Error("failed to run migrations: %s", err.Error())
 		return
 	}

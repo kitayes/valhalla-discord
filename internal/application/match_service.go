@@ -105,18 +105,18 @@ func (s *MatchServiceImpl) GetExcelReport() ([]byte, error) {
 		playerResets = make(map[string]time.Time)
 	}
 
-	f := excelize.NewFile()
-	sheet := "Report"
-	f.NewSheet(sheet)
-	f.DeleteSheet("Sheet1")
-
-	headers := []string{"ID", "Date", "Player", "Result", "K/D/A", "Champion"}
-	for i, h := range headers {
-		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
-		f.SetCellValue(sheet, cell, h)
+	type PlayerStats struct {
+		Name    string
+		Matches int
+		Wins    int
+		Losses  int
+		Kills   int
+		Deaths  int
+		Assists int
 	}
 
-	row := 2
+	statsMap := make(map[string]*PlayerStats)
+
 	for _, m := range matches {
 		for _, p := range m.Players {
 			if pReset, ok := playerResets[p.PlayerName]; ok {
@@ -125,15 +125,84 @@ func (s *MatchServiceImpl) GetExcelReport() ([]byte, error) {
 				}
 			}
 
-			f.SetCellValue(sheet, fmt.Sprintf("A%d", row), m.ID)
-			f.SetCellValue(sheet, fmt.Sprintf("B%d", row), m.CreatedAt.Format("2006-01-02 15:04"))
-			f.SetCellValue(sheet, fmt.Sprintf("C%d", row), p.PlayerName)
-			f.SetCellValue(sheet, fmt.Sprintf("D%d", row), p.Result)
-			f.SetCellValue(sheet, fmt.Sprintf("E%d", row), fmt.Sprintf("%d/%d/%d", p.Kills, p.Deaths, p.Assists))
-			f.SetCellValue(sheet, fmt.Sprintf("F%d", row), p.Champion)
-			row++
+			if _, exists := statsMap[p.PlayerName]; !exists {
+				statsMap[p.PlayerName] = &PlayerStats{Name: p.PlayerName}
+			}
+
+			stat := statsMap[p.PlayerName]
+			stat.Matches++
+			stat.Kills += p.Kills
+			stat.Deaths += p.Deaths
+			stat.Assists += p.Assists
+
+			if strings.EqualFold(p.Result, "WIN") {
+				stat.Wins++
+			} else {
+				stat.Losses++
+			}
 		}
 	}
+
+	var statsList []*PlayerStats
+	for _, s := range statsMap {
+		statsList = append(statsList, s)
+	}
+
+	sort.Slice(statsList, func(i, j int) bool {
+		d1 := statsList[i].Deaths
+		if d1 == 0 {
+			d1 = 1
+		}
+		kda1 := float64(statsList[i].Kills+statsList[i].Assists) / float64(d1)
+
+		d2 := statsList[j].Deaths
+		if d2 == 0 {
+			d2 = 1
+		}
+		kda2 := float64(statsList[j].Kills+statsList[j].Assists) / float64(d2)
+
+		if kda1 != kda2 {
+			return kda1 > kda2
+		}
+		return statsList[i].Wins > statsList[j].Wins
+	})
+
+	f := excelize.NewFile()
+	sheet := "Leaderboard"
+	f.NewSheet(sheet)
+	f.DeleteSheet("Sheet1")
+
+	headers := []string{"Player", "Matches", "Wins", "Losses", "WinRate %", "KDA"}
+	for i, h := range headers {
+		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
+		f.SetCellValue(sheet, cell, h)
+	}
+
+	row := 2
+	for _, s := range statsList {
+		winRate := 0.0
+		if s.Matches > 0 {
+			winRate = (float64(s.Wins) / float64(s.Matches)) * 100
+		}
+
+		deaths := s.Deaths
+		if deaths == 0 {
+			deaths = 1
+		}
+		kdaRatio := float64(s.Kills+s.Assists) / float64(deaths)
+
+		f.SetCellValue(sheet, fmt.Sprintf("A%d", row), s.Name)
+		f.SetCellValue(sheet, fmt.Sprintf("B%d", row), s.Matches)
+		f.SetCellValue(sheet, fmt.Sprintf("C%d", row), s.Wins)
+		f.SetCellValue(sheet, fmt.Sprintf("D%d", row), s.Losses)
+		f.SetCellValue(sheet, fmt.Sprintf("E%d", row), fmt.Sprintf("%.1f%%", winRate))
+
+		f.SetCellValue(sheet, fmt.Sprintf("F%d", row), fmt.Sprintf("%.2f", kdaRatio))
+		row++
+	}
+
+	f.SetColWidth(sheet, "A", "A", 20)
+	f.SetColWidth(sheet, "B", "F", 12)
 
 	buf, err := f.WriteToBuffer()
 	if err != nil {

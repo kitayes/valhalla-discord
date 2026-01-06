@@ -17,7 +17,7 @@ func RunMigrations(db *sql.DB, migrationFS embed.FS) error {
 		return fmt.Errorf("could not create database driver: %w", err)
 	}
 
-	d, err := iofs.New(migrationFS, "migrations")
+	d, err := iofs.New(migrationFS, ".")
 	if err != nil {
 		return fmt.Errorf("could not create iofs source: %w", err)
 	}
