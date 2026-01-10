@@ -9,6 +9,13 @@ import (
 	"google.golang.org/api/sheets/v4"
 )
 
+//TODO: вывести бизнес логику в application, sheets перенести в pkg. будет интерфейс sheets с методами Spreadsheets.Create, Permissions.Create и т.д.
+
+type EnsureSheetExistsResponse struct {
+	SheetID string
+	URL     string
+}
+
 type SheetService struct {
 	sheetsSr *sheets.Service
 	driveSr  *drive.Service
@@ -38,9 +45,9 @@ func (s *SheetService) SetSpreadsheetID(id string) {
 	s.sheetID = id
 }
 
-func (s *SheetService) EnsureSheetExists(title, ownerEmail string) (string, string, error) {
+func (s *SheetService) EnsureSheetExists(title, ownerEmail string) (EnsureSheetExistsResponse, error) {
 	if s.sheetID != "" {
-		return s.sheetID, fmt.Sprintf("https://docs.google.com/spreadsheets/d/%s", s.sheetID), nil
+		return EnsureSheetExistsResponse{s.sheetID, fmt.Sprintf("https://docs.google.com/spreadsheets/d/%s", s.sheetID)}, nil
 	}
 
 	resp, err := s.sheetsSr.Spreadsheets.Create(&sheets.Spreadsheet{
@@ -49,7 +56,7 @@ func (s *SheetService) EnsureSheetExists(title, ownerEmail string) (string, stri
 		},
 	}).Do()
 	if err != nil {
-		return "", "", err
+		return EnsureSheetExistsResponse{}, err
 	}
 	s.sheetID = resp.SpreadsheetId
 	url := resp.SpreadsheetUrl
@@ -60,7 +67,7 @@ func (s *SheetService) EnsureSheetExists(title, ownerEmail string) (string, stri
 		EmailAddress: ownerEmail,
 	}).Do()
 	if err != nil {
-		return "", "", fmt.Errorf("failed to add owner: %v", err)
+		return EnsureSheetExistsResponse{}, fmt.Errorf("failed to add owner: %v", err)
 	}
 
 	_, err = s.driveSr.Permissions.Create(s.sheetID, &drive.Permission{
@@ -68,10 +75,10 @@ func (s *SheetService) EnsureSheetExists(title, ownerEmail string) (string, stri
 		Role: "reader",
 	}).Do()
 	if err != nil {
-		return "", "", fmt.Errorf("failed to make public: %v", err)
+		return EnsureSheetExistsResponse{}, fmt.Errorf("failed to make public: %v", err)
 	}
 
-	return s.sheetID, url, nil
+	return EnsureSheetExistsResponse{SheetID: s.sheetID, URL: url}, nil
 }
 
 func (s *SheetService) UpdateStats(data [][]interface{}) error {

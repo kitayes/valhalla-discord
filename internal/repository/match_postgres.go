@@ -7,6 +7,8 @@ import (
 	"valhalla/internal/models"
 )
 
+//TODO: не удалять данные из базы данных а помечать их isDeleated = true
+
 type MatchPostgres struct {
 	db *sql.DB
 }
@@ -35,9 +37,9 @@ func (r *MatchPostgres) Create(match models.Match) (int, error) {
 			return 0, err
 		}
 
-		pQuery := `INSERT INTO player_results (match_id, player_name, result, kills, deaths, assists, champion) 
-                  VALUES ($1, $2, $3, $4, $5, $6, $7)`
-		_, err = tx.Exec(pQuery, matchID, p.PlayerName, p.Result, p.Kills, p.Deaths, p.Assists, p.Champion)
+		pQuery := `INSERT INTO player_results (match_id, player_name, result, kills, deaths, assists) 
+                  VALUES ($1, $2, $3, $4, $5, $6)`
+		_, err = tx.Exec(pQuery, matchID, p.PlayerName, p.Result, p.Kills, p.Deaths, p.Assists)
 		if err != nil {
 			tx.Rollback()
 			return 0, err
@@ -55,7 +57,7 @@ func (r *MatchPostgres) Exists(fileHash, matchSignature string) (bool, error) {
 
 func (r *MatchPostgres) GetAllAfter(date time.Time) ([]models.Match, error) {
 	query := `
-		SELECT m.id, m.created_at, pr.player_name, pr.result, pr.kills, pr.deaths, pr.assists, pr.champion
+		SELECT m.id, m.created_at, pr.player_name, pr.result, pr.kills, pr.deaths, pr.assists
 		FROM matches m
 		JOIN player_results pr ON m.id = pr.match_id
 		WHERE m.created_at >= $1
@@ -71,7 +73,7 @@ func (r *MatchPostgres) GetAllAfter(date time.Time) ([]models.Match, error) {
 		var id int
 		var createdAt time.Time
 		var pr models.PlayerResult
-		if err := rows.Scan(&id, &createdAt, &pr.PlayerName, &pr.Result, &pr.Kills, &pr.Deaths, &pr.Assists, &pr.Champion); err != nil {
+		if err := rows.Scan(&id, &createdAt, &pr.PlayerName, &pr.Result, &pr.Kills, &pr.Deaths, &pr.Assists); err != nil {
 			continue
 		}
 		if _, ok := matchesMap[id]; !ok {
@@ -114,15 +116,15 @@ func (r *MatchPostgres) WipeAll() error {
 
 func (r *MatchPostgres) SetSeasonStartDate(date time.Time) error {
 	_, err := r.db.Exec(`
-		INSERT INTO settings (key, value) VALUES ('season_start', $1)
-		ON CONFLICT (key) DO UPDATE SET value = $1
-	`, date.Format(time.RFC3339))
+       INSERT INTO bot_settings (key, value) VALUES ('season_start_date', $1)
+       ON CONFLICT (key) DO UPDATE SET value = $1
+    `, date.Format(time.RFC3339))
 	return err
 }
 
 func (r *MatchPostgres) GetSeasonStartDate() (time.Time, error) {
 	var val string
-	err := r.db.QueryRow("SELECT value FROM settings WHERE key = 'season_start'").Scan(&val)
+	err := r.db.QueryRow("SELECT value FROM bot_settings WHERE key = 'season_start_date'").Scan(&val)
 	if err == sql.ErrNoRows {
 		return time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), nil
 	}
@@ -159,7 +161,7 @@ func (r *MatchPostgres) GetPlayerResetDates() (map[string]time.Time, error) {
 
 func (r *MatchPostgres) GetHistory(playerName string, limit int) ([]models.Match, error) {
 	query := `
-		SELECT m.id, m.created_at, pr.result, pr.kills, pr.deaths, pr.assists, pr.champion
+		SELECT m.id, m.created_at, pr.result, pr.kills, pr.deaths, pr.assists
 		FROM matches m
 		JOIN player_results pr ON m.id = pr.match_id
 		WHERE pr.player_name = $1
@@ -176,7 +178,7 @@ func (r *MatchPostgres) GetHistory(playerName string, limit int) ([]models.Match
 	for rows.Next() {
 		var m models.Match
 		var pr models.PlayerResult
-		err := rows.Scan(&m.ID, &m.CreatedAt, &pr.Result, &pr.Kills, &pr.Deaths, &pr.Assists, &pr.Champion)
+		err := rows.Scan(&m.ID, &m.CreatedAt, &pr.Result, &pr.Kills, &pr.Deaths, &pr.Assists)
 		if err != nil {
 			continue
 		}

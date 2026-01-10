@@ -18,107 +18,125 @@ type Bot struct {
 	session  *discordgo.Session
 	services *application.Service
 	logger   application.Logger
+	commands []*discordgo.ApplicationCommand
+	cfg      *config.Config
 
 	adminIDs         map[string]struct{}
 	allowedChannelID string
 }
 
 func NewBot(cfg *config.Config, services *application.Service, logger application.Logger) *Bot {
-	s, _ := discordgo.New("Bot " + cfg.DiscordToken)
+	return &Bot{
+		services:         services,
+		logger:           logger,
+		allowedChannelID: cfg.AllowedChannelID,
+	}
+}
+
+func (b *Bot) Init() error {
+	var err error
+
+	b.session, err = discordgo.New("Bot " + b.cfg.DiscordToken)
+	if err != nil {
+		b.logger.Error("error creating Discord session: ", err)
+	}
 
 	admins := make(map[string]struct{})
-	for _, id := range cfg.AdminUserIDs {
+	for _, id := range b.cfg.AdminUserIDs {
 		cleanID := strings.TrimSpace(id)
 		if cleanID != "" {
 			admins[cleanID] = struct{}{}
 		}
 	}
 
-	return &Bot{
-		session:          s,
-		services:         services,
-		logger:           logger,
-		adminIDs:         admins,
-		allowedChannelID: cfg.AllowedChannelID,
-	}
-}
+	//TODO: переписать все команды в addCommands
 
-var commands = []*discordgo.ApplicationCommand{
-	{Name: "export", Description: "Экспорт отчета в Excel (Только админы)"},
-	{Name: "reset", Description: "Сброс сезона (Только админы)"},
-	{
-		Name:        "set_timer",
-		Description: "Установить дату начала сезона (Только админы)",
-		Options: []*discordgo.ApplicationCommandOption{
-			{Type: discordgo.ApplicationCommandOptionString, Name: "date", Description: "YYYY-MM-DD", Required: true},
-		},
-	},
-	{
-		Name:        "delete_match",
-		Description: "Удалить матч по ID (Только админы)",
-		Options: []*discordgo.ApplicationCommandOption{
-			{Type: discordgo.ApplicationCommandOptionInteger, Name: "id", Description: "ID матча", Required: true},
-		},
-	},
-	{
-		Name:        "wipe",
-		Description: "ПОЛНОЕ УДАЛЕНИЕ всех данных и очистка таблиц (ОПАСНО)",
-	},
-	{Name: "sync_sheet", Description: "Синхронизация с Google Sheet (Только админы)"},
+	b.addCommands(
+		b.newExportCommand(),
+		b.newResetCommand(),
+	)
 
-	{
-		Name:        "reset_player",
-		Description: "Сброс игрока по ID (Только админы)",
-		Options: []*discordgo.ApplicationCommandOption{
-			{Type: discordgo.ApplicationCommandOptionInteger, Name: "id", Description: "ID игрока", Required: true},
-			{Type: discordgo.ApplicationCommandOptionString, Name: "date", Description: "YYYY-MM-DD", Required: false},
+	b.commands = []*discordgo.ApplicationCommand{
+		{
+			Name:        "export",
+			Description: "Экспорт отчета в Excel (Только админы)",
 		},
-	},
-	{
-		Name:        "wipe_player",
-		Description: "Полное удаление игрока по ID (Только админы)",
-		Options: []*discordgo.ApplicationCommandOption{
-			{Type: discordgo.ApplicationCommandOptionInteger, Name: "id", Description: "ID игрока", Required: true},
+		{
+			Name:        "reset",
+			Description: "Сброс сезона (Только админы)",
 		},
-	},
+		{
+			Name:        "set_timer",
+			Description: "Установить дату начала сезона (Только админы)",
+			Options: []*discordgo.ApplicationCommandOption{
+				{Type: discordgo.ApplicationCommandOptionString, Name: "date", Description: "YYYY-MM-DD", Required: true},
+			},
+		},
+		{
+			Name:        "delete_match",
+			Description: "Удалить матч по ID (Только админы)",
+			Options: []*discordgo.ApplicationCommandOption{
+				{Type: discordgo.ApplicationCommandOptionInteger, Name: "id", Description: "ID матча", Required: true},
+			},
+		},
+		{
+			Name:        "wipe",
+			Description: "ПОЛНОЕ УДАЛЕНИЕ всех данных и очистка таблиц (ОПАСНО)",
+		},
+		{Name: "sync_sheet", Description: "Синхронизация с Google Sheet (Только админы)"},
 
-	{
-		Name:        "players",
-		Description: "Список всех игроков и их ID",
-	},
-	{
-		Name:        "top",
-		Description: "Таблица лидеров",
-		Options: []*discordgo.ApplicationCommandOption{
-			{
-				Type:        discordgo.ApplicationCommandOptionString,
-				Name:        "sort",
-				Description: "Критерий сортировки",
-				Required:    false,
-				Choices: []*discordgo.ApplicationCommandOptionChoice{
-					{Name: "По KDA", Value: "kda"},
-					{Name: "По Винрейту", Value: "winrate"},
+		{
+			Name:        "reset_player",
+			Description: "Сброс игрока по ID (Только админы)",
+			Options: []*discordgo.ApplicationCommandOption{
+				{Type: discordgo.ApplicationCommandOptionInteger, Name: "id", Description: "ID игрока", Required: true},
+				{Type: discordgo.ApplicationCommandOptionString, Name: "date", Description: "YYYY-MM-DD", Required: false},
+			},
+		},
+		{
+			Name:        "wipe_player",
+			Description: "Полное удаление игрока по ID (Только админы)",
+			Options: []*discordgo.ApplicationCommandOption{
+				{Type: discordgo.ApplicationCommandOptionInteger, Name: "id", Description: "ID игрока", Required: true},
+			},
+		},
+
+		{
+			Name:        "players",
+			Description: "Список всех игроков и их ID",
+		},
+		{
+			Name:        "top",
+			Description: "Таблица лидеров",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        "sort",
+					Description: "Критерий сортировки",
+					Required:    false,
+					Choices: []*discordgo.ApplicationCommandOptionChoice{
+						{Name: "По KDA", Value: "kda"},
+						{Name: "По Винрейту", Value: "winrate"},
+					},
 				},
 			},
 		},
-	},
-	{
-		Name:        "profile",
-		Description: "Статистика игрока (по ID)",
-		Options: []*discordgo.ApplicationCommandOption{
-			{Type: discordgo.ApplicationCommandOptionInteger, Name: "id", Description: "ID игрока", Required: true},
+		{
+			Name:        "profile",
+			Description: "Статистика игрока (по ID)",
+			Options: []*discordgo.ApplicationCommandOption{
+				{Type: discordgo.ApplicationCommandOptionInteger, Name: "id", Description: "ID игрока", Required: true},
+			},
 		},
-	},
-	{
-		Name:        "history",
-		Description: "История матчей игрока (по ID)",
-		Options: []*discordgo.ApplicationCommandOption{
-			{Type: discordgo.ApplicationCommandOptionInteger, Name: "id", Description: "ID игрока", Required: true},
+		{
+			Name:        "history",
+			Description: "История матчей игрока (по ID)",
+			Options: []*discordgo.ApplicationCommandOption{
+				{Type: discordgo.ApplicationCommandOptionInteger, Name: "id", Description: "ID игрока", Required: true},
+			},
 		},
-	},
-}
+	}
 
-func (b *Bot) Init() error {
 	b.session.AddHandler(b.onInteraction)
 	b.session.AddHandler(b.onMessage)
 	return nil
@@ -131,7 +149,7 @@ func (b *Bot) Run(ctx context.Context) error {
 
 	b.logger.Info("Discord Bot Started. Registering slash commands...")
 
-	_, err := b.session.ApplicationCommandBulkOverwrite(b.session.State.User.ID, "1458104409677627576", commands)
+	_, err := b.session.ApplicationCommandBulkOverwrite(b.session.State.User.ID, "1458104409677627576", b.commands)
 	if err != nil {
 		b.logger.Error("Failed to register commands: %v", err)
 	} else {

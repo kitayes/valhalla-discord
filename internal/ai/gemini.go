@@ -10,6 +10,8 @@ import (
 	"google.golang.org/api/option"
 )
 
+//TODO: ревью от ИИшки
+
 type GeminiClient struct {
 	model *genai.GenerativeModel
 }

@@ -6,6 +6,8 @@ import (
 	"github.com/caarlos0/env/v11"
 )
 
+//TODO: на каждый слой свой конфиг
+
 type Config struct {
 	Repo         repository.Config `envPrefix:"REPO_"`
 	DiscordToken string            `env:"DISCORD_TOKEN" envDefault:""`
