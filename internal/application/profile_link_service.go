@@ -48,13 +48,9 @@ func NewProfileLinkServiceImpl(profileRepo repository.ProfileLink, matchRepo rep
 }
 
 func (s *ProfileLinkServiceImpl) GenerateLinkCode(playerName string) (string, error) {
-	if err := s.matchRepo.EnsurePlayerExists(playerName); err != nil {
-		return "", fmt.Errorf("не удалось создать игрока: %w", err)
-	}
-
-	playerID, err := s.profileRepo.GetPlayerIDByName(playerName)
+	playerID, err := s.matchRepo.EnsurePlayerExists(playerName)
 	if err != nil {
-		return "", fmt.Errorf("игрок '%s' не найден", playerName)
+		return "", fmt.Errorf("не удалось создать игрока: %w", err)
 	}
 
 	existingLink, err := s.profileRepo.GetLinkByDiscordPlayer(playerID)

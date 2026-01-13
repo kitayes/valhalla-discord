@@ -118,6 +118,27 @@ func (s *MatchServiceImpl) GetLeaderboard(sortBy string) ([]*PlayerStats, error)
 	}
 
 	sort.Slice(statsList, func(i, j int) bool {
+		m1 := statsList[i].Matches
+		m2 := statsList[j].Matches
+
+		if m1 != m2 {
+			return m1 > m2
+		}
+
+		wr1 := 0.0
+		if m1 > 0 {
+			wr1 = float64(statsList[i].Wins) / float64(m1)
+		}
+
+		wr2 := 0.0
+		if m2 > 0 {
+			wr2 = float64(statsList[j].Wins) / float64(m2)
+		}
+
+		if wr1 != wr2 {
+			return wr1 > wr2
+		}
+
 		d1 := statsList[i].Deaths
 		if d1 == 0 {
 			d1 = 1
@@ -130,27 +151,7 @@ func (s *MatchServiceImpl) GetLeaderboard(sortBy string) ([]*PlayerStats, error)
 		}
 		kda2 := float64(statsList[j].Kills+statsList[j].Assists) / float64(d2)
 
-		wr1 := 0.0
-		if statsList[i].Matches > 0 {
-			wr1 = float64(statsList[i].Wins) / float64(statsList[i].Matches)
-		}
-
-		wr2 := 0.0
-		if statsList[j].Matches > 0 {
-			wr2 = float64(statsList[j].Wins) / float64(statsList[j].Matches)
-		}
-
-		if sortBy == "winrate" {
-			if wr1 != wr2 {
-				return wr1 > wr2
-			}
-			return kda1 > kda2
-		}
-
-		if kda1 != kda2 {
-			return kda1 > kda2
-		}
-		return wr1 > wr2
+		return kda1 > kda2
 	})
 
 	return statsList, nil
@@ -223,6 +224,26 @@ func (s *MatchServiceImpl) SyncToGoogleSheet() (string, error) {
 	}
 
 	sort.Slice(statsList, func(i, j int) bool {
+		m1 := statsList[i].Matches
+		m2 := statsList[j].Matches
+
+		if m1 != m2 {
+			return m1 > m2
+		}
+
+		wr1 := 0.0
+		if m1 > 0 {
+			wr1 = float64(statsList[i].Wins) / float64(m1)
+		}
+		wr2 := 0.0
+		if m2 > 0 {
+			wr2 = float64(statsList[j].Wins) / float64(m2)
+		}
+
+		if wr1 != wr2 {
+			return wr1 > wr2
+		}
+
 		d1 := statsList[i].Deaths
 		if d1 == 0 {
 			d1 = 1
@@ -237,7 +258,7 @@ func (s *MatchServiceImpl) SyncToGoogleSheet() (string, error) {
 	})
 
 	var rows [][]interface{}
-	rows = append(rows, []interface{}{"Rank", "Player", "Matches", "Wins", "Losses", "WinRate %", "KDA"})
+	rows = append(rows, []interface{}{"Rank", "ID", "Player", "Matches", "Wins", "Losses", "WinRate %", "KDA"})
 
 	for i, st := range statsList {
 		winRate := 0.0
@@ -253,6 +274,7 @@ func (s *MatchServiceImpl) SyncToGoogleSheet() (string, error) {
 
 		rows = append(rows, []interface{}{
 			i + 1,
+			st.ID,
 			st.Name,
 			st.Matches,
 			st.Wins,
@@ -372,7 +394,7 @@ func (s *MatchServiceImpl) WipeAllData() error {
 	}
 	if s.sheetsClient != nil {
 		headers := [][]interface{}{
-			{"Rank", "Player", "Matches", "Wins", "Losses", "WinRate %", "KDA"},
+			{"Rank", "ID", "Player", "Matches", "Wins", "Losses", "WinRate %", "KDA"},
 		}
 		_ = s.sheetsClient.ClearRange(s.spreadsheetID, "A1:Z1000")
 		_ = s.sheetsClient.UpdateValues(s.spreadsheetID, "A1", headers)
@@ -392,7 +414,7 @@ func (s *MatchServiceImpl) GetExcelReport() ([]byte, error) {
 	f.NewSheet(sheet)
 	f.DeleteSheet("Sheet1")
 
-	headers := []string{"Player", "Matches", "Wins", "Losses", "WinRate %", "KDA"}
+	headers := []string{"ID", "Player", "Matches", "Wins", "Losses", "WinRate %", "KDA"}
 	for i, h := range headers {
 		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
 		f.SetCellValue(sheet, cell, h)
@@ -410,17 +432,19 @@ func (s *MatchServiceImpl) GetExcelReport() ([]byte, error) {
 		}
 		kdaRatio := float64(st.Kills+st.Assists) / float64(deaths)
 
-		f.SetCellValue(sheet, fmt.Sprintf("A%d", row), st.Name)
-		f.SetCellValue(sheet, fmt.Sprintf("B%d", row), st.Matches)
-		f.SetCellValue(sheet, fmt.Sprintf("C%d", row), st.Wins)
-		f.SetCellValue(sheet, fmt.Sprintf("D%d", row), st.Losses)
-		f.SetCellValue(sheet, fmt.Sprintf("E%d", row), fmt.Sprintf("%.1f%%", winRate))
-		f.SetCellValue(sheet, fmt.Sprintf("F%d", row), fmt.Sprintf("%.2f", kdaRatio))
+		f.SetCellValue(sheet, fmt.Sprintf("A%d", row), st.ID)
+		f.SetCellValue(sheet, fmt.Sprintf("B%d", row), st.Name)
+		f.SetCellValue(sheet, fmt.Sprintf("C%d", row), st.Matches)
+		f.SetCellValue(sheet, fmt.Sprintf("D%d", row), st.Wins)
+		f.SetCellValue(sheet, fmt.Sprintf("E%d", row), st.Losses)
+		f.SetCellValue(sheet, fmt.Sprintf("F%d", row), fmt.Sprintf("%.1f%%", winRate))
+		f.SetCellValue(sheet, fmt.Sprintf("G%d", row), fmt.Sprintf("%.2f", kdaRatio))
 		row++
 	}
 
-	f.SetColWidth(sheet, "A", "A", 20)
-	f.SetColWidth(sheet, "B", "F", 12)
+	f.SetColWidth(sheet, "A", "A", 10)
+	f.SetColWidth(sheet, "B", "B", 20)
+	f.SetColWidth(sheet, "C", "G", 12)
 
 	buf, err := f.WriteToBuffer()
 	if err != nil {
