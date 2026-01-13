@@ -35,6 +35,7 @@ type MatchService interface {
 	GetHistoryByID(id int) ([]string, error)
 	WipePlayerByID(id int) error
 	GetPlayerStats(name string) (*PlayerStats, error)
+	GetPlayerStatsByID(id int) (*PlayerStats, error)
 }
 
 type Service struct {

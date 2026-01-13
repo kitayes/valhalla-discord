@@ -20,8 +20,8 @@ type Match interface {
 	SetPlayerResetDate(playerName string, date time.Time) error
 	GetPlayerResetDates() (map[string]time.Time, error)
 
-	GetHistory(playerName string, limit int) ([]models.Match, error)
-	EnsurePlayerExists(name string) error
+	GetHistory(playerID int, limit int) ([]models.Match, error)
+	EnsurePlayerExists(name string) (int, error)
 	GetAllPlayers() ([]models.Player, error)
 	GetPlayerNameByID(id int) (string, error)
 	WipePlayerByID(id int) error

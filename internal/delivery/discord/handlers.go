@@ -79,15 +79,9 @@ func (b *Bot) handleTop(s *discordgo.Session, i *discordgo.Interaction) {
 func (b *Bot) handleProfile(s *discordgo.Session, i *discordgo.Interaction) {
 	id := i.ApplicationCommandData().Options[0].IntValue()
 
-	name, err := b.services.MatchService.GetPlayerNameByID(int(id))
+	p, err := b.services.MatchService.GetPlayerStatsByID(int(id))
 	if err != nil {
 		b.respondMessage(s, i, fmt.Sprintf("Игрок с ID %d не найден.", id), true)
-		return
-	}
-
-	p, err := b.services.MatchService.GetPlayerStats(name)
-	if err != nil {
-		b.respondMessage(s, i, fmt.Sprintf("Нет данных для игрока %s.", name), true)
 		return
 	}
 

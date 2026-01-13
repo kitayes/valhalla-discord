@@ -13,6 +13,7 @@ type Match struct {
 type PlayerResult struct {
 	ID         int    `json:"id"`
 	MatchID    int    `json:"match_id"`
+	PlayerID   int    `json:"player_id"`
 	PlayerName string `json:"player_name"`
 	Result     string `json:"result"`
 	Kills      int    `json:"kills"`

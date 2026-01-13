@@ -37,6 +37,7 @@ func NewMatchServiceImpl(repo repository.Match, ai AIProvider, sheetsClient shee
 }
 
 type PlayerStats struct {
+	ID      int
 	Name    string
 	Matches int
 	Wins    int
@@ -164,12 +165,7 @@ func (s *MatchServiceImpl) GetPlayerNameByID(id int) (string, error) {
 }
 
 func (s *MatchServiceImpl) GetHistoryByID(id int) ([]string, error) {
-	name, err := s.repo.GetPlayerNameByID(id)
-	if err != nil {
-		return nil, fmt.Errorf("игрок не найден")
-	}
-
-	matches, err := s.repo.GetHistory(name, 10)
+	matches, err := s.repo.GetHistory(id, 10)
 	if err != nil {
 		return nil, err
 	}
@@ -196,6 +192,20 @@ func (s *MatchServiceImpl) GetPlayerStats(name string) (*PlayerStats, error) {
 
 	for _, st := range stats {
 		if strings.EqualFold(st.Name, name) {
+			return st, nil
+		}
+	}
+	return nil, fmt.Errorf("игрок не найден")
+}
+
+func (s *MatchServiceImpl) GetPlayerStatsByID(id int) (*PlayerStats, error) {
+	stats, err := s.calculateStats()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, st := range stats {
+		if st.ID == id {
 			return st, nil
 		}
 	}
@@ -279,7 +289,7 @@ func (s *MatchServiceImpl) calculateStats() ([]*PlayerStats, error) {
 		playerResets = make(map[string]time.Time)
 	}
 
-	statsMap := make(map[string]*PlayerStats)
+	statsMap := make(map[int]*PlayerStats)
 
 	for _, m := range matches {
 		for _, p := range m.Players {
@@ -289,11 +299,14 @@ func (s *MatchServiceImpl) calculateStats() ([]*PlayerStats, error) {
 				}
 			}
 
-			if _, exists := statsMap[p.PlayerName]; !exists {
-				statsMap[p.PlayerName] = &PlayerStats{Name: p.PlayerName}
+			if _, exists := statsMap[p.PlayerID]; !exists {
+				statsMap[p.PlayerID] = &PlayerStats{
+					ID:   p.PlayerID,
+					Name: p.PlayerName,
+				}
 			}
 
-			stat := statsMap[p.PlayerName]
+			stat := statsMap[p.PlayerID]
 			stat.Matches++
 			stat.Kills += p.Kills
 			stat.Deaths += p.Deaths

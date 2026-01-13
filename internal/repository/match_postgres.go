@@ -34,13 +34,14 @@ func (r *MatchPostgres) Create(match models.Match) (int, error) {
 	}
 
 	for _, p := range match.Players {
-		if err := r.EnsurePlayerExists(p.PlayerName); err != nil {
+		playerID, err := r.EnsurePlayerExists(p.PlayerName)
+		if err != nil {
 			return 0, fmt.Errorf("failed to ensure player exists: %w", err)
 		}
 
-		pQuery := `INSERT INTO player_results (match_id, player_name, result, kills, deaths, assists) 
-                   VALUES ($1, $2, $3, $4, $5, $6)`
-		_, err = tx.Exec(pQuery, matchID, p.PlayerName, p.Result, p.Kills, p.Deaths, p.Assists)
+		pQuery := `INSERT INTO player_results (match_id, player_id, player_name, result, kills, deaths, assists) 
+                   VALUES ($1, $2, $3, $4, $5, $6, $7)`
+		_, err = tx.Exec(pQuery, matchID, playerID, p.PlayerName, p.Result, p.Kills, p.Deaths, p.Assists)
 		if err != nil {
 			return 0, fmt.Errorf("failed to insert player result: %w", err)
 		}
@@ -64,7 +65,7 @@ func (r *MatchPostgres) Exists(fileHash, matchSignature string) (bool, error) {
 
 func (r *MatchPostgres) GetAllAfter(date time.Time) ([]models.Match, error) {
 	query := `
-		SELECT m.id, m.created_at, pr.player_name, pr.result, pr.kills, pr.deaths, pr.assists
+		SELECT m.id, m.created_at, pr.player_name, pr.result, pr.kills, pr.deaths, pr.assists, pr.player_id
 		FROM matches m
 		JOIN player_results pr ON m.id = pr.match_id
 		WHERE m.created_at >= $1 AND m.is_deleted = FALSE AND pr.is_deleted = FALSE
@@ -80,7 +81,7 @@ func (r *MatchPostgres) GetAllAfter(date time.Time) ([]models.Match, error) {
 		var id int
 		var createdAt time.Time
 		var pr models.PlayerResult
-		if err := rows.Scan(&id, &createdAt, &pr.PlayerName, &pr.Result, &pr.Kills, &pr.Deaths, &pr.Assists); err != nil {
+		if err := rows.Scan(&id, &createdAt, &pr.PlayerName, &pr.Result, &pr.Kills, &pr.Deaths, &pr.Assists, &pr.PlayerID); err != nil {
 			continue
 		}
 		if _, ok := matchesMap[id]; !ok {
@@ -214,16 +215,16 @@ func (r *MatchPostgres) GetPlayerResetDates() (map[string]time.Time, error) {
 	return res, nil
 }
 
-func (r *MatchPostgres) GetHistory(playerName string, limit int) ([]models.Match, error) {
+func (r *MatchPostgres) GetHistory(playerID int, limit int) ([]models.Match, error) {
 	query := `
-		SELECT m.id, m.created_at, pr.result, pr.kills, pr.deaths, pr.assists
+		SELECT m.id, m.created_at, pr.result, pr.kills, pr.deaths, pr.assists, pr.player_name
 		FROM matches m
 		JOIN player_results pr ON m.id = pr.match_id
-		WHERE pr.player_name = $1 AND m.is_deleted = FALSE AND pr.is_deleted = FALSE
+		WHERE pr.player_id = $1 AND m.is_deleted = FALSE AND pr.is_deleted = FALSE
 		ORDER BY m.created_at DESC
 		LIMIT $2
 	`
-	rows, err := r.db.Query(query, playerName, limit)
+	rows, err := r.db.Query(query, playerID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get player history: %w", err)
 	}
@@ -233,25 +234,28 @@ func (r *MatchPostgres) GetHistory(playerName string, limit int) ([]models.Match
 	for rows.Next() {
 		var m models.Match
 		var pr models.PlayerResult
-		err := rows.Scan(&m.ID, &m.CreatedAt, &pr.Result, &pr.Kills, &pr.Deaths, &pr.Assists)
+		err := rows.Scan(&m.ID, &m.CreatedAt, &pr.Result, &pr.Kills, &pr.Deaths, &pr.Assists, &pr.PlayerName)
 		if err != nil {
 			continue
 		}
-		pr.PlayerName = playerName
+		pr.PlayerID = playerID
 		m.Players = []models.PlayerResult{pr}
 		matches = append(matches, m)
 	}
 	return matches, nil
 }
 
-func (r *MatchPostgres) EnsurePlayerExists(name string) error {
-	_, err := r.db.Exec(`
-        INSERT INTO players (name) VALUES ($1)
-        ON CONFLICT (name) DO NOTHING`, name)
+func (r *MatchPostgres) EnsurePlayerExists(name string) (int, error) {
+	var id int
+	err := r.db.QueryRow(`
+		INSERT INTO players (name) VALUES ($1)
+		ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+		RETURNING id`, name).Scan(&id)
+
 	if err != nil {
-		return fmt.Errorf("failed to ensure player exists: %w", err)
+		return 0, fmt.Errorf("failed to ensure player exists: %w", err)
 	}
-	return nil
+	return id, nil
 }
 
 func (r *MatchPostgres) GetAllPlayers() ([]models.Player, error) {
@@ -287,7 +291,7 @@ func (r *MatchPostgres) WipePlayerByID(id int) error {
 		return fmt.Errorf("игрок с ID %d не найден: %w", id, err)
 	}
 
-	_, err = r.db.Exec("UPDATE player_results SET is_deleted = TRUE WHERE player_name = $1", name)
+	_, err = r.db.Exec("UPDATE player_results SET is_deleted = TRUE WHERE player_id = $1", id)
 	if err != nil {
 		return fmt.Errorf("failed to soft delete player results: %w", err)
 	}
@@ -310,13 +314,7 @@ func (r *MatchPostgres) RestorePlayer(id int) error {
 		return fmt.Errorf("failed to restore player: %w", err)
 	}
 
-	var name string
-	err = r.db.QueryRow("SELECT name FROM players WHERE id = $1", id).Scan(&name)
-	if err != nil {
-		return fmt.Errorf("failed to get player name: %w", err)
-	}
-
-	_, err = r.db.Exec("UPDATE player_results SET is_deleted = FALSE WHERE player_name = $1", name)
+	_, err = r.db.Exec("UPDATE player_results SET is_deleted = FALSE WHERE player_id = $1", id)
 	if err != nil {
 		return fmt.Errorf("failed to restore player results: %w", err)
 	}
