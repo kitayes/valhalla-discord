@@ -18,8 +18,8 @@ type Logger interface {
 }
 
 type MatchService interface {
-	ProcessImage(data []byte) error
-	ProcessImageFromURL(url string) error
+	ProcessImage(data []byte) (int, error)
+	ProcessImageFromURL(url string) (int, error)
 	GetExcelReport() ([]byte, error)
 	SyncToGoogleSheet() (string, error)
 	SetTimer(dateStr string) error
@@ -27,6 +27,7 @@ type MatchService interface {
 	ResetPlayer(name, dateStr string) error
 	DeleteMatch(id int) error
 	WipeAllData() error
+	RenamePlayer(id int, newName string) error
 
 	GetLeaderboard(sortBy string) ([]*PlayerStats, error)
 

@@ -47,21 +47,21 @@ type PlayerStats struct {
 	Assists int
 }
 
-func (s *MatchServiceImpl) ProcessImage(data []byte) error {
+func (s *MatchServiceImpl) ProcessImage(data []byte) (int, error) {
 	hash := sha256.Sum256(data)
 	fileHash := hex.EncodeToString(hash[:])
 
 	exists, err := s.repo.Exists(fileHash, "")
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if exists {
-		return fmt.Errorf("duplicate match detected")
+		return 0, fmt.Errorf("duplicate match detected")
 	}
 
 	match, err := s.ai.ParseImage(data)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	match.FileHash = fileHash
 
@@ -69,15 +69,15 @@ func (s *MatchServiceImpl) ProcessImage(data []byte) error {
 	match.MatchSignature = matchSig
 	sigExists, err := s.repo.Exists("", matchSig)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if sigExists {
-		return fmt.Errorf("duplicate match detected")
+		return 0, fmt.Errorf("duplicate match detected")
 	}
 
-	_, err = s.repo.Create(*match)
+	matchID, err := s.repo.Create(*match)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	if s.sheetsClient != nil {
@@ -89,23 +89,23 @@ func (s *MatchServiceImpl) ProcessImage(data []byte) error {
 		}()
 	}
 
-	return nil
+	return matchID, nil
 }
 
-func (s *MatchServiceImpl) ProcessImageFromURL(url string) error {
+func (s *MatchServiceImpl) ProcessImageFromURL(url string) (int, error) {
 	client := &http.Client{
 		Timeout: 10 * time.Second,
 	}
 
 	resp, err := client.Get(url)
 	if err != nil {
-		return fmt.Errorf("failed to download image: %w", err)
+		return 0, fmt.Errorf("failed to download image: %w", err)
 	}
 	defer resp.Body.Close()
 
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
 	if err != nil {
-		return fmt.Errorf("failed to read image body: %w", err)
+		return 0, fmt.Errorf("failed to read image body: %w", err)
 	}
 
 	return s.ProcessImage(data)
@@ -183,6 +183,10 @@ func (s *MatchServiceImpl) GetHistoryByID(id int) ([]string, error) {
 
 func (s *MatchServiceImpl) WipePlayerByID(id int) error {
 	return s.repo.WipePlayerByID(id)
+}
+
+func (s *MatchServiceImpl) RenamePlayer(id int, newName string) error {
+	return s.repo.RenamePlayer(id, newName)
 }
 
 func (s *MatchServiceImpl) GetPlayerStats(name string) (*PlayerStats, error) {

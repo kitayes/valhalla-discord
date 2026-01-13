@@ -408,3 +408,16 @@ func (r *MatchPostgres) RestorePlayer(id int) error {
 	}
 	return nil
 }
+
+func (r *MatchPostgres) RenamePlayer(id int, newName string) error {
+	result, err := r.db.Exec("UPDATE players SET name = $1 WHERE id = $2 AND is_deleted = FALSE", newName, id)
+	if err != nil {
+		return fmt.Errorf("failed to rename player: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("игрок с ID %d не найден", id)
+	}
+	return nil
+}

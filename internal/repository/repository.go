@@ -26,6 +26,7 @@ type Match interface {
 	GetPlayerNameByID(id int) (string, error)
 	WipePlayerByID(id int) error
 	RestorePlayer(id int) error
+	RenamePlayer(id int, newName string) error
 }
 
 type ProfileLink interface {

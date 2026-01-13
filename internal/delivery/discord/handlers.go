@@ -299,6 +299,26 @@ func (b *Bot) handleDeleteMatch(s *discordgo.Session, i *discordgo.Interaction) 
 	b.respondMessage(s, i, fmt.Sprintf("Матч #%d успешно удален из базы.", id), false)
 }
 
+func (b *Bot) handleRenamePlayer(s *discordgo.Session, i *discordgo.Interaction) {
+	opts := i.ApplicationCommandData().Options
+	id := int(opts[0].IntValue())
+	newName := opts[1].StringValue()
+
+	oldName, err := b.services.MatchService.GetPlayerNameByID(id)
+	if err != nil {
+		b.respondMessage(s, i, fmt.Sprintf("Игрок с ID %d не найден.", id), true)
+		return
+	}
+
+	err = b.services.MatchService.RenamePlayer(id, newName)
+	if err != nil {
+		b.respondMessage(s, i, "Ошибка переименования: "+err.Error(), true)
+		return
+	}
+
+	b.respondMessage(s, i, fmt.Sprintf("Игрок переименован:\n**%s** → **%s**", oldName, newName), false)
+}
+
 func (b *Bot) handleScreenshot(s *discordgo.Session, m *discordgo.MessageCreate) {
 	filename := strings.ToLower(m.Attachments[0].Filename)
 	if !strings.HasSuffix(filename, ".png") && !strings.HasSuffix(filename, ".jpg") && !strings.HasSuffix(filename, ".jpeg") {
@@ -308,7 +328,7 @@ func (b *Bot) handleScreenshot(s *discordgo.Session, m *discordgo.MessageCreate)
 	s.ChannelTyping(m.ChannelID)
 	msg, _ := s.ChannelMessageSend(m.ChannelID, "Анализирую скриншот... ")
 
-	err := b.services.MatchService.ProcessImageFromURL(m.Attachments[0].URL)
+	matchID, err := b.services.MatchService.ProcessImageFromURL(m.Attachments[0].URL)
 
 	if msg != nil {
 		s.ChannelMessageDelete(m.ChannelID, msg.ID)
@@ -322,7 +342,7 @@ func (b *Bot) handleScreenshot(s *discordgo.Session, m *discordgo.MessageCreate)
 			b.logger.Error("Analysis error: %v", err)
 		}
 	} else {
-		s.ChannelMessageSend(m.ChannelID, "Результаты матча успешно записаны!")
+		s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("Матч #%d успешно записан!", matchID))
 	}
 }
 

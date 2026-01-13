@@ -55,6 +55,7 @@ func (b *Bot) Init() error {
 		b.newSyncSheetCommand(),
 		b.newResetPlayerCommand(),
 		b.newWipePlayerCommand(),
+		b.newRenamePlayerCommand(),
 		b.newPlayersCommand(),
 		b.newTopCommand(),
 		b.newProfileCommand(),
@@ -152,6 +153,8 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 		b.handleWipe(s, i.Interaction)
 	case "wipe_player":
 		b.handleWipePlayer(s, i.Interaction)
+	case "rename_player":
+		b.handleRenamePlayer(s, i.Interaction)
 	}
 }
 

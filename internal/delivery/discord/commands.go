@@ -74,6 +74,17 @@ func (b *Bot) newWipePlayerCommand() *discordgo.ApplicationCommand {
 	}
 }
 
+func (b *Bot) newRenamePlayerCommand() *discordgo.ApplicationCommand {
+	return &discordgo.ApplicationCommand{
+		Name:        "rename_player",
+		Description: "Переименовать игрока по ID (Только админы)",
+		Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionInteger, Name: "id", Description: "ID игрока", Required: true},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "new_name", Description: "Новый ник", Required: true},
+		},
+	}
+}
+
 func (b *Bot) newPlayersCommand() *discordgo.ApplicationCommand {
 	return &discordgo.ApplicationCommand{
 		Name:        "players",
