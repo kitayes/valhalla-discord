@@ -74,13 +74,22 @@ func (b *Bot) Run(ctx context.Context) error {
 		return err
 	}
 
-	b.logger.Info("Discord Bot Started. Registering slash commands...")
+	b.logger.Info("Discord Bot Started. Cleaning up and registering slash commands...")
 
-	_, err := b.session.ApplicationCommandBulkOverwrite(b.session.State.User.ID, "1458104409677627576", b.commands)
+	guildID := "1458104409677627576"
+
+	_, err := b.session.ApplicationCommandBulkOverwrite(b.session.State.User.ID, "", nil)
+	if err != nil {
+		b.logger.Warn("Failed to clear global commands: %v", err)
+	} else {
+		b.logger.Info("Global commands cleared")
+	}
+
+	_, err = b.session.ApplicationCommandBulkOverwrite(b.session.State.User.ID, guildID, b.commands)
 	if err != nil {
 		b.logger.Error("Failed to register commands: %v", err)
 	} else {
-		b.logger.Info("Slash commands registered successfully")
+		b.logger.Info("Slash commands registered successfully for guild %s", guildID)
 	}
 
 	return nil

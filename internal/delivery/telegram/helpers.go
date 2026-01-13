@@ -48,9 +48,34 @@ func (b *Bot) sendMessage(chatID int64, text string, kbType string) {
 				tgbotapi.NewKeyboardButton("Отмена"),
 			),
 		)
+	case "main_menu":
+		msg.ReplyMarkup = tgbotapi.NewReplyKeyboard(
+			tgbotapi.NewKeyboardButtonRow(
+				tgbotapi.NewKeyboardButton("/profile"),
+				tgbotapi.NewKeyboardButton("/my_team"),
+			),
+			tgbotapi.NewKeyboardButtonRow(
+				tgbotapi.NewKeyboardButton("/reg_solo"),
+				tgbotapi.NewKeyboardButton("/reg_team"),
+			),
+			tgbotapi.NewKeyboardButtonRow(
+				tgbotapi.NewKeyboardButton("/checkin"),
+				tgbotapi.NewKeyboardButton("/report"),
+			),
+			tgbotapi.NewKeyboardButtonRow(
+				tgbotapi.NewKeyboardButton("/delete_team"),
+			),
+		)
 	default:
 		msg.ReplyMarkup = tgbotapi.NewRemoveKeyboard(true)
 	}
 
 	b.bot.Send(msg)
+}
+
+func valueOrDefault(val, def string) string {
+	if val == "" {
+		return def
+	}
+	return val
 }

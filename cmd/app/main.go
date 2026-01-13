@@ -84,7 +84,7 @@ func main() {
 
 	var telegramBot *telegram.Bot
 	if cfg.TelegramToken != "" {
-		telegramBot, err = telegram.NewBot(cfg.TelegramToken, cfg.TelegramAdminIDs, services.TelegramService, log)
+		telegramBot, err = telegram.NewBot(cfg.TelegramToken, cfg.TelegramAdminIDs, services.TelegramService, services.ProfileLinkService, log)
 		if err != nil {
 			log.Error("failed to init telegram bot: %s", err.Error())
 		} else {

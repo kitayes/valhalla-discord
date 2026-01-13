@@ -327,9 +327,15 @@ func (b *Bot) handleScreenshot(s *discordgo.Session, m *discordgo.MessageCreate)
 }
 
 func (b *Bot) handleLink(s *discordgo.Session, i *discordgo.Interaction) {
-	playerName := i.ApplicationCommandData().Options[0].StringValue()
+	playerID := int(i.ApplicationCommandData().Options[0].IntValue())
 
-	code, err := b.services.ProfileLinkService.GenerateLinkCode(playerName)
+	playerName, err := b.services.MatchService.GetPlayerNameByID(playerID)
+	if err != nil {
+		b.respondMessage(s, i, fmt.Sprintf("Игрок с ID %d не найден.", playerID), true)
+		return
+	}
+
+	code, err := b.services.ProfileLinkService.GenerateLinkCodeByID(playerID)
 	if err != nil {
 		b.respondMessage(s, i, "Ошибка: "+err.Error(), true)
 		return
@@ -340,7 +346,7 @@ func (b *Bot) handleLink(s *discordgo.Session, i *discordgo.Interaction) {
 		Description: fmt.Sprintf("Отправьте этот код боту в Telegram:\n\n```\n/link %s\n```\n\n⏰ Код действителен 10 минут", code),
 		Color:       0x3498DB,
 		Fields: []*discordgo.MessageEmbedField{
-			{Name: "Игрок", Value: playerName, Inline: true},
+			{Name: "Игрок", Value: fmt.Sprintf("%s (ID: %d)", playerName, playerID), Inline: true},
 		},
 		Footer: &discordgo.MessageEmbedFooter{Text: "Valhalla Profile Sync"},
 	}

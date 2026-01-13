@@ -8,6 +8,7 @@ import (
 
 type ProfileLinkService interface {
 	GenerateLinkCode(playerName string) (string, error)
+	GenerateLinkCodeByID(playerID int) (string, error)
 	LinkTelegramAccount(code string, telegramID int64, telegramUsername string) error
 	GetLinkedProfile(playerName string) (*LinkedProfile, error)
 	GetLinkedProfileByTelegram(telegramID int64) (*LinkedProfile, error)
@@ -53,6 +54,10 @@ func (s *ProfileLinkServiceImpl) GenerateLinkCode(playerName string) (string, er
 		return "", fmt.Errorf("не удалось создать игрока: %w", err)
 	}
 
+	return s.GenerateLinkCodeByID(playerID)
+}
+
+func (s *ProfileLinkServiceImpl) GenerateLinkCodeByID(playerID int) (string, error) {
 	existingLink, err := s.profileRepo.GetLinkByDiscordPlayer(playerID)
 	if err != nil {
 		return "", fmt.Errorf("ошибка проверки связи: %w", err)
@@ -66,7 +71,7 @@ func (s *ProfileLinkServiceImpl) GenerateLinkCode(playerName string) (string, er
 		return "", fmt.Errorf("не удалось создать код: %w", err)
 	}
 
-	s.logger.Info("Generated link code for player: %s", playerName)
+	s.logger.Info("Generated link code for player ID: %d", playerID)
 	return code, nil
 }
 

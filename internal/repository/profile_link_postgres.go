@@ -78,8 +78,9 @@ func (r *ProfileLinkPostgres) CreateProfileLink(link *models.ProfileLink) error 
 func (r *ProfileLinkPostgres) GetLinkByDiscordPlayer(playerID int) (*models.ProfileLink, error) {
 	var link models.ProfileLink
 	err := r.db.QueryRow(`
-		SELECT id, discord_player_id, telegram_id, telegram_username, 
-			   game_nickname, game_id, zone_id, stars, main_role, linked_at, updated_at
+		SELECT id, discord_player_id, telegram_id, COALESCE(telegram_username, ''),
+			   COALESCE(game_nickname, ''), COALESCE(game_id, ''), COALESCE(zone_id, ''), 
+			   COALESCE(stars, 0), COALESCE(main_role, ''), linked_at, updated_at
 		FROM profile_links 
 		WHERE discord_player_id = $1
 	`, playerID).Scan(
@@ -100,8 +101,9 @@ func (r *ProfileLinkPostgres) GetLinkByDiscordPlayer(playerID int) (*models.Prof
 func (r *ProfileLinkPostgres) GetLinkByTelegramID(telegramID int64) (*models.ProfileLink, error) {
 	var link models.ProfileLink
 	err := r.db.QueryRow(`
-		SELECT id, discord_player_id, telegram_id, telegram_username,
-			   game_nickname, game_id, zone_id, stars, main_role, linked_at, updated_at
+		SELECT id, discord_player_id, telegram_id, COALESCE(telegram_username, ''),
+			   COALESCE(game_nickname, ''), COALESCE(game_id, ''), COALESCE(zone_id, ''),
+			   COALESCE(stars, 0), COALESCE(main_role, ''), linked_at, updated_at
 		FROM profile_links 
 		WHERE telegram_id = $1
 	`, telegramID).Scan(

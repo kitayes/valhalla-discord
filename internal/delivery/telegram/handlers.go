@@ -115,7 +115,24 @@ func (b *Bot) handleAdminCommand(chatID int64, text string) {
 	}
 }
 
-func (b *Bot) handleUserCommand(chatID int64, text string) {
+func (b *Bot) handleUserCommand(chatID int64, text string, username string) {
+	if strings.HasPrefix(text, "/link ") {
+		code := strings.TrimPrefix(text, "/link ")
+		code = strings.TrimSpace(code)
+		if code == "" {
+			b.sendMessage(chatID, "Используйте: /link <код>\n\nКод можно получить в Discord командой /link <ID игрока>", "empty")
+			return
+		}
+
+		err := b.profileLinkService.LinkTelegramAccount(code, chatID, username)
+		if err != nil {
+			b.sendMessage(chatID, "Ошибка привязки: "+err.Error(), "empty")
+		} else {
+			b.sendMessage(chatID, "Аккаунт успешно привязан к вашему Discord профилю!", "main_menu")
+		}
+		return
+	}
+
 	if strings.HasPrefix(text, "/edit_player") {
 		parts := strings.Fields(text)
 		if len(parts) != 2 {
@@ -133,15 +150,8 @@ func (b *Bot) handleUserCommand(chatID int64, text string) {
 
 	switch text {
 	case "/start":
-		response = "Valhalla Cup Bot\n\n" +
-			"/reg_solo - Регистрация (соло)\n" +
-			"/reg_team - Регистрация (команда)\n" +
-			"/my_team - Мой состав\n" +
-			"/edit_player [№] - Изменить данные игрока\n" +
-			"/checkin - Подтвердить участие\n" +
-			"/report - Отправить результат матча\n" +
-			"/delete_team - Удалить команду"
-		kbType = "empty"
+		response = "Добро пожаловать в Valhalla Cup Bot!\n\nВыберите действие:"
+		kbType = "main_menu"
 
 	case "/reg_solo":
 		response, kbType = b.service.StartSoloRegistration(chatID)
@@ -155,6 +165,45 @@ func (b *Bot) handleUserCommand(chatID int64, text string) {
 		kbType = "empty"
 	case "/delete_team":
 		response = b.service.DeleteTeam(chatID)
+		kbType = "empty"
+	case "/profile":
+		profile, err := b.profileLinkService.GetLinkedProfileByTelegram(chatID)
+		if err != nil || profile == nil {
+			response = "Ваш аккаунт не привязан к Discord профилю.\n\nИспользуйте /link <код> для привязки.\nКод можно получить в Discord командой /link <ID игрока>"
+		} else {
+			wr := 0.0
+			matches := profile.Wins + profile.Losses
+			if matches > 0 {
+				wr = float64(profile.Wins) / float64(matches) * 100
+			}
+			d := profile.Deaths
+			if d == 0 {
+				d = 1
+			}
+			kda := float64(profile.Kills+profile.Assists) / float64(d)
+
+			response = fmt.Sprintf("Ваш профиль:\n\n"+
+				"Discord: %s\n"+
+				"Telegram: @%s\n\n"+
+				"-- Игровые данные --\n"+
+				"Ник: %s\n"+
+				"ID: %s | Zone: %s\n"+
+				"Звезды: %d | Роль: %s\n\n"+
+				"-- Статистика Discord --\n"+
+				"Матчей: %d\n"+
+				"Побед: %d | Поражений: %d\n"+
+				"Винрейт: %.1f%%\n"+
+				"K/D/A: %d/%d/%d (%.2f)",
+				profile.DiscordPlayerName,
+				profile.TelegramUsername,
+				valueOrDefault(profile.GameNickname, "Не указан"),
+				valueOrDefault(profile.GameID, "-"),
+				valueOrDefault(profile.ZoneID, "-"),
+				profile.Stars,
+				valueOrDefault(profile.MainRole, "Не указана"),
+				matches, profile.Wins, profile.Losses, wr,
+				profile.Kills, profile.Deaths, profile.Assists, kda)
+		}
 		kbType = "empty"
 	case "/report":
 		response, kbType = b.service.StartReport(chatID)

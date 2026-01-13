@@ -3,6 +3,7 @@ package repository
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 	"valhalla/internal/models"
 )
@@ -246,8 +247,25 @@ func (r *MatchPostgres) GetHistory(playerID int, limit int) ([]models.Match, err
 }
 
 func (r *MatchPostgres) EnsurePlayerExists(name string) (int, error) {
+	existingPlayers, err := r.GetAllPlayers()
+	if err == nil && len(existingPlayers) > 0 {
+		normalizedInput := normalizeForComparison(name)
+
+		for _, p := range existingPlayers {
+			normalizedExisting := normalizeForComparison(p.Name)
+
+			if normalizedInput == normalizedExisting {
+				return p.ID, nil
+			}
+
+			if similarityScore(normalizedInput, normalizedExisting) > 0.85 {
+				return p.ID, nil
+			}
+		}
+	}
+
 	var id int
-	err := r.db.QueryRow(`
+	err = r.db.QueryRow(`
 		INSERT INTO players (name) VALUES ($1)
 		ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
 		RETURNING id`, name).Scan(&id)
@@ -256,6 +274,76 @@ func (r *MatchPostgres) EnsurePlayerExists(name string) (int, error) {
 		return 0, fmt.Errorf("failed to ensure player exists: %w", err)
 	}
 	return id, nil
+}
+
+func normalizeForComparison(name string) string {
+	name = strings.TrimSpace(name)
+	name = strings.ToLower(name)
+
+	var result strings.Builder
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == ' ' {
+			result.WriteRune(r)
+		}
+	}
+	return strings.TrimSpace(result.String())
+}
+
+func similarityScore(a, b string) float64 {
+	if a == b {
+		return 1.0
+	}
+	if len(a) == 0 || len(b) == 0 {
+		return 0.0
+	}
+
+	distance := levenshteinDistance(a, b)
+	maxLen := len(a)
+	if len(b) > maxLen {
+		maxLen = len(b)
+	}
+	return 1.0 - float64(distance)/float64(maxLen)
+}
+
+func levenshteinDistance(a, b string) int {
+	if len(a) == 0 {
+		return len(b)
+	}
+	if len(b) == 0 {
+		return len(a)
+	}
+
+	matrix := make([][]int, len(a)+1)
+	for i := range matrix {
+		matrix[i] = make([]int, len(b)+1)
+		matrix[i][0] = i
+	}
+	for j := 0; j <= len(b); j++ {
+		matrix[0][j] = j
+	}
+
+	for i := 1; i <= len(a); i++ {
+		for j := 1; j <= len(b); j++ {
+			cost := 0
+			if a[i-1] != b[j-1] {
+				cost = 1
+			}
+			del := matrix[i-1][j] + 1
+			ins := matrix[i][j-1] + 1
+			sub := matrix[i-1][j-1] + cost
+
+			minVal := del
+			if ins < minVal {
+				minVal = ins
+			}
+			if sub < minVal {
+				minVal = sub
+			}
+			matrix[i][j] = minVal
+		}
+	}
+
+	return matrix[len(a)][len(b)]
 }
 
 func (r *MatchPostgres) GetAllPlayers() ([]models.Player, error) {

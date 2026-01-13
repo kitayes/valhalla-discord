@@ -125,7 +125,7 @@ func (b *Bot) newLinkCommand() *discordgo.ApplicationCommand {
 		Name:        "link",
 		Description: "Получить код для привязки Telegram аккаунта",
 		Options: []*discordgo.ApplicationCommandOption{
-			{Type: discordgo.ApplicationCommandOptionString, Name: "player_name", Description: "Имя игрока в системе", Required: true},
+			{Type: discordgo.ApplicationCommandOptionInteger, Name: "id", Description: "ID игрока", Required: true},
 		},
 	}
 }
