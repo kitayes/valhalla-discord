@@ -4,31 +4,35 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
-	"valhalla/internal/integration"
 	"valhalla/internal/models"
 	"valhalla/internal/repository"
+	"valhalla/pkg/sheets"
 
 	"github.com/xuri/excelize/v2"
 )
 
 type MatchServiceImpl struct {
-	repo       repository.Match
-	ai         AIProvider
-	sheets     *integration.SheetService
-	ownerEmail string
-	logger     Logger
+	repo          repository.Match
+	ai            AIProvider
+	sheetsClient  sheets.Client
+	spreadsheetID string
+	ownerEmail    string
+	logger        Logger
 }
 
-func NewMatchServiceImpl(repo repository.Match, ai AIProvider, sheets *integration.SheetService, ownerEmail string, logger Logger) *MatchServiceImpl {
+func NewMatchServiceImpl(repo repository.Match, ai AIProvider, sheetsClient sheets.Client, ownerEmail string, logger Logger) *MatchServiceImpl {
 	return &MatchServiceImpl{
-		repo:       repo,
-		ai:         ai,
-		sheets:     sheets,
-		ownerEmail: ownerEmail,
-		logger:     logger,
+		repo:          repo,
+		ai:            ai,
+		sheetsClient:  sheetsClient,
+		spreadsheetID: "1ZDBqKL1Sgr8-JPXChMafyiHmzHXVJB0aFKXgoTjEfR8",
+		ownerEmail:    ownerEmail,
+		logger:        logger,
 	}
 }
 
@@ -75,8 +79,7 @@ func (s *MatchServiceImpl) ProcessImage(data []byte) error {
 		return err
 	}
 
-	if s.sheets != nil {
-		s.sheets.SetSpreadsheetID("1ZDBqKL1Sgr8-JPXChMafyiHmzHXVJB0aFKXgoTjEfR8")
+	if s.sheetsClient != nil {
 		go func() {
 			_, err := s.SyncToGoogleSheet()
 			if err != nil {
@@ -86,6 +89,25 @@ func (s *MatchServiceImpl) ProcessImage(data []byte) error {
 	}
 
 	return nil
+}
+
+func (s *MatchServiceImpl) ProcessImageFromURL(url string) error {
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	resp, err := client.Get(url)
+	if err != nil {
+		return fmt.Errorf("failed to download image: %w", err)
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
+	if err != nil {
+		return fmt.Errorf("failed to read image body: %w", err)
+	}
+
+	return s.ProcessImage(data)
 }
 
 func (s *MatchServiceImpl) GetLeaderboard(sortBy string) ([]*PlayerStats, error) {
@@ -181,11 +203,9 @@ func (s *MatchServiceImpl) GetPlayerStats(name string) (*PlayerStats, error) {
 }
 
 func (s *MatchServiceImpl) SyncToGoogleSheet() (string, error) {
-	if s.sheets == nil {
-		return "", fmt.Errorf("google sheets service is not disabled")
+	if s.sheetsClient == nil {
+		return "", fmt.Errorf("google sheets service is not configured")
 	}
-
-	s.sheets.SetSpreadsheetID("1ZDBqKL1Sgr8-JPXChMafyiHmzHXVJB0aFKXgoTjEfR8")
 
 	statsList, err := s.calculateStats()
 	if err != nil {
@@ -232,14 +252,15 @@ func (s *MatchServiceImpl) SyncToGoogleSheet() (string, error) {
 		})
 	}
 
-	if _, _, err := s.sheets.EnsureSheetExists("Valhalla Leaderboard 🏆", s.ownerEmail); err != nil {
+	if err := s.sheetsClient.ClearRange(s.spreadsheetID, "A1:Z1000"); err != nil {
+		s.logger.Error("failed to clear sheet: %v", err)
 	}
 
-	if err := s.sheets.UpdateStats(rows); err != nil {
+	if err := s.sheetsClient.UpdateValues(s.spreadsheetID, "A1", rows); err != nil {
 		return "", fmt.Errorf("failed to update stats: %w", err)
 	}
 
-	return fmt.Sprintf("https://docs.google.com/spreadsheets/d/%s", "1ZDBqKL1Sgr8-JPXChMafyiHmzHXVJB0aFKXgoTjEfR8"), nil
+	return fmt.Sprintf("https://docs.google.com/spreadsheets/d/%s", s.spreadsheetID), nil
 }
 
 func (s *MatchServiceImpl) calculateStats() ([]*PlayerStats, error) {
@@ -336,11 +357,12 @@ func (s *MatchServiceImpl) WipeAllData() error {
 	if err := s.repo.WipeAll(); err != nil {
 		return fmt.Errorf("ошибка очистки БД: %w", err)
 	}
-	if s.sheets != nil {
+	if s.sheetsClient != nil {
 		headers := [][]interface{}{
 			{"Rank", "Player", "Matches", "Wins", "Losses", "WinRate %", "KDA"},
 		}
-		_ = s.sheets.UpdateStats(headers)
+		_ = s.sheetsClient.ClearRange(s.spreadsheetID, "A1:Z1000")
+		_ = s.sheetsClient.UpdateValues(s.spreadsheetID, "A1", headers)
 	}
 	_ = s.repo.SetSeasonStartDate(time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
 	return nil

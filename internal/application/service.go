@@ -1,9 +1,9 @@
 package application
 
 import (
-	"valhalla/internal/integration"
 	"valhalla/internal/models"
 	"valhalla/internal/repository"
+	"valhalla/pkg/sheets"
 )
 
 type AIProvider interface {
@@ -19,6 +19,7 @@ type Logger interface {
 
 type MatchService interface {
 	ProcessImage(data []byte) error
+	ProcessImageFromURL(url string) error
 	GetExcelReport() ([]byte, error)
 	SyncToGoogleSheet() (string, error)
 	SetTimer(dateStr string) error
@@ -37,11 +38,15 @@ type MatchService interface {
 }
 
 type Service struct {
-	MatchService MatchService
+	MatchService       MatchService
+	ProfileLinkService ProfileLinkService
+	TelegramService    TelegramService
 }
 
-func NewService(repos *repository.Repository, ai AIProvider, sheets *integration.SheetService, ownerEmail string, logger Logger) *Service {
+func NewService(repos *repository.Repository, ai AIProvider, sheetsClient sheets.Client, ownerEmail string, logger Logger) *Service {
 	return &Service{
-		MatchService: NewMatchServiceImpl(repos.Match, ai, sheets, ownerEmail, logger),
+		MatchService:       NewMatchServiceImpl(repos.Match, ai, sheetsClient, ownerEmail, logger),
+		ProfileLinkService: NewProfileLinkServiceImpl(repos.ProfileLink, repos.Match, logger),
+		TelegramService:    NewTelegramServiceImpl(repos.Telegram, logger),
 	}
 }

@@ -9,13 +9,16 @@ import (
 //TODO: на каждый слой свой конфиг
 
 type Config struct {
-	Repo         repository.Config `envPrefix:"REPO_"`
-	DiscordToken string            `env:"DISCORD_TOKEN" envDefault:""`
-	GeminiKey    string            `env:"GEMINI_KEY" envDefault:""`
-	LogLevel     string            `env:"LOGGER_LEVEL" envDefault:"debug"`
+	Repo          repository.Config `envPrefix:"REPO_"`
+	DiscordToken  string            `env:"DISCORD_TOKEN" envDefault:""`
+	TelegramToken string            `env:"TELEGRAM_TOKEN" envDefault:""`
+	GeminiKey     string            `env:"GEMINI_KEY" envDefault:""`
+	LogLevel      string            `env:"LOGGER_LEVEL" envDefault:"debug"`
 
 	AllowedChannelID string   `env:"ALLOWED_CHANNEL_ID" envDefault:""`
 	AdminUserIDs     []string `env:"ADMIN_USER_IDS" envSeparator:"," envDefault:""`
+
+	TelegramAdminIDs []int64 `env:"TELEGRAM_ADMIN_IDS" envSeparator:"," envDefault:""`
 
 	GoogleOwnerEmail string `env:"GOOGLE_OWNER_EMAIL" envDefault:""`
 }

@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: valhalla_bot
+    container_name: valhalla_bots
     restart: always
     depends_on:
       - db
@@ -16,6 +16,7 @@ services:
       - REPO_DB_PASSWORD=valhalla
       - REPO_DB_NAME=valhalla_db
       - REPO_DB_SSLMODE=disable
+      # DISCORD_TOKEN, TELEGRAM_TOKEN, GEMINI_KEY are loaded from .env
 
   db:
     image: postgres:15-alpine
