@@ -8,6 +8,11 @@ import (
 	"valhalla/internal/models"
 )
 
+const (
+	linkCodeLength      = 6
+	linkCodeExpireQuery = "NOW() + INTERVAL '10 minutes'"
+)
+
 type ProfileLinkPostgres struct {
 	db *sql.DB
 }
@@ -17,7 +22,7 @@ func NewProfileLinkPostgres(db *sql.DB) *ProfileLinkPostgres {
 }
 
 func (r *ProfileLinkPostgres) CreateLinkCode(playerID int) (string, error) {
-	code := generateCode(6)
+	code := generateCode(linkCodeLength)
 
 	_, err := r.db.Exec(`DELETE FROM link_codes WHERE discord_player_id = $1`, playerID)
 	if err != nil {
@@ -26,7 +31,7 @@ func (r *ProfileLinkPostgres) CreateLinkCode(playerID int) (string, error) {
 
 	_, err = r.db.Exec(`
 		INSERT INTO link_codes (code, discord_player_id, expires_at)
-		VALUES ($1, $2, NOW() + INTERVAL '10 minutes')
+		VALUES ($1, $2, `+linkCodeExpireQuery+`)
 	`, code, playerID)
 	if err != nil {
 		return "", fmt.Errorf("failed to create link code: %w", err)

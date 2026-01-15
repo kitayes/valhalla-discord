@@ -23,13 +23,6 @@ func (b *Bot) respondMessage(s *discordgo.Session, i *discordgo.Interaction, msg
 	})
 }
 
-func valueOrDefault(val, def string) string {
-	if val == "" {
-		return def
-	}
-	return val
-}
-
 func (b *Bot) ensureAdmin(s *discordgo.Session, i *discordgo.Interaction, handler func(*discordgo.Session, *discordgo.Interaction)) {
 	if !b.isAdmin(i.Member.User.ID) {
 		b.respondMessage(s, i, "У вас нет прав.", true)

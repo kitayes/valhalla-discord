@@ -118,40 +118,7 @@ func (s *MatchServiceImpl) GetLeaderboard(sortBy string) ([]*PlayerStats, error)
 	}
 
 	sort.Slice(statsList, func(i, j int) bool {
-		m1 := statsList[i].Matches
-		m2 := statsList[j].Matches
-
-		if m1 != m2 {
-			return m1 > m2
-		}
-
-		wr1 := 0.0
-		if m1 > 0 {
-			wr1 = float64(statsList[i].Wins) / float64(m1)
-		}
-
-		wr2 := 0.0
-		if m2 > 0 {
-			wr2 = float64(statsList[j].Wins) / float64(m2)
-		}
-
-		if wr1 != wr2 {
-			return wr1 > wr2
-		}
-
-		d1 := statsList[i].Deaths
-		if d1 == 0 {
-			d1 = 1
-		}
-		kda1 := float64(statsList[i].Kills+statsList[i].Assists) / float64(d1)
-
-		d2 := statsList[j].Deaths
-		if d2 == 0 {
-			d2 = 1
-		}
-		kda2 := float64(statsList[j].Kills+statsList[j].Assists) / float64(d2)
-
-		return kda1 > kda2
+		return comparePlayersByPriority(statsList[i], statsList[j])
 	})
 
 	return statsList, nil
@@ -166,7 +133,7 @@ func (s *MatchServiceImpl) GetPlayerNameByID(id int) (string, error) {
 }
 
 func (s *MatchServiceImpl) GetHistoryByID(id int) ([]string, error) {
-	matches, err := s.repo.GetHistory(id, 10)
+	matches, err := s.repo.GetHistory(id, defaultHistoryLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -228,53 +195,15 @@ func (s *MatchServiceImpl) SyncToGoogleSheet() (string, error) {
 	}
 
 	sort.Slice(statsList, func(i, j int) bool {
-		m1 := statsList[i].Matches
-		m2 := statsList[j].Matches
-
-		if m1 != m2 {
-			return m1 > m2
-		}
-
-		wr1 := 0.0
-		if m1 > 0 {
-			wr1 = float64(statsList[i].Wins) / float64(m1)
-		}
-		wr2 := 0.0
-		if m2 > 0 {
-			wr2 = float64(statsList[j].Wins) / float64(m2)
-		}
-
-		if wr1 != wr2 {
-			return wr1 > wr2
-		}
-
-		d1 := statsList[i].Deaths
-		if d1 == 0 {
-			d1 = 1
-		}
-		kda1 := float64(statsList[i].Kills+statsList[i].Assists) / float64(d1)
-		d2 := statsList[j].Deaths
-		if d2 == 0 {
-			d2 = 1
-		}
-		kda2 := float64(statsList[j].Kills+statsList[j].Assists) / float64(d2)
-		return kda1 > kda2
+		return comparePlayersByPriority(statsList[i], statsList[j])
 	})
 
 	var rows [][]interface{}
 	rows = append(rows, []interface{}{"Rank", "ID", "Player", "Matches", "Wins", "Losses", "WinRate %", "KDA"})
 
 	for i, st := range statsList {
-		winRate := 0.0
-		if st.Matches > 0 {
-			winRate = (float64(st.Wins) / float64(st.Matches)) * 100
-		}
-
-		deaths := st.Deaths
-		if deaths == 0 {
-			deaths = 1
-		}
-		kdaRatio := float64(st.Kills+st.Assists) / float64(deaths)
+		winRate := calculateWinRate(st.Wins, st.Matches)
+		kdaRatio := calculateKDA(st.Kills, st.Deaths, st.Assists)
 
 		rows = append(rows, []interface{}{
 			i + 1,
@@ -356,7 +285,7 @@ func (s *MatchServiceImpl) calculateStats() ([]*PlayerStats, error) {
 func generateSignature(m *models.Match) string {
 	var sb strings.Builder
 	for _, p := range m.Players {
-		sb.WriteString(fmt.Sprintf("%s-%s-%d-%d-%d|", p.PlayerName, p.Result, p.Kills, p.Deaths, p.Assists))
+		sb.WriteString(fmt.Sprintf("%s-%s-%d-%d-%d%s", p.PlayerName, p.Result, p.Kills, p.Deaths, p.Assists, signatureSeparator))
 	}
 	return sb.String()
 }
@@ -426,15 +355,8 @@ func (s *MatchServiceImpl) GetExcelReport() ([]byte, error) {
 
 	row := 2
 	for _, st := range statsList {
-		winRate := 0.0
-		if st.Matches > 0 {
-			winRate = (float64(st.Wins) / float64(st.Matches)) * 100
-		}
-		deaths := st.Deaths
-		if deaths == 0 {
-			deaths = 1
-		}
-		kdaRatio := float64(st.Kills+st.Assists) / float64(deaths)
+		winRate := calculateWinRate(st.Wins, st.Matches)
+		kdaRatio := calculateKDA(st.Kills, st.Deaths, st.Assists)
 
 		f.SetCellValue(sheet, fmt.Sprintf("A%d", row), st.ID)
 		f.SetCellValue(sheet, fmt.Sprintf("B%d", row), st.Name)

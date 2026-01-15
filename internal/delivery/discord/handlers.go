@@ -26,33 +26,16 @@ func (b *Bot) handleTop(s *discordgo.Session, i *discordgo.Interaction) {
 		return
 	}
 
-	topCount := 10
+	topCount := topPlayersLimit
 	if len(stats) < topCount {
 		topCount = len(stats)
 	}
 
 	var sb strings.Builder
 	for idx, p := range stats[:topCount] {
-		medal := "▪️"
-		switch idx {
-		case 0:
-			medal = "🥇"
-		case 1:
-			medal = "🥈"
-		case 2:
-			medal = "🥉"
-		}
-
-		wr := 0.0
-		if p.Matches > 0 {
-			wr = (float64(p.Wins) / float64(p.Matches)) * 100
-		}
-
-		d := p.Deaths
-		if d == 0 {
-			d = 1
-		}
-		kda := float64(p.Kills+p.Assists) / float64(d)
+		medal := getMedalEmoji(idx)
+		wr := calculateWinRate(p)
+		kda := calculateKDA(p.Kills, p.Deaths, p.Assists)
 
 		sb.WriteString(fmt.Sprintf("%s %s — WR: `%.0f%%` | KDA: `%.2f` (%d игр)\n",
 			medal, p.Name, wr, kda, p.Matches))
@@ -66,7 +49,7 @@ func (b *Bot) handleTop(s *discordgo.Session, i *discordgo.Interaction) {
 	embed := &discordgo.MessageEmbed{
 		Title:       title,
 		Description: sb.String(),
-		Color:       0xFFD700,
+		Color:       colorGold,
 		Footer:      &discordgo.MessageEmbedFooter{Text: "Valhalla Ranked Season"},
 	}
 
@@ -85,27 +68,9 @@ func (b *Bot) handleProfile(s *discordgo.Session, i *discordgo.Interaction) {
 		return
 	}
 
-	wr := 0.0
-	if p.Matches > 0 {
-		wr = (float64(p.Wins) / float64(p.Matches)) * 100
-	}
-
-	d := p.Deaths
-	if d == 0 {
-		d = 1
-	}
-	kda := float64(p.Kills+p.Assists) / float64(d)
-
-	color := 0x95A5A6
-	if wr >= 60 {
-		color = 0x2ECC71
-	}
-	if wr >= 75 {
-		color = 0x9B59B6
-	}
-	if wr < 40 {
-		color = 0xE74C3C
-	}
+	wr := calculateWinRate(p)
+	kda := calculateKDA(p.Kills, p.Deaths, p.Assists)
+	color := getColorByWinRate(wr)
 
 	embed := &discordgo.MessageEmbed{
 		Title: fmt.Sprintf("Профиль: %s (ID: %d)", p.Name, id),
@@ -139,8 +104,8 @@ func (b *Bot) handlePlayersList(s *discordgo.Session, i *discordgo.Interaction) 
 	}
 
 	msg := sb.String()
-	if len(msg) > 2000 {
-		msg = msg[:1990] + "...\n(список обрезан)"
+	if len(msg) > maxMessageLength {
+		msg = msg[:maxMessageTruncation] + "...\n(список обрезан)"
 	}
 
 	b.respondMessage(s, i, msg, false)
@@ -163,7 +128,7 @@ func (b *Bot) handleHistory(s *discordgo.Session, i *discordgo.Interaction) {
 	embed := &discordgo.MessageEmbed{
 		Title:       fmt.Sprintf("История матчей (ID: %d)", id),
 		Description: strings.Join(lines, "\n"),
-		Color:       0x3498DB,
+		Color:       colorBlue,
 		Footer:      &discordgo.MessageEmbedFooter{Text: "ID Матча | Результат | K/D/A | Дата"},
 	}
 
@@ -364,7 +329,7 @@ func (b *Bot) handleLink(s *discordgo.Session, i *discordgo.Interaction) {
 	embed := &discordgo.MessageEmbed{
 		Title:       "🔗 Код привязки Telegram",
 		Description: fmt.Sprintf("Отправьте этот код боту в Telegram:\n\n```\n/link %s\n```\n\n⏰ Код действителен 10 минут", code),
-		Color:       0x3498DB,
+		Color:       colorBlue,
 		Fields: []*discordgo.MessageEmbedField{
 			{Name: "Игрок", Value: fmt.Sprintf("%s (ID: %d)", playerName, playerID), Inline: true},
 		},
@@ -413,7 +378,7 @@ func (b *Bot) handleTelegramProfile(s *discordgo.Session, i *discordgo.Interacti
 
 	embed := &discordgo.MessageEmbed{
 		Title: fmt.Sprintf("📱 Telegram профиль: %s", playerName),
-		Color: 0x0088CC,
+		Color: colorTelegramBlue,
 		Fields: []*discordgo.MessageEmbedField{
 			{Name: "Telegram", Value: tgInfo, Inline: false},
 			{Name: "Игровой ник", Value: valueOrDefault(profile.GameNickname, "Не указан"), Inline: true},

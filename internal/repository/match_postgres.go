@@ -8,6 +8,14 @@ import (
 	"valhalla/internal/models"
 )
 
+const (
+	similarityThreshold     = 0.85
+	defaultSeasonStartYear  = 2025
+	defaultSeasonStartMonth = 1
+	defaultSeasonStartDay   = 1
+	minDeathsForKDA         = 1
+)
+
 type MatchPostgres struct {
 	db *sql.DB
 }
@@ -175,7 +183,7 @@ func (r *MatchPostgres) GetSeasonStartDate() (time.Time, error) {
 	var val string
 	err := r.db.QueryRow("SELECT value FROM bot_settings WHERE key = 'season_start_date'").Scan(&val)
 	if err == sql.ErrNoRows {
-		return time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), nil
+		return time.Date(defaultSeasonStartYear, defaultSeasonStartMonth, defaultSeasonStartDay, 0, 0, 0, 0, time.UTC), nil
 	}
 	if err != nil {
 		return time.Time{}, fmt.Errorf("failed to get season start date: %w", err)
@@ -258,7 +266,7 @@ func (r *MatchPostgres) EnsurePlayerExists(name string) (int, error) {
 				return p.ID, nil
 			}
 
-			if similarityScore(normalizedInput, normalizedExisting) > 0.85 {
+			if similarityScore(normalizedInput, normalizedExisting) > similarityThreshold {
 				return p.ID, nil
 			}
 		}
