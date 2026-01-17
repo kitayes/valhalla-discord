@@ -29,8 +29,16 @@ func NewGeminiClient(apiKey string) (*GeminiClient, error) {
 }
 
 func (g *GeminiClient) ParseImage(data []byte) (*models.Match, error) {
+	// Optimize image before sending to API (compress + resize)
+	processor := NewImageProcessor()
+	optimizedData, err := processor.OptimizeForAI(data)
+	if err != nil {
+		// Fallback to original if optimization fails
+		optimizedData = data
+	}
+
 	prompt := []genai.Part{
-		genai.ImageData("png", data),
+		genai.ImageData("jpeg", optimizedData), // Use optimized JPEG
 		genai.Text(ParseImagePrompt),
 	}
 

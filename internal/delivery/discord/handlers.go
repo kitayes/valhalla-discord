@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -284,31 +285,90 @@ func (b *Bot) handleRenamePlayer(s *discordgo.Session, i *discordgo.Interaction)
 	b.respondMessage(s, i, fmt.Sprintf("Игрок переименован:\n**%s** → **%s**", oldName, newName), false)
 }
 
-func (b *Bot) handleScreenshot(s *discordgo.Session, m *discordgo.MessageCreate) {
-	filename := strings.ToLower(m.Attachments[0].Filename)
-	if !strings.HasSuffix(filename, ".png") && !strings.HasSuffix(filename, ".jpg") && !strings.HasSuffix(filename, ".jpeg") {
+func (b *Bot) handleScreenshots(s *discordgo.Session, m *discordgo.MessageCreate) {
+	// Filter only image attachments
+	var imageAttachments []*discordgo.MessageAttachment
+	for _, att := range m.Attachments {
+		filename := strings.ToLower(att.Filename)
+		if strings.HasSuffix(filename, ".png") ||
+			strings.HasSuffix(filename, ".jpg") ||
+			strings.HasSuffix(filename, ".jpeg") {
+			imageAttachments = append(imageAttachments, att)
+		}
+	}
+
+	if len(imageAttachments) == 0 {
 		return
 	}
 
+	// Show typing indicator
 	s.ChannelTyping(m.ChannelID)
-	msg, _ := s.ChannelMessageSend(m.ChannelID, "Анализирую скриншот... ")
 
-	matchID, err := b.services.MatchService.ProcessImageFromURL(m.Attachments[0].URL)
+	// Send processing message
+	msg, _ := s.ChannelMessageSend(m.ChannelID,
+		fmt.Sprintf("⏳ Анализирую %d скриншот(ов)...", len(imageAttachments)))
 
+	// Process images concurrently
+	type result struct {
+		matchID int
+		err     error
+		index   int
+	}
+
+	results := make([]result, len(imageAttachments))
+	semaphore := make(chan struct{}, 3) // max 3 concurrent requests
+
+	var wg sync.WaitGroup
+	for i, att := range imageAttachments {
+		wg.Add(1)
+		go func(idx int, attachment *discordgo.MessageAttachment) {
+			defer wg.Done()
+
+			semaphore <- struct{}{}        // acquire
+			defer func() { <-semaphore }() // release
+
+			matchID, err := b.services.MatchService.ProcessImageFromURL(attachment.URL)
+			results[idx] = result{matchID: matchID, err: err, index: idx}
+		}(i, att)
+	}
+
+	// Wait for all to complete
+	wg.Wait()
+
+	// Delete processing message
 	if msg != nil {
 		s.ChannelMessageDelete(m.ChannelID, msg.ID)
 	}
 
-	if err != nil {
-		if err.Error() == "duplicate match detected" {
-			s.ChannelMessageSend(m.ChannelID, "Этот матч уже был загружен ранее.")
+	// Build response
+	var successCount, duplicateCount, errorCount int
+	var messages []string
+
+	for _, res := range results {
+		if res.err != nil {
+			if strings.Contains(res.err.Error(), "duplicate match detected") {
+				duplicateCount++
+			} else {
+				errorCount++
+				messages = append(messages,
+					fmt.Sprintf("❌ Скриншот %d: %v", res.index+1, res.err))
+			}
 		} else {
-			s.ChannelMessageSend(m.ChannelID, "Ошибка анализа: "+err.Error())
-			b.logger.Error("Analysis error: %v", err)
+			successCount++
+			messages = append(messages,
+				fmt.Sprintf("✅ Скриншот %d: Матч #%d записан", res.index+1, res.matchID))
 		}
-	} else {
-		s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("Матч #%d успешно записан!", matchID))
 	}
+
+	// Summary message
+	summary := fmt.Sprintf("**Обработано: %d скриншотов**\n✅ Успешно: %d\n⚠️ Дубликаты: %d\n❌ Ошибки: %d",
+		len(imageAttachments), successCount, duplicateCount, errorCount)
+
+	if len(messages) > 0 {
+		summary += "\n\n" + strings.Join(messages, "\n")
+	}
+
+	s.ChannelMessageSend(m.ChannelID, summary)
 }
 
 func (b *Bot) handleLink(s *discordgo.Session, i *discordgo.Interaction) {

@@ -166,6 +166,6 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 
 	if len(m.Attachments) > 0 {
-		b.handleScreenshot(s, m)
+		b.handleScreenshots(s, m)
 	}
 }

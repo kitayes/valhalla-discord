@@ -62,18 +62,19 @@ func (r *MatchPostgres) Create(match models.Match) (int, error) {
 		return 0, fmt.Errorf("failed to insert match: %w", err)
 	}
 
-	for _, p := range match.Players {
+	// Collect all player IDs (using cache for fast lookups)
+	playerIDs := make([]int, len(match.Players))
+	for i, p := range match.Players {
 		playerID, err := r.EnsurePlayerExists(p.PlayerName)
 		if err != nil {
 			return 0, fmt.Errorf("failed to ensure player exists: %w", err)
 		}
+		playerIDs[i] = playerID
+	}
 
-		pQuery := `INSERT INTO player_results (match_id, player_id, player_name, result, kills, deaths, assists) 
-                   VALUES ($1, $2, $3, $4, $5, $6, $7)`
-		_, err = tx.Exec(pQuery, matchID, playerID, p.PlayerName, p.Result, p.Kills, p.Deaths, p.Assists)
-		if err != nil {
-			return 0, fmt.Errorf("failed to insert player result: %w", err)
-		}
+	// Batch insert all player results in one query
+	if err := r.batchInsertPlayerResults(tx, matchID, match.Players, playerIDs); err != nil {
+		return 0, fmt.Errorf("failed to insert player results: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -321,6 +322,56 @@ func (r *MatchPostgres) EnsurePlayerExists(name string) (int, error) {
 	r.playerCache.Set(normalizedInput, id)
 
 	return id, nil
+}
+
+// batchInsertPlayerResults inserts all player results in a single query
+func (r *MatchPostgres) batchInsertPlayerResults(
+	tx *sql.Tx,
+	matchID int,
+	players []models.PlayerResult,
+	playerIDs []int,
+) error {
+	if len(players) == 0 {
+		return nil
+	}
+
+	// Build batch INSERT query with multiple VALUES
+	query := `INSERT INTO player_results 
+              (match_id, player_id, player_name, result, kills, deaths, assists) 
+              VALUES `
+
+	values := make([]interface{}, 0, len(players)*7)
+	placeholders := make([]string, 0, len(players))
+
+	for i, p := range players {
+		// Generate placeholders: ($1, $2, ..., $7), ($8, $9, ..., $14), ...
+		offset := i * 7
+		placeholders = append(placeholders,
+			fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+				offset+1, offset+2, offset+3, offset+4,
+				offset+5, offset+6, offset+7))
+
+		// Add values in correct order
+		values = append(values,
+			matchID,
+			playerIDs[i],
+			p.PlayerName,
+			p.Result,
+			p.Kills,
+			p.Deaths,
+			p.Assists)
+	}
+
+	// Complete query: INSERT ... VALUES (...), (...), (...)
+	query += strings.Join(placeholders, ", ")
+
+	// Execute batch insert
+	_, err := tx.Exec(query, values...)
+	if err != nil {
+		return fmt.Errorf("batch insert failed: %w", err)
+	}
+
+	return nil
 }
 
 func normalizeForComparison(name string) string {
