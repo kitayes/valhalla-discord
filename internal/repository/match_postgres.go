@@ -17,11 +17,31 @@ const (
 )
 
 type MatchPostgres struct {
-	db *sql.DB
+	db          *sql.DB
+	playerCache *PlayerCache
 }
 
 func NewMatchPostgres(db *sql.DB) *MatchPostgres {
-	return &MatchPostgres{db: db}
+	cache := NewPlayerCache()
+
+	// Warm up cache with existing players
+	rows, err := db.Query("SELECT id, name FROM players WHERE is_deleted = FALSE ORDER BY id")
+	if err == nil {
+		defer rows.Close()
+		var players []models.Player
+		for rows.Next() {
+			var p models.Player
+			if err := rows.Scan(&p.ID, &p.Name); err == nil {
+				players = append(players, p)
+			}
+		}
+		cache.LoadAll(players)
+	}
+
+	return &MatchPostgres{
+		db:          db,
+		playerCache: cache,
+	}
 }
 
 func (r *MatchPostgres) Create(match models.Match) (int, error) {
@@ -165,6 +185,10 @@ func (r *MatchPostgres) WipeAll() error {
 	if err != nil {
 		return fmt.Errorf("failed to soft delete all players: %w", err)
 	}
+
+	// Clear entire cache since all players are wiped
+	r.playerCache.Clear()
+
 	return nil
 }
 
@@ -255,23 +279,34 @@ func (r *MatchPostgres) GetHistory(playerID int, limit int) ([]models.Match, err
 }
 
 func (r *MatchPostgres) EnsurePlayerExists(name string) (int, error) {
+	normalizedInput := normalizeForComparison(name)
+
+	// Fast path: check cache first (O(1))
+	if id, found := r.playerCache.Get(normalizedInput); found {
+		return id, nil
+	}
+
+	// Cache miss: check database for exact or similar matches
 	existingPlayers, err := r.GetAllPlayers()
 	if err == nil && len(existingPlayers) > 0 {
-		normalizedInput := normalizeForComparison(name)
-
 		for _, p := range existingPlayers {
 			normalizedExisting := normalizeForComparison(p.Name)
 
+			// Exact match
 			if normalizedInput == normalizedExisting {
+				r.playerCache.Set(normalizedInput, p.ID)
 				return p.ID, nil
 			}
 
+			// Fuzzy match (similarity)
 			if similarityScore(normalizedInput, normalizedExisting) > similarityThreshold {
+				r.playerCache.Set(normalizedInput, p.ID)
 				return p.ID, nil
 			}
 		}
 	}
 
+	// Player not found - insert new player
 	var id int
 	err = r.db.QueryRow(`
 		INSERT INTO players (name) VALUES ($1)
@@ -281,6 +316,10 @@ func (r *MatchPostgres) EnsurePlayerExists(name string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to ensure player exists: %w", err)
 	}
+
+	// Cache the newly created player
+	r.playerCache.Set(normalizedInput, id)
+
 	return id, nil
 }
 
@@ -401,6 +440,11 @@ func (r *MatchPostgres) WipePlayerByID(id int) error {
 	if err != nil {
 		return fmt.Errorf("failed to soft delete player: %w", err)
 	}
+
+	// Invalidate cache entry for deleted player
+	normalized := normalizeForComparison(name)
+	r.playerCache.Delete(normalized)
+
 	return nil
 }
 
@@ -414,10 +458,24 @@ func (r *MatchPostgres) RestorePlayer(id int) error {
 	if err != nil {
 		return fmt.Errorf("failed to restore player results: %w", err)
 	}
+
+	// Re-cache the restored player
+	name, err := r.GetPlayerNameByID(id)
+	if err == nil {
+		normalized := normalizeForComparison(name)
+		r.playerCache.Set(normalized, id)
+	}
+
 	return nil
 }
 
 func (r *MatchPostgres) RenamePlayer(id int, newName string) error {
+	// Get old name before renaming to invalidate old cache entry
+	oldName, err := r.GetPlayerNameByID(id)
+	if err != nil {
+		return fmt.Errorf("failed to get player name: %w", err)
+	}
+
 	result, err := r.db.Exec("UPDATE players SET name = $1 WHERE id = $2 AND is_deleted = FALSE", newName, id)
 	if err != nil {
 		return fmt.Errorf("failed to rename player: %w", err)
@@ -427,5 +485,13 @@ func (r *MatchPostgres) RenamePlayer(id int, newName string) error {
 	if rows == 0 {
 		return fmt.Errorf("игрок с ID %d не найден", id)
 	}
+
+	// Update cache: remove old name, add new name
+	oldNormalized := normalizeForComparison(oldName)
+	newNormalized := normalizeForComparison(newName)
+
+	r.playerCache.Delete(oldNormalized)
+	r.playerCache.Set(newNormalized, id)
+
 	return nil
 }
