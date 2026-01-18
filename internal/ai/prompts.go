@@ -1,13 +1,11 @@
 package ai
 
 const (
-	// AI Model configuration
 	geminiModel      = "gemini-2.5-flash"
 	aiTemperature    = 0.1
 	responseMIMEType = "application/json"
 )
 
-// ParseImagePrompt contains the prompt text for analyzing MOBA screenshots
 const ParseImagePrompt = `Analyze this MOBA (Mobile Legends) scoreboard screenshot.
     Extract data for ALL 10 players visible in the match results.
     

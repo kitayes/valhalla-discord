@@ -1,6 +1,5 @@
 package application
 
-// calculateWinRate computes win rate as a percentage
 func calculateWinRate(wins, matches int) float64 {
 	if matches == 0 {
 		return 0.0
@@ -8,7 +7,6 @@ func calculateWinRate(wins, matches int) float64 {
 	return (float64(wins) / float64(matches)) * 100
 }
 
-// calculateKDA computes KDA ratio with minimum deaths protection
 func calculateKDA(kills, deaths, assists int) float64 {
 	d := deaths
 	if d == 0 {
@@ -17,12 +15,7 @@ func calculateKDA(kills, deaths, assists int) float64 {
 	return float64(kills+assists) / float64(d)
 }
 
-// comparePlayersByPriority compares two players for sorting by:
-// 1. Matches count
-// 2. Win rate
-// 3. KDA
 func comparePlayersByPriority(p1, p2 *PlayerStats) bool {
-	// First by matches count
 	if p1.Matches != p2.Matches {
 		return p1.Matches > p2.Matches
 	}
