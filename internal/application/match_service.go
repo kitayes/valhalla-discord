@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"valhalla/internal/models"
 	"valhalla/internal/repository"
@@ -22,17 +23,24 @@ type MatchServiceImpl struct {
 	sheetsClient  sheets.Client
 	spreadsheetID string
 	ownerEmail    string
+	httpTimeout   time.Duration
+	statsCache    *StatsCache
 	logger        Logger
+	syncSem       chan struct{}
+	syncWg        sync.WaitGroup
 }
 
-func NewMatchServiceImpl(repo repository.Match, ai AIProvider, sheetsClient sheets.Client, ownerEmail string, logger Logger) *MatchServiceImpl {
+func NewMatchServiceImpl(repo repository.Match, ai AIProvider, sheetsClient sheets.Client, ownerEmail, spreadsheetID string, httpTimeoutSec int, logger Logger) *MatchServiceImpl {
 	return &MatchServiceImpl{
 		repo:          repo,
 		ai:            ai,
 		sheetsClient:  sheetsClient,
-		spreadsheetID: "1ZDBqKL1Sgr8-JPXChMafyiHmzHXVJB0aFKXgoTjEfR8",
+		spreadsheetID: spreadsheetID,
 		ownerEmail:    ownerEmail,
+		httpTimeout:   time.Duration(httpTimeoutSec) * time.Second,
+		statsCache:    NewStatsCache(time.Duration(defaultStatsCacheTTL) * time.Second),
 		logger:        logger,
+		syncSem:       make(chan struct{}, 2), // Max 2 concurrent syncs
 	}
 }
 
@@ -80,6 +88,8 @@ func (s *MatchServiceImpl) ProcessImage(data []byte) (int, error) {
 		return 0, err
 	}
 
+	s.statsCache.Invalidate()
+
 	if s.sheetsClient != nil {
 		go func() {
 			_, err := s.SyncToGoogleSheet()
@@ -94,7 +104,7 @@ func (s *MatchServiceImpl) ProcessImage(data []byte) (int, error) {
 
 func (s *MatchServiceImpl) ProcessImageFromURL(url string) (int, error) {
 	client := &http.Client{
-		Timeout: 10 * time.Second,
+		Timeout: s.httpTimeout,
 	}
 
 	resp, err := client.Get(url)
@@ -103,9 +113,20 @@ func (s *MatchServiceImpl) ProcessImageFromURL(url string) (int, error) {
 	}
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
+	// Check Content-Length BEFORE reading body to prevent bandwidth waste
+	if resp.ContentLength > 0 && resp.ContentLength > maxImageDownloadSize {
+		return 0, fmt.Errorf("image too large: %d bytes exceeds maximum %d bytes",
+			resp.ContentLength, maxImageDownloadSize)
+	}
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageDownloadSize))
 	if err != nil {
 		return 0, fmt.Errorf("failed to read image body: %w", err)
+	}
+
+	// Additional check after reading in case Content-Length was not set
+	if len(data) >= maxImageDownloadSize {
+		return 0, fmt.Errorf("image size exceeds maximum allowed size of %d bytes", maxImageDownloadSize)
 	}
 
 	return s.ProcessImage(data)
@@ -141,7 +162,7 @@ func (s *MatchServiceImpl) GetHistoryByID(id int) ([]string, error) {
 	var lines []string
 	for _, m := range matches {
 		p := m.Players[0]
-		line := fmt.Sprintf("🆔 **%d** | %s | ⚔️ %d/%d/%d | %s",
+		line := fmt.Sprintf("🆔 %d | %s | ⚔️ %d/%d/%d | %s",
 			m.ID, p.Result, p.Kills, p.Deaths, p.Assists, m.CreatedAt.Format("02.01"))
 		lines = append(lines, line)
 	}
@@ -229,17 +250,26 @@ func (s *MatchServiceImpl) SyncToGoogleSheet() (string, error) {
 }
 
 func (s *MatchServiceImpl) calculateStats() ([]*PlayerStats, error) {
+	if cached, ok := s.statsCache.Get(); ok {
+		return cached, nil
+	}
+
 	seasonStart, err := s.repo.GetSeasonStartDate()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get season start date: %w", err)
 	}
 
 	matches, err := s.repo.GetAllAfter(seasonStart)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get matches: %w", err)
 	}
 
-	playerResets, _ := s.repo.GetPlayerResetDates()
+	playerResets, err := s.repo.GetPlayerResetDates()
+	if err != nil {
+		// Log the error but continue with empty map
+		s.logger.Warn("failed to get player reset dates: %v, continuing without resets", err)
+		playerResets = make(map[string]time.Time)
+	}
 	if playerResets == nil {
 		playerResets = make(map[string]time.Time)
 	}
@@ -279,6 +309,8 @@ func (s *MatchServiceImpl) calculateStats() ([]*PlayerStats, error) {
 	for _, st := range statsMap {
 		statsList = append(statsList, st)
 	}
+
+	s.statsCache.Set(statsList)
 	return statsList, nil
 }
 

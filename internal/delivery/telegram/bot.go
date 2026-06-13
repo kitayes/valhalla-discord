@@ -67,7 +67,7 @@ func (b *Bot) Start() {
 
 		b.service.RegisterUser(chatID, user.UserName, user.FirstName)
 
-		if b.isAdmin(chatID) && (text == "/start" || text == "/admin" ||
+		if b.isAdmin(chatID) && (text == "/admin" ||
 			text == "/list_teams" || strings.HasPrefix(text, "/check_team") ||
 			text == "/export" || text == "/list_solo" || text == "/export_solo" ||
 			strings.HasPrefix(text, "/broadcast") || strings.HasPrefix(text, "/set_tourney") ||
@@ -145,7 +145,7 @@ func (b *Bot) processTechnicalDefeat() {
 			}
 		}
 	}
-
+	
 	for adminID := range b.adminIDs {
 		b.sendMessage(adminID, report.String(), "empty")
 	}

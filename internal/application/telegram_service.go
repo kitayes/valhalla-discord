@@ -208,7 +208,7 @@ func (s *TelegramServiceImpl) handleTeamLoop(captain *models.TelegramPlayer, inp
 		if slot < 7 {
 			next := slot + 1
 			s.repo.UpdatePlayerState(captainTgID, fmt.Sprintf("team_reg_nick_%d", next))
-			msg := fmt.Sprintf("✅ Игрок %d готов.\n\n--- Игрок №%d ---\nВведите Ник:", slot, next)
+			msg := fmt.Sprintf("Игрок %d готов.\n\n--- Игрок №%d ---\nВведите Ник:", slot, next)
 			if next >= 6 {
 				return msg, KbSkip
 			}
@@ -216,7 +216,7 @@ func (s *TelegramServiceImpl) handleTeamLoop(captain *models.TelegramPlayer, inp
 		}
 
 		s.repo.UpdatePlayerState(captainTgID, models.StateIdle)
-		return "🎉 Регистрация всей команды завершена!", KbNone
+		return "Регистрация всей команды завершена!", KbNone
 	}
 
 	return "Ошибка.", KbNone

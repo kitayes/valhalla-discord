@@ -22,14 +22,14 @@ func (b *Bot) handleAdminCommand(chatID int64, text string) {
 			"/close_reg / /open_reg - Регистрация\n" +
 			"/del_team [Название] - Удалить\n" +
 			"/reset_user [ID] - Сброс FSM"
-		b.sendMessage(chatID, response, "empty")
+		b.sendMessage(chatID, response, "main_menu")
 		return
 	}
 
 	if text == "/export" {
 		csvData, err := b.service.GenerateTeamsCSV()
 		if err != nil {
-			b.sendMessage(chatID, "Ошибка: "+err.Error(), "empty")
+			b.sendMessage(chatID, "Ошибка: "+err.Error(), "main_menu")
 		} else {
 			fileBytes := tgbotapi.FileBytes{Name: "teams.csv", Bytes: csvData}
 			b.bot.Send(tgbotapi.NewDocument(chatID, fileBytes))
@@ -42,26 +42,26 @@ func (b *Bot) handleAdminCommand(chatID int64, text string) {
 		dateStr := strings.TrimPrefix(text, "/set_tourney ")
 		t, err := time.ParseInLocation(layout, dateStr, time.Local)
 		if err != nil {
-			b.sendMessage(chatID, "Ошибка! Формат: /set_tourney 20.05.2024 18:00", "empty")
+			b.sendMessage(chatID, "Ошибка! Формат: /set_tourney 20.05.2024 18:00", "main_menu")
 		} else {
 			b.service.SetTournamentTime(t)
 			b.sendMessage(chatID, fmt.Sprintf("Время турнира установлено: %s\nНапоминание в: %s\nТех. поражение в: %s",
 				t.Format(layout),
 				t.Add(-30*time.Minute).Format("15:04"),
-				t.Add(10*time.Minute).Format("15:04")), "empty")
+				t.Add(10*time.Minute).Format("15:04")), "main_menu")
 		}
 		return
 	}
 
 	if text == "/list_solo" {
-		b.sendMessage(chatID, b.service.GetSoloPlayersList(), "empty")
+		b.sendMessage(chatID, b.service.GetSoloPlayersList(), "main_menu")
 		return
 	}
 
 	if text == "/export_solo" {
 		data, err := b.service.GenerateSoloPlayersCSV()
 		if err != nil {
-			b.sendMessage(chatID, "Ошибка: "+err.Error(), "empty")
+			b.sendMessage(chatID, "Ошибка: "+err.Error(), "main_menu")
 		} else {
 			file := tgbotapi.FileBytes{Name: "solo_players.csv", Bytes: data}
 			b.bot.Send(tgbotapi.NewDocument(chatID, file))
@@ -70,13 +70,13 @@ func (b *Bot) handleAdminCommand(chatID int64, text string) {
 	}
 
 	if text == "/list_teams" {
-		b.sendMessage(chatID, b.service.GetTeamsList(), "empty")
+		b.sendMessage(chatID, b.service.GetTeamsList(), "main_menu")
 		return
 	}
 
 	if strings.HasPrefix(text, "/check_team ") {
 		teamName := strings.TrimPrefix(text, "/check_team ")
-		b.sendMessage(chatID, b.service.AdminGetTeamDetails(teamName), "empty")
+		b.sendMessage(chatID, b.service.AdminGetTeamDetails(teamName), "main_menu")
 		return
 	}
 
@@ -86,31 +86,31 @@ func (b *Bot) handleAdminCommand(chatID int64, text string) {
 		for _, id := range ids {
 			b.sendMessage(id, "СООБЩЕНИЕ ОТ ОРГАНИЗАТОРОВ:\n\n"+msgText, "empty")
 		}
-		b.sendMessage(chatID, fmt.Sprintf("Рассылка на %d чел. завершена.", len(ids)), "empty")
+		b.sendMessage(chatID, fmt.Sprintf("Рассылка на %d чел. завершена.", len(ids)), "main_menu")
 		return
 	}
 
 	if text == "/close_reg" {
 		b.service.SetRegistrationOpen(false)
-		b.sendMessage(chatID, "Регистрация закрыта.", "empty")
+		b.sendMessage(chatID, "Регистрация закрыта.", "main_menu")
 		return
 	}
 	if text == "/open_reg" {
 		b.service.SetRegistrationOpen(true)
-		b.sendMessage(chatID, "Регистрация открыта.", "empty")
+		b.sendMessage(chatID, "Регистрация открыта.", "main_menu")
 		return
 	}
 
 	if strings.HasPrefix(text, "/del_team ") {
 		name := strings.TrimPrefix(text, "/del_team ")
-		b.sendMessage(chatID, b.service.AdminDeleteTeam(name), "empty")
+		b.sendMessage(chatID, b.service.AdminDeleteTeam(name), "main_menu")
 		return
 	}
 
 	if strings.HasPrefix(text, "/reset_user ") {
 		idStr := strings.TrimPrefix(text, "/reset_user ")
 		id, _ := strconv.ParseInt(idStr, 10, 64)
-		b.sendMessage(chatID, b.service.AdminResetUser(id), "empty")
+		b.sendMessage(chatID, b.service.AdminResetUser(id), "main_menu")
 		return
 	}
 }
@@ -151,6 +151,9 @@ func (b *Bot) handleUserCommand(chatID int64, text string, username string) {
 	switch text {
 	case "/start":
 		response = "Добро пожаловать в Valhalla Cup Bot!\n\nВыберите действие:"
+		if b.isAdmin(chatID) {
+			response += "\n\nВы вошли как Администратор. Используйте команду /admin или кнопку меню для открытия панели управления."
+		}
 		kbType = "main_menu"
 
 	case "/reg_solo":

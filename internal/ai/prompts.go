@@ -1,7 +1,7 @@
 package ai
 
 const (
-	geminiModel      = "gemini-2.5-flash"
+	geminiModel      = "gemini-2.5-flash-lite"
 	aiTemperature    = 0.1
 	responseMIMEType = "application/json"
 )

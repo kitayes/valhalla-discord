@@ -21,6 +21,11 @@ type Config struct {
 	TelegramAdminIDs []int64 `env:"TELEGRAM_ADMIN_IDS" envSeparator:"," envDefault:""`
 
 	GoogleOwnerEmail string `env:"GOOGLE_OWNER_EMAIL" envDefault:""`
+
+	PlayerCacheSize int `env:"PLAYER_CACHE_SIZE" envDefault:"100000"`
+
+	SpreadsheetID  string `env:"SPREADSHEET_ID" envDefault:""`
+	HTTPTimeoutSec int    `env:"HTTP_TIMEOUT_SEC" envDefault:"10"`
 }
 
 func ReadEnvConfig(cfg *Config) error {

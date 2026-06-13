@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"valhalla/internal/application"
+	"valhalla/internal/security"
 	"valhalla/pkg/config"
 
 	"github.com/bwmarrin/discordgo"
@@ -18,14 +19,24 @@ type Bot struct {
 
 	adminIDs         map[string]struct{}
 	allowedChannelID string
+	rateLimiter      *security.RateLimiter
 }
 
 func NewBot(cfg *config.Config, services *application.Service, logger application.Logger) *Bot {
+	// Initialize rate limiter: 5 uploads per user per minute, 30 global per minute
+	rateLimiter := security.NewRateLimiter(
+		5,  // maxTokensPerUser
+		1,  // refillRatePerUser (1 token/second = 60/minute)
+		30, // maxTokensGlobal
+		5,  // refillRateGlobal (5 tokens/second = 300/minute)
+	)
+
 	return &Bot{
 		cfg:              cfg,
 		services:         services,
 		logger:           logger,
 		allowedChannelID: cfg.AllowedChannelID,
+		rateLimiter:      rateLimiter,
 	}
 }
 
@@ -95,7 +106,13 @@ func (b *Bot) Run(ctx context.Context) error {
 }
 
 func (b *Bot) Stop() {
-	b.session.Close()
+	if b.session != nil {
+		b.session.Close()
+	}
+	if b.rateLimiter != nil {
+		b.rateLimiter.Stop()
+	}
+	b.logger.Info("Discord bot stopped")
 }
 
 func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate) {

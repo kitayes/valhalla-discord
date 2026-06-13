@@ -75,11 +75,15 @@ type Repository struct {
 	db *sql.DB
 }
 
-func NewRepository(cfg *Config, db *sql.DB) *Repository {
+func NewRepository(cfg *Config, db *sql.DB, cacheSize int) (*Repository, error) {
+	matchRepo, err := NewMatchPostgres(db, cacheSize)
+	if err != nil {
+		return nil, err
+	}
 	return &Repository{
-		Match:       NewMatchPostgres(db),
+		Match:       matchRepo,
 		ProfileLink: NewProfileLinkPostgres(db),
 		Telegram:    NewTelegramPostgres(db),
 		db:          db,
-	}
+	}, nil
 }

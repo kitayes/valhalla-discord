@@ -45,9 +45,9 @@ type Service struct {
 	TelegramService    TelegramService
 }
 
-func NewService(repos *repository.Repository, ai AIProvider, sheetsClient sheets.Client, ownerEmail string, logger Logger) *Service {
+func NewService(repos *repository.Repository, ai AIProvider, sheetsClient sheets.Client, ownerEmail, spreadsheetID string, httpTimeoutSec int, logger Logger) *Service {
 	return &Service{
-		MatchService:       NewMatchServiceImpl(repos.Match, ai, sheetsClient, ownerEmail, logger),
+		MatchService:       NewMatchServiceImpl(repos.Match, ai, sheetsClient, ownerEmail, spreadsheetID, httpTimeoutSec, logger),
 		ProfileLinkService: NewProfileLinkServiceImpl(repos.ProfileLink, repos.Match, logger),
 		TelegramService:    NewTelegramServiceImpl(repos.Telegram, logger),
 	}

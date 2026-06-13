@@ -50,13 +50,32 @@ func (r *TelegramPostgres) UpdatePlayerState(tgID int64, state string) error {
 	return err
 }
 
+var allowedPlayerColumns = map[string]bool{
+	"game_nickname":     true,
+	"game_id":           true,
+	"zone_id":           true,
+	"stars":             true,
+	"main_role":         true,
+	"fsm_state":         true,
+	"team_id":           true,
+	"is_captain":        true,
+	"is_substitute":     true,
+	"telegram_username": true,
+}
+
 func (r *TelegramPostgres) UpdatePlayerField(tgID int64, column string, value interface{}) error {
+	if !allowedPlayerColumns[column] {
+		return fmt.Errorf("invalid column: %s", column)
+	}
 	query := fmt.Sprintf(`UPDATE telegram_players SET %s = $2, updated_at = NOW() WHERE telegram_id = $1`, column)
 	_, err := r.db.Exec(query, tgID, value)
 	return err
 }
 
 func (r *TelegramPostgres) UpdatePlayerFieldByID(playerID int, column string, value interface{}) error {
+	if !allowedPlayerColumns[column] {
+		return fmt.Errorf("invalid column: %s", column)
+	}
 	query := fmt.Sprintf(`UPDATE telegram_players SET %s = $2, updated_at = NOW() WHERE id = $1`, column)
 	_, err := r.db.Exec(query, playerID, value)
 	return err
@@ -96,18 +115,80 @@ func (r *TelegramPostgres) DeleteTeam(id int) error {
 }
 
 func (r *TelegramPostgres) GetAllTeams() ([]models.TelegramTeam, error) {
-	rows, err := r.db.Query(`SELECT id, name, is_checked_in FROM telegram_teams ORDER BY id`)
+	query := `
+		SELECT t.id, t.name, t.is_checked_in,
+		       p.id, p.telegram_id, p.telegram_username, p.first_name, 
+		       p.game_nickname, p.game_id, p.zone_id, p.stars, p.main_role,
+		       p.is_captain, p.is_substitute, p.fsm_state, p.team_id
+		FROM telegram_teams t
+		LEFT JOIN telegram_players p ON p.team_id = t.id
+		ORDER BY t.id, p.id
+	`
+	rows, err := r.db.Query(query)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var teams []models.TelegramTeam
+	teamsMap := make(map[int]*models.TelegramTeam)
+	var teamsOrder []int
+
 	for rows.Next() {
 		var t models.TelegramTeam
-		rows.Scan(&t.ID, &t.Name, &t.IsCheckedIn)
-		t.Players, _ = r.GetTeamMembers(t.ID)
-		teams = append(teams, t)
+		var pID, pStars sql.NullInt64
+		var pTelegramID sql.NullInt64
+		var pTeamID sql.NullInt64
+		var pUsername, pFirstName, pNickname, pGameID, pZoneID, pRole, pState sql.NullString
+		var pIsCaptain, pIsSubstitute sql.NullBool
+
+		if err := rows.Scan(
+			&t.ID, &t.Name, &t.IsCheckedIn,
+			&pID, &pTelegramID, &pUsername, &pFirstName,
+			&pNickname, &pGameID, &pZoneID, &pStars, &pRole,
+			&pIsCaptain, &pIsSubstitute, &pState, &pTeamID,
+		); err != nil {
+			return nil, fmt.Errorf("scan error: %w", err)
+		}
+
+		if _, exists := teamsMap[t.ID]; !exists {
+			teamsMap[t.ID] = &models.TelegramTeam{
+				ID:          t.ID,
+				Name:        t.Name,
+				IsCheckedIn: t.IsCheckedIn,
+				Players:     []models.TelegramPlayer{},
+			}
+			teamsOrder = append(teamsOrder, t.ID)
+		}
+
+		if pID.Valid {
+			player := models.TelegramPlayer{
+				ID:               int(pID.Int64),
+				GameNickname:     pNickname.String,
+				GameID:           pGameID.String,
+				ZoneID:           pZoneID.String,
+				Stars:            int(pStars.Int64),
+				MainRole:         pRole.String,
+				IsCaptain:        pIsCaptain.Bool,
+				IsSubstitute:     pIsSubstitute.Bool,
+				FSMState:         pState.String,
+				TelegramUsername: pUsername.String,
+				FirstName:        pFirstName.String,
+			}
+			if pTelegramID.Valid {
+				tgID := pTelegramID.Int64
+				player.TelegramID = &tgID
+			}
+			if pTeamID.Valid {
+				teamID := int(pTeamID.Int64)
+				player.TeamID = &teamID
+			}
+			teamsMap[t.ID].Players = append(teamsMap[t.ID].Players, player)
+		}
+	}
+
+	teams := make([]models.TelegramTeam, 0, len(teamsOrder))
+	for _, id := range teamsOrder {
+		teams = append(teams, *teamsMap[id])
 	}
 	return teams, nil
 }
@@ -126,8 +207,10 @@ func (r *TelegramPostgres) GetTeamMembers(teamID int) ([]models.TelegramPlayer, 
 	var players []models.TelegramPlayer
 	for rows.Next() {
 		var p models.TelegramPlayer
-		rows.Scan(&p.ID, &p.TelegramID, &p.TelegramUsername, &p.FirstName, &p.GameNickname, &p.GameID, &p.ZoneID,
-			&p.Stars, &p.MainRole, &p.IsCaptain, &p.IsSubstitute, &p.FSMState, &p.TeamID)
+		if err := rows.Scan(&p.ID, &p.TelegramID, &p.TelegramUsername, &p.FirstName, &p.GameNickname, &p.GameID, &p.ZoneID,
+			&p.Stars, &p.MainRole, &p.IsCaptain, &p.IsSubstitute, &p.FSMState, &p.TeamID); err != nil {
+			return nil, fmt.Errorf("scan error: %w", err)
+		}
 		players = append(players, p)
 	}
 	return players, nil
@@ -174,8 +257,10 @@ func (r *TelegramPostgres) GetAllCaptains() ([]models.TelegramPlayer, error) {
 	var players []models.TelegramPlayer
 	for rows.Next() {
 		var p models.TelegramPlayer
-		rows.Scan(&p.ID, &p.TelegramID, &p.TelegramUsername, &p.FirstName, &p.GameNickname, &p.GameID, &p.ZoneID,
-			&p.Stars, &p.MainRole, &p.IsCaptain, &p.IsSubstitute, &p.FSMState, &p.TeamID)
+		if err := rows.Scan(&p.ID, &p.TelegramID, &p.TelegramUsername, &p.FirstName, &p.GameNickname, &p.GameID, &p.ZoneID,
+			&p.Stars, &p.MainRole, &p.IsCaptain, &p.IsSubstitute, &p.FSMState, &p.TeamID); err != nil {
+			return nil, fmt.Errorf("scan error: %w", err)
+		}
 		players = append(players, p)
 	}
 	return players, nil
@@ -195,8 +280,10 @@ func (r *TelegramPostgres) GetSoloPlayers() ([]models.TelegramPlayer, error) {
 	var players []models.TelegramPlayer
 	for rows.Next() {
 		var p models.TelegramPlayer
-		rows.Scan(&p.ID, &p.TelegramID, &p.TelegramUsername, &p.FirstName, &p.GameNickname, &p.GameID, &p.ZoneID,
-			&p.Stars, &p.MainRole, &p.IsCaptain, &p.IsSubstitute, &p.FSMState, &p.TeamID)
+		if err := rows.Scan(&p.ID, &p.TelegramID, &p.TelegramUsername, &p.FirstName, &p.GameNickname, &p.GameID, &p.ZoneID,
+			&p.Stars, &p.MainRole, &p.IsCaptain, &p.IsSubstitute, &p.FSMState, &p.TeamID); err != nil {
+			return nil, fmt.Errorf("scan error: %w", err)
+		}
 		players = append(players, p)
 	}
 	return players, nil

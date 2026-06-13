@@ -44,7 +44,11 @@ func main() {
 	}
 	log.Info("Migrations applied successfully")
 
-	repos := repository.NewRepository(&cfg.Repo, db)
+	repos, err := repository.NewRepository(&cfg.Repo, db, cfg.PlayerCacheSize)
+	if err != nil {
+		log.Error("failed to init repository: %s", err.Error())
+		return
+	}
 
 	gemini, err := ai.NewGeminiClient(cfg.GeminiKey)
 	if err != nil {
@@ -64,7 +68,7 @@ func main() {
 		log.Warn("google-credentials.json not found, sheets integration disabled")
 	}
 
-	services := application.NewService(repos, gemini, sheetsClient, cfg.GoogleOwnerEmail, log)
+	services := application.NewService(repos, gemini, sheetsClient, cfg.GoogleOwnerEmail, cfg.SpreadsheetID, cfg.HTTPTimeoutSec, log)
 
 	discordBot := discord.NewBot(&cfg, services, log)
 

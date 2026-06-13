@@ -49,7 +49,7 @@ func (b *Bot) sendMessage(chatID int64, text string, kbType string) {
 			),
 		)
 	case "main_menu":
-		msg.ReplyMarkup = tgbotapi.NewReplyKeyboard(
+		rows := [][]tgbotapi.KeyboardButton{
 			tgbotapi.NewKeyboardButtonRow(
 				tgbotapi.NewKeyboardButton("/profile"),
 				tgbotapi.NewKeyboardButton("/my_team"),
@@ -65,7 +65,13 @@ func (b *Bot) sendMessage(chatID int64, text string, kbType string) {
 			tgbotapi.NewKeyboardButtonRow(
 				tgbotapi.NewKeyboardButton("/delete_team"),
 			),
-		)
+		}
+		if b.isAdmin(chatID) {
+			rows = append(rows, tgbotapi.NewKeyboardButtonRow(
+				tgbotapi.NewKeyboardButton("/admin"),
+			))
+		}
+		msg.ReplyMarkup = tgbotapi.NewReplyKeyboard(rows...)
 	default:
 		msg.ReplyMarkup = tgbotapi.NewRemoveKeyboard(true)
 	}

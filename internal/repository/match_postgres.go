@@ -21,10 +21,12 @@ type MatchPostgres struct {
 	playerCache *PlayerCache
 }
 
-func NewMatchPostgres(db *sql.DB) *MatchPostgres {
-	cache := NewPlayerCache()
+func NewMatchPostgres(db *sql.DB, cacheSize int) (*MatchPostgres, error) {
+	cache, err := NewPlayerCache(cacheSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create player cache: %w", err)
+	}
 
-	// Warm up cache with existing players
 	rows, err := db.Query("SELECT id, name FROM players WHERE is_deleted = FALSE ORDER BY id")
 	if err == nil {
 		defer rows.Close()
@@ -41,7 +43,7 @@ func NewMatchPostgres(db *sql.DB) *MatchPostgres {
 	return &MatchPostgres{
 		db:          db,
 		playerCache: cache,
-	}
+	}, nil
 }
 
 func (r *MatchPostgres) Create(match models.Match) (int, error) {
@@ -282,33 +284,48 @@ func (r *MatchPostgres) GetHistory(playerID int, limit int) ([]models.Match, err
 func (r *MatchPostgres) EnsurePlayerExists(name string) (int, error) {
 	normalizedInput := normalizeForComparison(name)
 
-	// Fast path: check cache first (O(1))
 	if id, found := r.playerCache.Get(normalizedInput); found {
 		return id, nil
 	}
 
-	// Cache miss: check database for exact or similar matches
-	existingPlayers, err := r.GetAllPlayers()
-	if err == nil && len(existingPlayers) > 0 {
-		for _, p := range existingPlayers {
-			normalizedExisting := normalizeForComparison(p.Name)
+	var id int
+	exactQuery := `
+		SELECT id FROM players 
+		WHERE LOWER(TRIM(name)) = $1 AND is_deleted = FALSE
+		LIMIT 1
+	`
+	err := r.db.QueryRow(exactQuery, normalizedInput).Scan(&id)
+	if err == nil {
+		r.playerCache.Set(normalizedInput, id)
+		return id, nil
+	}
 
-			// Exact match
-			if normalizedInput == normalizedExisting {
-				r.playerCache.Set(normalizedInput, p.ID)
-				return p.ID, nil
+	fuzzyQuery := `
+		SELECT id, name FROM players 
+		WHERE LOWER(TRIM(name)) LIKE $1 AND is_deleted = FALSE
+		LIMIT 10
+	`
+	likePattern := "%" + normalizedInput[:min(len(normalizedInput), 3)] + "%"
+
+	rows, err := r.db.Query(fuzzyQuery, likePattern)
+	if err == nil {
+		defer rows.Close()
+
+		for rows.Next() {
+			var candidateID int
+			var candidateName string
+			if err := rows.Scan(&candidateID, &candidateName); err != nil {
+				continue
 			}
 
-			// Fuzzy match (similarity)
-			if similarityScore(normalizedInput, normalizedExisting) > similarityThreshold {
-				r.playerCache.Set(normalizedInput, p.ID)
-				return p.ID, nil
+			normalizedCandidate := normalizeForComparison(candidateName)
+			if similarityScore(normalizedInput, normalizedCandidate) > similarityThreshold {
+				r.playerCache.Set(normalizedInput, candidateID)
+				return candidateID, nil
 			}
 		}
 	}
 
-	// Player not found - insert new player
-	var id int
 	err = r.db.QueryRow(`
 		INSERT INTO players (name) VALUES ($1)
 		ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
@@ -318,13 +335,18 @@ func (r *MatchPostgres) EnsurePlayerExists(name string) (int, error) {
 		return 0, fmt.Errorf("failed to ensure player exists: %w", err)
 	}
 
-	// Cache the newly created player
 	r.playerCache.Set(normalizedInput, id)
 
 	return id, nil
 }
 
-// batchInsertPlayerResults inserts all player results in a single query
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 func (r *MatchPostgres) batchInsertPlayerResults(
 	tx *sql.Tx,
 	matchID int,
@@ -334,8 +356,6 @@ func (r *MatchPostgres) batchInsertPlayerResults(
 	if len(players) == 0 {
 		return nil
 	}
-
-	// Build batch INSERT query with multiple VALUES
 	query := `INSERT INTO player_results 
               (match_id, player_id, player_name, result, kills, deaths, assists) 
               VALUES `
@@ -344,14 +364,12 @@ func (r *MatchPostgres) batchInsertPlayerResults(
 	placeholders := make([]string, 0, len(players))
 
 	for i, p := range players {
-		// Generate placeholders: ($1, $2, ..., $7), ($8, $9, ..., $14), ...
 		offset := i * 7
 		placeholders = append(placeholders,
 			fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d)",
 				offset+1, offset+2, offset+3, offset+4,
 				offset+5, offset+6, offset+7))
 
-		// Add values in correct order
 		values = append(values,
 			matchID,
 			playerIDs[i],
@@ -362,10 +380,8 @@ func (r *MatchPostgres) batchInsertPlayerResults(
 			p.Assists)
 	}
 
-	// Complete query: INSERT ... VALUES (...), (...), (...)
 	query += strings.Join(placeholders, ", ")
 
-	// Execute batch insert
 	_, err := tx.Exec(query, values...)
 	if err != nil {
 		return fmt.Errorf("batch insert failed: %w", err)
@@ -492,7 +508,6 @@ func (r *MatchPostgres) WipePlayerByID(id int) error {
 		return fmt.Errorf("failed to soft delete player: %w", err)
 	}
 
-	// Invalidate cache entry for deleted player
 	normalized := normalizeForComparison(name)
 	r.playerCache.Delete(normalized)
 
@@ -510,7 +525,6 @@ func (r *MatchPostgres) RestorePlayer(id int) error {
 		return fmt.Errorf("failed to restore player results: %w", err)
 	}
 
-	// Re-cache the restored player
 	name, err := r.GetPlayerNameByID(id)
 	if err == nil {
 		normalized := normalizeForComparison(name)
@@ -521,7 +535,6 @@ func (r *MatchPostgres) RestorePlayer(id int) error {
 }
 
 func (r *MatchPostgres) RenamePlayer(id int, newName string) error {
-	// Get old name before renaming to invalidate old cache entry
 	oldName, err := r.GetPlayerNameByID(id)
 	if err != nil {
 		return fmt.Errorf("failed to get player name: %w", err)
@@ -537,7 +550,6 @@ func (r *MatchPostgres) RenamePlayer(id int, newName string) error {
 		return fmt.Errorf("игрок с ID %d не найден", id)
 	}
 
-	// Update cache: remove old name, add new name
 	oldNormalized := normalizeForComparison(oldName)
 	newNormalized := normalizeForComparison(newName)
 

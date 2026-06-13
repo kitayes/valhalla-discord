@@ -301,6 +301,17 @@ func (b *Bot) handleScreenshots(s *discordgo.Session, m *discordgo.MessageCreate
 		return
 	}
 
+	// Rate limiting: Check per-user and global limits
+	userID := m.Author.ID
+	for range imageAttachments {
+		if err := b.rateLimiter.Allow(userID, 5, 1); err != nil {
+			b.logger.Warn("Rate limit exceeded for user %s", userID)
+			s.ChannelMessageSend(m.ChannelID,
+				"⚠️ Слишком много запросов. Пожалуйста, подождите немного перед следующей загрузкой.")
+			return
+		}
+	}
+
 	// Show typing indicator
 	s.ChannelTyping(m.ChannelID)
 
