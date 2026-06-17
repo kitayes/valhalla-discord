@@ -10,15 +10,15 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -o valhalla-bot ./cmd/app/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -o blackwatch-bot ./cmd/app/main.go
 
 FROM alpine:latest
 
-RUN apk --no-cache add ca-certificates bash
+RUN apk --no-cache add ca-certificates bash netcat-openbsd
 
 WORKDIR /root/
 
-COPY --from=builder /app/valhalla-bot .
+COPY --from=builder /app/blackwatch-bot .
 COPY --from=builder /app/migrations ./migrations
 COPY wait-for-postgres.sh .
 
@@ -26,4 +26,4 @@ COPY google-credentials.json .
 
 RUN chmod +x wait-for-postgres.sh
 
-CMD ["./wait-for-postgres.sh", "db", "./valhalla-bot"]
+CMD ["./wait-for-postgres.sh", "db", "./blackwatch-bot"]

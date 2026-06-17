@@ -160,3 +160,14 @@ func (b *Bot) newTelegramProfileCommand() *discordgo.ApplicationCommand {
 		},
 	}
 }
+
+func (b *Bot) newUpdateNickCommand() *discordgo.ApplicationCommand {
+	return &discordgo.ApplicationCommand{
+		Name:        "update_nick",
+		Description: "Обновить никнейм игрока (каскадное переименование во всей истории)",
+		Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionInteger, Name: "id", Description: "ID игрока", Required: true},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "new_name", Description: "Новый никнейм", Required: true},
+		},
+	}
+}

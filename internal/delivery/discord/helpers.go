@@ -1,6 +1,6 @@
 package discord
 
-import "valhalla/internal/application"
+import "blackwatch/internal/application"
 
 func calculateWinRate(stats *application.PlayerStats) float64 {
 	if stats.Matches == 0 {

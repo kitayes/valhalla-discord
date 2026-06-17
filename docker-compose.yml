@@ -3,32 +3,55 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: valhalla_bots
+    container_name: blackwatch_bots
     restart: always
     depends_on:
       - db
+      - ollama
     env_file:
       - .env
     environment:
       - REPO_DB_HOST=db
       - REPO_DB_PORT=5432
       - REPO_DB_USERNAME=postgres
-      - REPO_DB_PASSWORD=valhalla
-      - REPO_DB_NAME=valhalla_db
+      - REPO_DB_PASSWORD=blackwatch
+      - REPO_DB_NAME=blackwatch_db
       - REPO_DB_SSLMODE=disable
 
   db:
-    image: postgres:15-alpine
-    container_name: valhalla_db
+    image: ankane/pgvector:latest
+    container_name: blackwatch_db
     restart: always
     environment:
-    - POSTGRES_USER=postgres
-    - POSTGRES_PASSWORD=valhalla
-    - POSTGRES_DB=valhalla_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=blackwatch
+      - POSTGRES_DB=blackwatch_db
     ports:
-    - "5435:5432"
+      - "5435:5432"
     volumes:
-    - pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql/data
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: blackwatch_ollama
+    restart: always
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ollama serve &
+        sleep 5
+        ollama pull nomic-embed-text
+        wait
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
 volumes:
   pgdata:
+  ollama_data:

@@ -285,6 +285,38 @@ func (b *Bot) handleRenamePlayer(s *discordgo.Session, i *discordgo.Interaction)
 	b.respondMessage(s, i, fmt.Sprintf("Игрок переименован:\n**%s** → **%s**", oldName, newName), false)
 }
 
+func (b *Bot) handleUpdateNick(s *discordgo.Session, i *discordgo.Interaction) {
+	opts := i.ApplicationCommandData().Options
+	id := int(opts[0].IntValue())
+	newName := opts[1].StringValue()
+
+	oldName, err := b.services.MatchService.GetPlayerNameByID(id)
+	if err != nil {
+		b.respondMessage(s, i, fmt.Sprintf("Игрок с ID %d не найден.", id), true)
+		return
+	}
+
+	// Defer response since Sheets sync may take time
+	s.InteractionRespond(i, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+	})
+
+	err = b.services.MatchService.RenamePlayer(id, newName)
+	if err != nil {
+		s.InteractionResponseEdit(i, &discordgo.WebhookEdit{
+			Content: &[]string{"Ошибка переименования: " + err.Error()}[0],
+		})
+		return
+	}
+
+	// Trigger Google Sheets sync in background after rename
+	go b.services.MatchService.SyncToGoogleSheet()
+
+	s.InteractionResponseEdit(i, &discordgo.WebhookEdit{
+		Content: &[]string{fmt.Sprintf("✅ Никнейм обновлён!\n**%s** → **%s**\n\nКаскадное переименование: все прошлые матчи, база данных и Google Таблицы обновлены.", oldName, newName)}[0],
+	})
+}
+
 func (b *Bot) handleScreenshots(s *discordgo.Session, m *discordgo.MessageCreate) {
 	// Filter only image attachments
 	var imageAttachments []*discordgo.MessageAttachment

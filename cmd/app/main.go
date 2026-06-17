@@ -1,20 +1,20 @@
 package main
 
 import (
+	"blackwatch/migrations"
 	"context"
 	"os"
 	"os/signal"
 	"syscall"
-	"valhalla/migrations"
 
-	"valhalla/internal/ai"
-	"valhalla/internal/application"
-	"valhalla/internal/delivery/discord"
-	"valhalla/internal/delivery/telegram"
-	"valhalla/internal/repository"
-	"valhalla/pkg/config"
-	"valhalla/pkg/logger"
-	"valhalla/pkg/sheets"
+	"blackwatch/internal/ai"
+	"blackwatch/internal/application"
+	"blackwatch/internal/delivery/discord"
+	"blackwatch/internal/delivery/telegram"
+	"blackwatch/internal/repository"
+	"blackwatch/pkg/config"
+	"blackwatch/pkg/logger"
+	"blackwatch/pkg/sheets"
 
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
@@ -44,7 +44,10 @@ func main() {
 	}
 	log.Info("Migrations applied successfully")
 
-	repos, err := repository.NewRepository(&cfg.Repo, db, cfg.PlayerCacheSize)
+	embeddingClient := ai.NewEmbeddingClient()
+	log.Info("Ollama embedding client initialized")
+
+	repos, err := repository.NewRepository(&cfg.Repo, db, cfg.PlayerCacheSize, embeddingClient)
 	if err != nil {
 		log.Error("failed to init repository: %s", err.Error())
 		return

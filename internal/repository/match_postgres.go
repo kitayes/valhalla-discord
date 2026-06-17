@@ -5,23 +5,26 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"valhalla/internal/models"
+
+	"blackwatch/internal/ai"
+	"blackwatch/internal/models"
 )
 
 const (
-	similarityThreshold     = 0.85
-	defaultSeasonStartYear  = 2025
-	defaultSeasonStartMonth = 1
-	defaultSeasonStartDay   = 1
-	minDeathsForKDA         = 1
+	cosineSimilarityThreshold = 0.28
+	defaultSeasonStartYear    = 2025
+	defaultSeasonStartMonth   = 1
+	defaultSeasonStartDay     = 1
+	minDeathsForKDA           = 1
 )
 
 type MatchPostgres struct {
-	db          *sql.DB
-	playerCache *PlayerCache
+	db              *sql.DB
+	playerCache     *PlayerCache
+	embeddingClient *ai.EmbeddingClient
 }
 
-func NewMatchPostgres(db *sql.DB, cacheSize int) (*MatchPostgres, error) {
+func NewMatchPostgres(db *sql.DB, cacheSize int, embeddingClient *ai.EmbeddingClient) (*MatchPostgres, error) {
 	cache, err := NewPlayerCache(cacheSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create player cache: %w", err)
@@ -41,8 +44,9 @@ func NewMatchPostgres(db *sql.DB, cacheSize int) (*MatchPostgres, error) {
 	}
 
 	return &MatchPostgres{
-		db:          db,
-		playerCache: cache,
+		db:              db,
+		playerCache:     cache,
+		embeddingClient: embeddingClient,
 	}, nil
 }
 
@@ -300,6 +304,29 @@ func (r *MatchPostgres) EnsurePlayerExists(name string) (int, error) {
 		return id, nil
 	}
 
+	// Vector-based cosine similarity search via Ollama embeddings
+	if r.embeddingClient != nil {
+		embedding, embErr := r.embeddingClient.GetEmbedding(name)
+		if embErr == nil && len(embedding) > 0 {
+			embeddingStr := ai.FormatEmbeddingForPG(embedding)
+			vectorQuery := `
+				SELECT id, name FROM players 
+				WHERE name_embedding IS NOT NULL AND is_deleted = FALSE
+				  AND name_embedding <=> $1 < $2
+				ORDER BY name_embedding <=> $1
+				LIMIT 1
+			`
+			var candidateID int
+			var candidateName string
+			err := r.db.QueryRow(vectorQuery, embeddingStr, cosineSimilarityThreshold).Scan(&candidateID, &candidateName)
+			if err == nil {
+				r.playerCache.Set(normalizedInput, candidateID)
+				return candidateID, nil
+			}
+		}
+	}
+
+	// Fallback: fuzzy Levenshtein search for cases where embedding is not yet generated
 	fuzzyQuery := `
 		SELECT id, name FROM players 
 		WHERE LOWER(TRIM(name)) LIKE $1 AND is_deleted = FALSE
@@ -319,17 +346,33 @@ func (r *MatchPostgres) EnsurePlayerExists(name string) (int, error) {
 			}
 
 			normalizedCandidate := normalizeForComparison(candidateName)
-			if similarityScore(normalizedInput, normalizedCandidate) > similarityThreshold {
+			if similarityScore(normalizedInput, normalizedCandidate) > 0.85 {
 				r.playerCache.Set(normalizedInput, candidateID)
 				return candidateID, nil
 			}
 		}
 	}
 
-	err = r.db.QueryRow(`
-		INSERT INTO players (name) VALUES ($1)
-		ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
-		RETURNING id`, name).Scan(&id)
+	// Generate embedding for the new player
+	var embeddingStr string
+	if r.embeddingClient != nil {
+		embedding, embErr := r.embeddingClient.GetEmbedding(name)
+		if embErr == nil && len(embedding) > 0 {
+			embeddingStr = ai.FormatEmbeddingForPG(embedding)
+		}
+	}
+
+	if embeddingStr != "" {
+		err = r.db.QueryRow(`
+			INSERT INTO players (name, name_embedding) VALUES ($1, $2)
+			ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+			RETURNING id`, name, embeddingStr).Scan(&id)
+	} else {
+		err = r.db.QueryRow(`
+			INSERT INTO players (name) VALUES ($1)
+			ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+			RETURNING id`, name).Scan(&id)
+	}
 
 	if err != nil {
 		return 0, fmt.Errorf("failed to ensure player exists: %w", err)
@@ -540,16 +583,71 @@ func (r *MatchPostgres) RenamePlayer(id int, newName string) error {
 		return fmt.Errorf("failed to get player name: %w", err)
 	}
 
-	result, err := r.db.Exec("UPDATE players SET name = $1 WHERE id = $2 AND is_deleted = FALSE", newName, id)
+	// Generate embedding for the new name
+	var embeddingStr string
+	if r.embeddingClient != nil {
+		embedding, embErr := r.embeddingClient.GetEmbedding(newName)
+		if embErr == nil && len(embedding) > 0 {
+			embeddingStr = ai.FormatEmbeddingForPG(embedding)
+		}
+	}
+
+	tx, err := r.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			tx.Rollback()
+		}
+	}()
+
+	// Log the name change in history
+	_, err = tx.Exec(
+		"INSERT INTO player_nickname_history (player_id, old_name, new_name) VALUES ($1, $2, $3)",
+		id, oldName, newName,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to log nickname history: %w", err)
+	}
+
+	// Update player name and embedding
+	var playerResult sql.Result
+	if embeddingStr != "" {
+		playerResult, err = tx.Exec(
+			"UPDATE players SET name = $1, name_embedding = $2 WHERE id = $3 AND is_deleted = FALSE",
+			newName, embeddingStr, id,
+		)
+	} else {
+		playerResult, err = tx.Exec(
+			"UPDATE players SET name = $1 WHERE id = $2 AND is_deleted = FALSE",
+			newName, id,
+		)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to rename player: %w", err)
 	}
 
-	rows, _ := result.RowsAffected()
+	rows, _ := playerResult.RowsAffected()
 	if rows == 0 {
+		tx.Rollback()
 		return fmt.Errorf("игрок с ID %d не найден", id)
 	}
 
+	// Cascade: update player_name in all past matches (player_results table)
+	_, err = tx.Exec(
+		"UPDATE player_results SET player_name = $1 WHERE player_id = $2",
+		newName, id,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to cascade player name: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit rename transaction: %w", err)
+	}
+
+	// Invalidate cache
 	oldNormalized := normalizeForComparison(oldName)
 	newNormalized := normalizeForComparison(newName)
 

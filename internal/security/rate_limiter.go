@@ -3,7 +3,7 @@ package security
 import (
 	"sync"
 	"time"
-	"valhalla/internal/domain"
+	"blackwatch/internal/domain"
 )
 
 type RateLimiter struct {

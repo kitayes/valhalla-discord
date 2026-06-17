@@ -3,7 +3,7 @@ package repository
 import (
 	"database/sql"
 	"fmt"
-	"valhalla/internal/models"
+	"blackwatch/internal/models"
 )
 
 type TelegramPostgres struct {

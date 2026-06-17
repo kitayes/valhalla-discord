@@ -2,8 +2,8 @@ package application
 
 import (
 	"fmt"
-	"valhalla/internal/models"
-	"valhalla/internal/repository"
+	"blackwatch/internal/models"
+	"blackwatch/internal/repository"
 )
 
 type ProfileLinkService interface {

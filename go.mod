@@ -1,4 +1,4 @@
-module valhalla
+module blackwatch
 
 go 1.24.1
 

@@ -1,9 +1,9 @@
 package application
 
 import (
-	"valhalla/internal/models"
-	"valhalla/internal/repository"
-	"valhalla/pkg/sheets"
+	"blackwatch/internal/models"
+	"blackwatch/internal/repository"
+	"blackwatch/pkg/sheets"
 )
 
 type AIProvider interface {
@@ -43,6 +43,7 @@ type Service struct {
 	MatchService       MatchService
 	ProfileLinkService ProfileLinkService
 	TelegramService    TelegramService
+	Lobby              *LobbyService
 }
 
 func NewService(repos *repository.Repository, ai AIProvider, sheetsClient sheets.Client, ownerEmail, spreadsheetID string, httpTimeoutSec int, logger Logger) *Service {
@@ -50,5 +51,6 @@ func NewService(repos *repository.Repository, ai AIProvider, sheetsClient sheets
 		MatchService:       NewMatchServiceImpl(repos.Match, ai, sheetsClient, ownerEmail, spreadsheetID, httpTimeoutSec, logger),
 		ProfileLinkService: NewProfileLinkServiceImpl(repos.ProfileLink, repos.Match, logger),
 		TelegramService:    NewTelegramServiceImpl(repos.Telegram, logger),
+		Lobby:              NewLobbyService(logger),
 	}
 }

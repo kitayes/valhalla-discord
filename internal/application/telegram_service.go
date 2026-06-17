@@ -8,8 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"valhalla/internal/models"
-	"valhalla/internal/repository"
+	"blackwatch/internal/models"
+	"blackwatch/internal/repository"
 )
 
 const (

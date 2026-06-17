@@ -1,7 +1,7 @@
 package config
 
 import (
-	"valhalla/internal/repository"
+	"blackwatch/internal/repository"
 
 	"github.com/caarlos0/env/v11"
 )
@@ -26,6 +26,10 @@ type Config struct {
 
 	SpreadsheetID  string `env:"SPREADSHEET_ID" envDefault:""`
 	HTTPTimeoutSec int    `env:"HTTP_TIMEOUT_SEC" envDefault:"10"`
+
+	ClanTagRoleID  string `env:"CLAN_TAG_ROLE_ID" envDefault:""`
+	ClanTagEnabled bool   `env:"CLAN_TAG_ENABLED" envDefault:"false"`
+	GuildID        string `env:"GUILD_ID" envDefault:""`
 }
 
 func ReadEnvConfig(cfg *Config) error {

@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
-	"valhalla/internal/models"
+	"blackwatch/internal/models"
 )
 
 const (

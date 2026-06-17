@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"valhalla/internal/models"
+	"blackwatch/internal/models"
 
 	"github.com/google/generative-ai-go/genai"
 	"google.golang.org/api/option"
@@ -29,7 +29,6 @@ func NewGeminiClient(apiKey string) (*GeminiClient, error) {
 }
 
 func (g *GeminiClient) ParseImage(data []byte) (*models.Match, error) {
-	// Optimize image before sending to API (compress + resize)
 	processor := NewImageProcessor()
 	optimizedData, err := processor.OptimizeForAI(data)
 	if err != nil {

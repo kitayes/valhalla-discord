@@ -1,7 +1,7 @@
 package repository
 
 import (
-	"valhalla/internal/models"
+	"blackwatch/internal/models"
 
 	lru "github.com/hashicorp/golang-lru/v2"
 )

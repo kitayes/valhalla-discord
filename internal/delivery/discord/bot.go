@@ -1,11 +1,11 @@
 package discord
 
 import (
+	"blackwatch/internal/application"
+	"blackwatch/internal/security"
+	"blackwatch/pkg/config"
 	"context"
 	"strings"
-	"valhalla/internal/application"
-	"valhalla/internal/security"
-	"valhalla/pkg/config"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -74,10 +74,20 @@ func (b *Bot) Init() error {
 		b.newLinkCommand(),
 		b.newUnlinkCommand(),
 		b.newTelegramProfileCommand(),
+		b.newUpdateNickCommand(),
+		b.newLobbyCommand(),
+		b.newCreateMixCommand(),
 	)
 
 	b.session.AddHandler(b.onInteraction)
 	b.session.AddHandler(b.onMessage)
+
+	// Register lobby button/select handlers
+	b.RegisterQueueHandlers()
+
+	// Register clan tag tracking handlers
+	b.AddClanTagHandlers(b.cfg)
+
 	return nil
 }
 
@@ -170,6 +180,12 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 		b.handleWipePlayer(s, i.Interaction)
 	case "rename_player":
 		b.handleRenamePlayer(s, i.Interaction)
+	case "update_nick":
+		b.handleUpdateNick(s, i.Interaction)
+	case "lobby":
+		b.handleLobbyPost(s, i.Interaction)
+	case "create_mix":
+		b.handleCreateMix(s, i.Interaction)
 	}
 }
 

@@ -3,7 +3,9 @@ package repository
 import (
 	"database/sql"
 	"time"
-	"valhalla/internal/models"
+
+	"blackwatch/internal/ai"
+	"blackwatch/internal/models"
 )
 
 type Match interface {
@@ -75,8 +77,8 @@ type Repository struct {
 	db *sql.DB
 }
 
-func NewRepository(cfg *Config, db *sql.DB, cacheSize int) (*Repository, error) {
-	matchRepo, err := NewMatchPostgres(db, cacheSize)
+func NewRepository(cfg *Config, db *sql.DB, cacheSize int, embeddingClient *ai.EmbeddingClient) (*Repository, error) {
+	matchRepo, err := NewMatchPostgres(db, cacheSize, embeddingClient)
 	if err != nil {
 		return nil, err
 	}

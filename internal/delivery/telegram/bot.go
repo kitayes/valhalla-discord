@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"valhalla/internal/application"
+	"blackwatch/internal/application"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )

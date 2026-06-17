@@ -2,7 +2,7 @@ package security
 
 import (
 	"fmt"
-	"valhalla/internal/domain"
+	"blackwatch/internal/domain"
 )
 
 const (
