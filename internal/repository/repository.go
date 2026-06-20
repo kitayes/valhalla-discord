@@ -83,6 +83,9 @@ type LobbyMatch interface {
 	SaveThreadID(matchID int, threadID string) error
 	GetByThreadID(threadID string) (*models.LobbyMatch, error)
 	GetPlayerNamesByMatchID(matchID int) ([]string, error)
+	OpenBetting(matchID int) error
+	CloseBetting(matchID int) error
+	IsBettingOpen(matchID int) (bool, error)
 }
 
 type Bet interface {
@@ -90,6 +93,7 @@ type Bet interface {
 	GetBetsByMatch(matchID int) ([]models.Bet, error)
 	PayoutWinners(matchID int, winningTeam string) (map[int64]int, error)
 	GetPlayerPoints(tgUserID int64) (int, error)
+	IsBettingOpen(matchID int) (bool, error)
 }
 
 type License interface {

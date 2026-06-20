@@ -105,6 +105,15 @@ func (bb *BettingBot) handleBetCallback(callback *tgbotapi.CallbackQuery) {
 		fmt.Sscanf(data, callbackBetTeamB+"_%d", &matchID)
 	}
 
+	// Check if betting window is still open
+	if bb.bettingService != nil {
+		open, err := bb.bettingService.IsBettingOpen(matchID)
+		if err == nil && !open {
+			bb.bot.apiRespond(callback, "⌛️ Ставки заблокированы. Игра перешла в мид-гейм.", true)
+			return
+		}
+	}
+
 	points, err := bb.bettingService.GetPlayerPoints(userID)
 	if err != nil {
 		bb.bot.apiRespond(callback, fmt.Sprintf("Ваш Telegram не привязан к игроку. Используйте /link <код> в Discord."), true)

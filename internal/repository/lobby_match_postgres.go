@@ -313,3 +313,25 @@ func nullIntsToInts(nulls []sql.NullInt64) []int {
 	}
 	return result
 }
+
+// OpenBetting sets betting_open = true for a match.
+func (r *LobbyMatchPostgres) OpenBetting(matchID int) error {
+	_, err := r.db.Exec(`UPDATE lobby_matches SET betting_open = TRUE WHERE id = $1`, matchID)
+	return err
+}
+
+// CloseBetting sets betting_open = false for a match.
+func (r *LobbyMatchPostgres) CloseBetting(matchID int) error {
+	_, err := r.db.Exec(`UPDATE lobby_matches SET betting_open = FALSE WHERE id = $1`, matchID)
+	return err
+}
+
+// IsBettingOpen checks if betting is still open for a match.
+func (r *LobbyMatchPostgres) IsBettingOpen(matchID int) (bool, error) {
+	var open bool
+	err := r.db.QueryRow(`SELECT betting_open FROM lobby_matches WHERE id = $1`, matchID).Scan(&open)
+	if err == sql.ErrNoRows {
+		return false, fmt.Errorf("match %d not found", matchID)
+	}
+	return open, err
+}

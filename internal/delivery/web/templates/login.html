@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BLACKWATCH // LOGIN</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #0a0a0a;
+            color: #c0c0c0;
+            font-family: 'Courier New', monospace;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            background: #111;
+            border: 1px solid #333;
+            border-radius: 4px;
+            padding: 40px;
+            width: 400px;
+            text-align: center;
+        }
+
+        h1 {
+            color: #e74c3c;
+            font-size: 24px;
+            margin-bottom: 20px;
+            letter-spacing: 4px;
+            text-transform: uppercase;
+        }
+
+        h1 span {
+            color: #95a5a6;
+        }
+
+        input[type="password"] {
+            width: 100%;
+            padding: 12px;
+            margin: 15px 0;
+            background: #000;
+            border: 1px solid #333;
+            color: #0f0;
+            font-family: 'Courier New', monospace;
+            font-size: 16px;
+        }
+
+        button {
+            width: 100%;
+            padding: 12px;
+            background: #e74c3c;
+            color: #fff;
+            border: none;
+            font-family: 'Courier New', monospace;
+            font-size: 16px;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        button:hover {
+            background: #c0392b;
+        }
+
+        .error {
+            color: #e74c3c;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>BLACK<span>WATCH</span></h1>
+        <p style="color: #666; margin-bottom: 15px;">// DASHBOARD ACCESS</p>
+        {{if .Error}}
+        <p class="error">{{.Error}}</p>
+        {{end}}
+        <form method="POST">
+            <input type="password" name="key" placeholder="API KEY" autofocus />
+            <button type="submit">AUTHENTICATE</button>
+        </form>
+    </div>
+</body>
+
+</html>

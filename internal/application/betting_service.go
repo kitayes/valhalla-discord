@@ -12,6 +12,7 @@ type BettingRepository interface {
 	GetBetsByMatch(matchID int) ([]models.Bet, error)
 	PayoutWinners(matchID int, winningTeam string) (map[int64]int, error)
 	GetPlayerPoints(tgUserID int64) (int, error)
+	IsBettingOpen(matchID int) (bool, error)
 }
 
 // BettingService handles the Telegram betting economy.
@@ -86,6 +87,11 @@ func (s *BettingService) ProcessPayout(matchID int, winningTeam string) (map[int
 // GetPlayerPoints returns the current points balance for a Telegram user.
 func (s *BettingService) GetPlayerPoints(tgUserID int64) (int, error) {
 	return s.repo.GetPlayerPoints(tgUserID)
+}
+
+// IsBettingOpen checks whether the betting window is still open for a match.
+func (s *BettingService) IsBettingOpen(matchID int) (bool, error) {
+	return s.repo.IsBettingOpen(matchID)
 }
 
 // FormatPayoutSummary returns a human-readable summary of payouts.

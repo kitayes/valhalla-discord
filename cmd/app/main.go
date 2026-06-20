@@ -11,6 +11,7 @@ import (
 	"blackwatch/internal/application"
 	"blackwatch/internal/delivery/discord"
 	"blackwatch/internal/delivery/telegram"
+	"blackwatch/internal/delivery/web"
 	"blackwatch/internal/repository"
 	"blackwatch/pkg/config"
 	"blackwatch/pkg/logger"
@@ -114,6 +115,21 @@ func main() {
 		}
 	} else {
 		log.Warn("TELEGRAM_TOKEN not set, telegram bot disabled")
+	}
+
+	// Start web admin dashboard if port is configured
+	if cfg.WebAdminPort != "" && cfg.WebAdminKey != "" {
+		adminServer, err := web.NewAdminServer(services, log, cfg.WebAdminPort, cfg.WebAdminKey)
+		if err != nil {
+			log.Error("failed to init web admin: %s", err.Error())
+		} else {
+			go func() {
+				if err := adminServer.Start(); err != nil {
+					log.Error("web admin server error: %s", err.Error())
+				}
+			}()
+			log.Info("Web admin dashboard started on :%s", cfg.WebAdminPort)
+		}
 	}
 
 	quit := make(chan os.Signal, 1)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"blackwatch/internal/application"
 	"blackwatch/internal/domain"
@@ -368,6 +369,9 @@ func (b *Bot) handleSelectTeamA(s *discordgo.Session, i *discordgo.InteractionCr
 	b.logger.Info("match: #%d created | Team A: %s vs Team B: %s", matchID,
 		strings.Join(teamANames, ", "), strings.Join(teamBNames, ", "))
 
+	// Open betting window for 5 minutes, then auto-close
+	go b.autoCloseBetting(matchID)
+
 	// Notify Telegram about the new match asynchronously
 	go b.notifyTelegramMatchLive(matchID, captainAName, captainBName)
 }
@@ -607,6 +611,16 @@ func (b *Bot) notifyTelegramMatchLive(matchID int, captainA, captainB string) {
 	b.logger.Info("telegram: notifying match #%d is live (captains: %s vs %s)", matchID, captainA, captainB)
 	// Telegram bot will pick this up via a shared channel or direct API call.
 	// For now, the Telegram bot polls for ACTIVE matches.
+}
+
+// autoCloseBetting opens betting for a match and closes it after 5 minutes.
+func (b *Bot) autoCloseBetting(matchID int) {
+	time.Sleep(5 * time.Minute)
+	if err := b.services.Lobby.CloseBetting(matchID); err != nil {
+		b.logger.Error("betting: failed to auto-close match #%d: %v", matchID, err)
+	} else {
+		b.logger.Info("betting: auto-closed for match #%d (5 min elapsed)", matchID)
+	}
 }
 
 func (b *Bot) processTelegramPayout(matchID int, winningTeam string) {

@@ -194,3 +194,13 @@ func (r *BetPostgres) GetPlayerPoints(tgUserID int64) (int, error) {
 	}
 	return points, nil
 }
+
+// IsBettingOpen checks if the betting window is still open for a match.
+func (r *BetPostgres) IsBettingOpen(matchID int) (bool, error) {
+	var open bool
+	err := r.db.QueryRow(`SELECT betting_open FROM lobby_matches WHERE id = $1`, matchID).Scan(&open)
+	if err == sql.ErrNoRows {
+		return false, fmt.Errorf("match %d not found", matchID)
+	}
+	return open, err
+}

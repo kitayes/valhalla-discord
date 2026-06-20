@@ -1,6 +1,8 @@
 package application
 
 import (
+	"time"
+
 	"blackwatch/internal/models"
 	"blackwatch/internal/repository"
 	"blackwatch/pkg/sheets"
@@ -46,6 +48,9 @@ type MatchService interface {
 
 type LicenseService interface {
 	IsLicenseValid(guildID string) (bool, error)
+	UpgradeLicense(guildID string, expiresAt time.Time) error
+	ExpireLicense(guildID string) error
+	GetLicenseInfo(guildID string) (status string, expiresAt time.Time, err error)
 }
 
 type Service struct {

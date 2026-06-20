@@ -19,6 +19,9 @@ type LobbyMatchRepository interface {
 	SaveThreadID(matchID int, threadID string) error
 	GetByThreadID(threadID string) (*models.LobbyMatch, error)
 	GetPlayerNamesByMatchID(matchID int) ([]string, error)
+	OpenBetting(matchID int) error
+	CloseBetting(matchID int) error
+	IsBettingOpen(matchID int) (bool, error)
 }
 
 // lobbyEntry tracks a player in the lobby with their join time.
@@ -196,6 +199,22 @@ func (l *LobbyService) GetPlayerMMRsBatch(playerIDs []int) (map[int]int, error) 
 		return nil, fmt.Errorf("lobby: match repository not initialized")
 	}
 	return l.matchRepo.GetPlayerMMRsBatch(playerIDs)
+}
+
+// OpenBetting enables betting for a match.
+func (l *LobbyService) OpenBetting(matchID int) error {
+	if l.matchRepo == nil {
+		return fmt.Errorf("lobby: match repository not initialized")
+	}
+	return l.matchRepo.OpenBetting(matchID)
+}
+
+// CloseBetting disables betting for a match.
+func (l *LobbyService) CloseBetting(matchID int) error {
+	if l.matchRepo == nil {
+		return fmt.Errorf("lobby: match repository not initialized")
+	}
+	return l.matchRepo.CloseBetting(matchID)
 }
 
 // SyncMMRToSheet triggers an asynchronous sync of MMR updates to Google Sheets.

@@ -35,6 +35,8 @@ type Config struct {
 	DeepSeekKey       string `env:"DEEPSEEK_KEY" envDefault:""`
 	FAQChannelID      string `env:"FAQ_CHANNEL_ID" envDefault:""`
 	FAQFilePath       string `env:"FAQ_FILE_PATH" envDefault:"assets/faq.md"`
+	WebAdminPort      string `env:"WEB_ADMIN_PORT" envDefault:"8080"`
+	WebAdminKey       string `env:"WEB_ADMIN_KEY" envDefault:"blackwatch-admin"`
 }
 
 func ReadEnvConfig(cfg *Config) error {

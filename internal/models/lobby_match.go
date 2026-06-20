@@ -13,16 +13,17 @@ const (
 
 // LobbyMatch represents a match created via the lobby system with captains and teams.
 type LobbyMatch struct {
-	ID         int              `json:"id"`
-	GuildID    string           `json:"guild_id"`
-	CaptainAID int              `json:"captain_a_id"`
-	CaptainBID int              `json:"captain_b_id"`
-	TeamAIDs   []int            `json:"team_a_ids"`
-	TeamBIDs   []int            `json:"team_b_ids"`
-	Winner     string           `json:"winner"` // "Team A" or "Team B"
-	Status     LobbyMatchStatus `json:"status"`
-	ThreadID   string           `json:"thread_id,omitempty"` // Discord thread ID
-	CreatedAt  time.Time        `json:"created_at"`
+	ID          int              `json:"id"`
+	GuildID     string           `json:"guild_id"`
+	CaptainAID  int              `json:"captain_a_id"`
+	CaptainBID  int              `json:"captain_b_id"`
+	TeamAIDs    []int            `json:"team_a_ids"`
+	TeamBIDs    []int            `json:"team_b_ids"`
+	Winner      string           `json:"winner"` // "Team A" or "Team B"
+	Status      LobbyMatchStatus `json:"status"`
+	ThreadID    string           `json:"thread_id,omitempty"` // Discord thread ID
+	BettingOpen bool             `json:"betting_open"`        // Whether betting is still open
+	CreatedAt   time.Time        `json:"created_at"`
 }
 
 // CreateLobbyMatchRequest is the input for creating a new lobby match.

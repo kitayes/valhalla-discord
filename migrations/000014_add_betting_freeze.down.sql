@@ -1,0 +1,1 @@
+ALTER TABLE lobby_matches DROP COLUMN IF EXISTS betting_open;
