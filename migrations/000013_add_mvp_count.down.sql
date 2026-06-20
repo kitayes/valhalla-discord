@@ -1,0 +1,2 @@
+ALTER TABLE players DROP COLUMN IF EXISTS mvp_count;
+ALTER TABLE players DROP COLUMN IF EXISTS svp_count;

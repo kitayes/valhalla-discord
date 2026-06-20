@@ -1,6 +1,9 @@
 package application
 
 import (
+	"blackwatch/internal/models"
+	"blackwatch/internal/repository"
+	"blackwatch/pkg/sheets"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -10,9 +13,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"blackwatch/internal/models"
-	"blackwatch/internal/repository"
-	"blackwatch/pkg/sheets"
 
 	"github.com/xuri/excelize/v2"
 )
@@ -56,6 +56,12 @@ type PlayerStats struct {
 }
 
 func (s *MatchServiceImpl) ProcessImage(data []byte) (int, error) {
+	return s.ProcessImageWithPlayers(data, nil)
+}
+
+// ProcessImageWithPlayers processes a screenshot with the expected player list
+// for improved OCR accuracy via dynamic prompt injection.
+func (s *MatchServiceImpl) ProcessImageWithPlayers(data []byte, expectedPlayers []string) (int, error) {
 	hash := sha256.Sum256(data)
 	fileHash := hex.EncodeToString(hash[:])
 
@@ -67,7 +73,7 @@ func (s *MatchServiceImpl) ProcessImage(data []byte) (int, error) {
 		return 0, fmt.Errorf("duplicate match detected")
 	}
 
-	match, err := s.ai.ParseImage(data)
+	match, err := s.ai.ParseImageWithPlayers(data, expectedPlayers)
 	if err != nil {
 		return 0, err
 	}
@@ -103,6 +109,12 @@ func (s *MatchServiceImpl) ProcessImage(data []byte) (int, error) {
 }
 
 func (s *MatchServiceImpl) ProcessImageFromURL(url string) (int, error) {
+	return s.ProcessImageFromURLWithPlayers(url, nil)
+}
+
+// ProcessImageFromURLWithPlayers downloads and processes an image from a URL,
+// injecting expected player names into the AI prompt for improved OCR accuracy.
+func (s *MatchServiceImpl) ProcessImageFromURLWithPlayers(url string, expectedPlayers []string) (int, error) {
 	client := &http.Client{
 		Timeout: s.httpTimeout,
 	}
@@ -113,7 +125,6 @@ func (s *MatchServiceImpl) ProcessImageFromURL(url string) (int, error) {
 	}
 	defer resp.Body.Close()
 
-	// Check Content-Length BEFORE reading body to prevent bandwidth waste
 	if resp.ContentLength > 0 && resp.ContentLength > maxImageDownloadSize {
 		return 0, fmt.Errorf("image too large: %d bytes exceeds maximum %d bytes",
 			resp.ContentLength, maxImageDownloadSize)
@@ -124,12 +135,11 @@ func (s *MatchServiceImpl) ProcessImageFromURL(url string) (int, error) {
 		return 0, fmt.Errorf("failed to read image body: %w", err)
 	}
 
-	// Additional check after reading in case Content-Length was not set
 	if len(data) >= maxImageDownloadSize {
 		return 0, fmt.Errorf("image size exceeds maximum allowed size of %d bytes", maxImageDownloadSize)
 	}
 
-	return s.ProcessImage(data)
+	return s.ProcessImageWithPlayers(data, expectedPlayers)
 }
 
 func (s *MatchServiceImpl) GetLeaderboard(sortBy string) ([]*PlayerStats, error) {
@@ -151,6 +161,16 @@ func (s *MatchServiceImpl) GetPlayerList() ([]models.Player, error) {
 
 func (s *MatchServiceImpl) GetPlayerNameByID(id int) (string, error) {
 	return s.repo.GetPlayerNameByID(id)
+}
+
+// GetDiscordIDByPlayerID returns the discord_id linked to a player.
+func (s *MatchServiceImpl) GetDiscordIDByPlayerID(playerID int) (string, error) {
+	return s.repo.GetDiscordIDByPlayerID(playerID)
+}
+
+// GetPlayerByDiscordID returns the player ID and name for a given discord_id (O(1) SQL).
+func (s *MatchServiceImpl) GetPlayerByDiscordID(discordID string) (int, string, error) {
+	return s.repo.GetPlayerByDiscordID(discordID)
 }
 
 func (s *MatchServiceImpl) GetHistoryByID(id int) ([]string, error) {

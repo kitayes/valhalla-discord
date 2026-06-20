@@ -171,3 +171,20 @@ func (b *Bot) newUpdateNickCommand() *discordgo.ApplicationCommand {
 		},
 	}
 }
+
+func (b *Bot) newFAQCommand() *discordgo.ApplicationCommand {
+	return &discordgo.ApplicationCommand{
+		Name:        "faq",
+		Description: "Поиск по базе знаний BlackWatch (DeepSeek AI)",
+		Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionString, Name: "question", Description: "Ваш вопрос", Required: true},
+		},
+	}
+}
+
+func (b *Bot) newFAQReloadCommand() *discordgo.ApplicationCommand {
+	return &discordgo.ApplicationCommand{
+		Name:        "faq_reload",
+		Description: "Перезагрузить базу знаний FAQ (Только админы)",
+	}
+}

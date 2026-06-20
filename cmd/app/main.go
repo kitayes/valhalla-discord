@@ -73,6 +73,20 @@ func main() {
 
 	services := application.NewService(repos, gemini, sheetsClient, cfg.GoogleOwnerEmail, cfg.SpreadsheetID, cfg.HTTPTimeoutSec, log)
 
+	// Initialize DeepSeek FAQ service if API key is configured
+	if cfg.DeepSeekKey != "" {
+		deepseek := ai.NewDeepSeekClient(cfg.DeepSeekKey)
+		faqService, err := application.NewFAQService(log, deepseek, cfg.FAQFilePath)
+		if err != nil {
+			log.Error("failed to init FAQ service: %s", err.Error())
+		} else {
+			services.SetFAQService(faqService)
+			log.Info("DeepSeek FAQ service initialized")
+		}
+	} else {
+		log.Warn("DEEPSEEK_KEY not set, FAQ assistant disabled")
+	}
+
 	discordBot := discord.NewBot(&cfg, services, log)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -91,7 +105,7 @@ func main() {
 
 	var telegramBot *telegram.Bot
 	if cfg.TelegramToken != "" {
-		telegramBot, err = telegram.NewBot(cfg.TelegramToken, cfg.TelegramAdminIDs, services.TelegramService, services.ProfileLinkService, log)
+		telegramBot, err = telegram.NewBot(cfg.TelegramToken, cfg.TelegramAdminIDs, services.TelegramService, services.ProfileLinkService, services.BettingService, cfg.TelegramChannelID, log)
 		if err != nil {
 			log.Error("failed to init telegram bot: %s", err.Error())
 		} else {

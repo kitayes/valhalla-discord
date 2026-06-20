@@ -8,6 +8,8 @@ type Match struct {
 	MatchSignature string         `json:"match_signature"`
 	CreatedAt      time.Time      `json:"created_at"`
 	Players        []PlayerResult `json:"players"`
+	MVP            string         `json:"mvp,omitempty"` // MVP player name
+	SVP            string         `json:"svp,omitempty"` // SVPG/SVP player name
 }
 
 type PlayerResult struct {
@@ -20,6 +22,13 @@ type PlayerResult struct {
 	Deaths     int    `json:"deaths"`
 	Assists    int    `json:"assists"`
 	Champion   string `json:"champion"`
+}
+
+// AIImageResponse is the expected JSON structure from Gemini AI for the new prompt format.
+type AIImageResponse struct {
+	Players []PlayerResult `json:"players"`
+	MVP     *string        `json:"mvp"`
+	SVP     *string        `json:"svp"`
 }
 
 type Player struct {

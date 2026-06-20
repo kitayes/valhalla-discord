@@ -17,9 +17,12 @@ type Bot struct {
 	commands []*discordgo.ApplicationCommand
 	cfg      *config.Config
 
-	adminIDs         map[string]struct{}
-	allowedChannelID string
-	rateLimiter      *security.RateLimiter
+	adminIDs          map[string]struct{}
+	allowedChannelID  string
+	rateLimiter       *security.RateLimiter
+	cmdRateLimiter    *commandRateLimiter
+	refereeRoleID     string
+	threadPlayerCache map[string][]string // threadID -> player names (for AI prompt enrichment)
 }
 
 func NewBot(cfg *config.Config, services *application.Service, logger application.Logger) *Bot {
@@ -32,11 +35,14 @@ func NewBot(cfg *config.Config, services *application.Service, logger applicatio
 	)
 
 	return &Bot{
-		cfg:              cfg,
-		services:         services,
-		logger:           logger,
-		allowedChannelID: cfg.AllowedChannelID,
-		rateLimiter:      rateLimiter,
+		cfg:               cfg,
+		services:          services,
+		logger:            logger,
+		allowedChannelID:  cfg.AllowedChannelID,
+		rateLimiter:       rateLimiter,
+		cmdRateLimiter:    newCommandRateLimiter(),
+		refereeRoleID:     cfg.RefereeRoleID,
+		threadPlayerCache: make(map[string][]string),
 	}
 }
 
@@ -77,13 +83,26 @@ func (b *Bot) Init() error {
 		b.newUpdateNickCommand(),
 		b.newLobbyCommand(),
 		b.newCreateMixCommand(),
+		b.newCreateMatchCommand(),
+		b.newFAQCommand(),
+		b.newFAQReloadCommand(),
+		b.newBalanceCommand(),
 	)
 
-	b.session.AddHandler(b.onInteraction)
+	// Wrap interaction handler with panic recovery
+	b.session.AddHandler(b.wrapRecover(b.onInteraction))
+
+	// Message handler with its own recover (different signature)
 	b.session.AddHandler(b.onMessage)
 
 	// Register lobby button/select handlers
 	b.RegisterQueueHandlers()
+
+	// Register match button handlers (Team A WIN / Team B WIN)
+	b.RegisterMatchHandlers()
+
+	// Register danger button confirmation handlers (/wipe, /reset, /wipe_player, /reset_player)
+	b.RegisterDangerButtonHandlers()
 
 	// Register clan tag tracking handlers
 	b.AddClanTagHandlers(b.cfg)
@@ -125,13 +144,49 @@ func (b *Bot) Stop() {
 	b.logger.Info("Discord bot stopped")
 }
 
+// isReferee checks if a user has the SUDЬЯ (Referee) role.
+func (b *Bot) isReferee(member *discordgo.Member) bool {
+	if b.refereeRoleID == "" {
+		return false
+	}
+	for _, roleID := range member.Roles {
+		if roleID == b.refereeRoleID {
+			return true
+		}
+	}
+	return false
+}
+
 func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	// ===== GLOBAL GUARDS =====
+
+	// 1. Bot-is-bot protection: never respond to bots or yourself
+	if checkBotIsBot(i) {
+		return
+	}
+
+	// Only handle application commands here (component interactions handled separately)
 	if i.Type != discordgo.InteractionApplicationCommand {
+		return
+	}
+
+	// 2. Rate limiting: 1 req/3s per user, 60s cooldown on violation
+	userID := i.Member.User.ID
+	if !b.cmdRateLimiter.allow(userID) {
+		b.sendRateLimitMessage(s, i.Interaction)
+		return
+	}
+
+	// 3. License check for guild-scoped matchmaking/betting operations
+	guildID := i.GuildID
+	if guildID != "" && b.checkLicense(guildID) {
+		b.sendLicenseExpiredMessage(s, i.Interaction)
 		return
 	}
 
 	name := i.ApplicationCommandData().Name
 
+	// Public commands (no role check needed)
 	switch name {
 	case "top":
 		b.handleTop(s, i.Interaction)
@@ -154,8 +209,18 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 	case "telegram_profile":
 		b.handleTelegramProfile(s, i.Interaction)
 		return
+	case "faq":
+		b.handleFAQ(s, i.Interaction)
+		return
 	}
 
+	// Admin-only or FAQ-reload
+	if name == "faq_reload" && b.isAdmin(i.Member.User.ID) {
+		b.handleFAQReload(s, i.Interaction)
+		return
+	}
+
+	// Admin-only commands
 	if !b.isAdmin(i.Member.User.ID) {
 		b.respondMessage(s, i.Interaction, "У вас нет прав.", true)
 		return
@@ -186,15 +251,39 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 		b.handleLobbyPost(s, i.Interaction)
 	case "create_mix":
 		b.handleCreateMix(s, i.Interaction)
+	case "create_match":
+		b.handleCreateMatch(s, i.Interaction)
+	case "balance":
+		b.handleBalance(s, i.Interaction)
 	}
 }
 
+// onMessageWrapper wraps onMessage to provide panic recovery.
+func (b *Bot) onMessageWrapper(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	// This handler is only used for the recover wrapper; actual message handling is still in onMessage.
+	// We need to keep the original onMessage registration.
+}
+
 func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
+	// Bot-is-bot protection
 	if m.Author.ID == s.State.User.ID {
 		return
 	}
+	if m.Author.Bot {
+		return
+	}
 
-	if b.allowedChannelID != "" && m.ChannelID != b.allowedChannelID {
+	// Allow screenshots in the configured channel OR in a known match thread
+	isAllowedChannel := b.allowedChannelID == "" || m.ChannelID == b.allowedChannelID
+	isMatchThread := b.isKnownMatchThread(m.ChannelID)
+
+	if !isAllowedChannel && !isMatchThread {
+		return
+	}
+
+	// Auto-answer FAQ in the FAQ channel (plain text messages, no attachments)
+	if b.isFAQChannel(m.ChannelID) && b.services.FAQService != nil && len(m.Attachments) == 0 && len(strings.TrimSpace(m.Content)) > 3 {
+		b.handleFAQAutoAnswer(s, m)
 		return
 	}
 

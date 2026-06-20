@@ -27,9 +27,14 @@ type Config struct {
 	SpreadsheetID  string `env:"SPREADSHEET_ID" envDefault:""`
 	HTTPTimeoutSec int    `env:"HTTP_TIMEOUT_SEC" envDefault:"10"`
 
-	ClanTagRoleID  string `env:"CLAN_TAG_ROLE_ID" envDefault:""`
-	ClanTagEnabled bool   `env:"CLAN_TAG_ENABLED" envDefault:"false"`
-	GuildID        string `env:"GUILD_ID" envDefault:""`
+	ClanTagRoleID     string `env:"CLAN_TAG_ROLE_ID" envDefault:""`
+	ClanTagEnabled    bool   `env:"CLAN_TAG_ENABLED" envDefault:"false"`
+	GuildID           string `env:"GUILD_ID" envDefault:""`
+	RefereeRoleID     string `env:"REFEREE_ROLE_ID" envDefault:""`
+	TelegramChannelID string `env:"TELEGRAM_CHANNEL_ID" envDefault:""`
+	DeepSeekKey       string `env:"DEEPSEEK_KEY" envDefault:""`
+	FAQChannelID      string `env:"FAQ_CHANNEL_ID" envDefault:""`
+	FAQFilePath       string `env:"FAQ_FILE_PATH" envDefault:"assets/faq.md"`
 }
 
 func ReadEnvConfig(cfg *Config) error {

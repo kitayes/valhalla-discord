@@ -205,17 +205,52 @@ func (b *Bot) onCreateMixSelect(s *discordgo.Session, i *discordgo.InteractionCr
 		}
 	}
 
-	// Create a signature for the mix (placeholder) and open a thread
 	signature := fmt.Sprintf("MIX-%s", strings.Join(selectedIDs, "-"))
+	mixTitle := fmt.Sprintf("Микс %s", strings.Join(playerNames, ", "))
 
-	// Send confirmation
+	// Open a Discord Thread from the interaction message
+	thread, err := s.MessageThreadStart(i.ChannelID, i.Message.ID, mixTitle, 60)
+	if err != nil {
+		b.logger.Warn("mix: failed to create thread: %v", err)
+		// Fallback: send ephemeral message without thread
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: fmt.Sprintf("✅ **Микс создан!**\n\n🗡️ Сигнатура: `%s`\n👥 Игроки: %s\n\n📸 Капитаны, скиньте скриншот результата в этот канал после игры, я его обработаю.",
+					signature, strings.Join(playerNames, ", ")),
+			},
+		})
+		return
+	}
+
+	// Send the confirmation message inside the new thread
+	_, err = s.ChannelMessageSend(thread.ID, fmt.Sprintf(
+		"✅ **Микс создан!**\n\n🗡️ Сигнатура: `%s`\n👥 Игроки: %s\n\n📸 Капитаны, скиньте скриншот результата **в эту ветку** после игры, я его обработаю.",
+		signature, strings.Join(playerNames, ", "),
+	))
+	if err != nil {
+		b.logger.Warn("mix: failed to send thread message: %v", err)
+	}
+
+	// Respond to the interaction (ephemeral) confirming thread creation
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Content: fmt.Sprintf("✅ **Микс создан!**\n\n🗡️ Сигнатура: `%s`\n👥 Игроки: %s\n\n📸 Капитаны, скиньте скриншот результата в этот канал после игры, я его обработаю.",
-				signature, strings.Join(playerNames, ", ")),
+			Content: fmt.Sprintf("✅ **Микс создан!**\n\n📁 Ветка: <#%s>\n👥 Игроки: %s\n\n📸 Скидывайте скриншоты в созданную ветку.",
+				thread.ID, strings.Join(playerNames, ", ")),
+			Flags: discordgo.MessageFlagsEphemeral,
 		},
 	})
+
+	b.logger.Info("mix: thread %s created for signature %s", thread.ID, signature)
+
+	// Save the thread_id to the database so screenshots in this thread
+	// can be matched to the correct player list for AI processing.
+	// Note: create_mix doesn't create a lobby_matches row yet — for admins,
+	// this is informational. The real thread_id assignment happens in
+	// handleSelectTeamA and handleBalance via CreateMatch → SaveThreadID.
+	// We store it on an in-memory map as fallback.
+	b.threadPlayerCache[thread.ID] = playerNames
 }
 
 func (b *Bot) buildLobbyEmbed() *discordgo.MessageEmbed {
@@ -253,20 +288,11 @@ func (b *Bot) buildLobbyComponents() []discordgo.MessageComponent {
 }
 
 // findPlayerByDiscordID looks up a player by discord_id in the database.
-// For now, uses the player list search. In production, use a dedicated repo method.
+// Uses O(1) direct SQL query — no longer loads all players into memory.
 func (b *Bot) findPlayerByDiscordID(discordID string) (models.Player, error) {
-	// Fallback: search by cached name match (discord username).
-	// Full implementation requires a repo method GetPlayerByDiscordID.
-	players, err := b.services.MatchService.GetPlayerList()
+	id, name, err := b.services.MatchService.GetPlayerByDiscordID(discordID)
 	if err != nil {
-		return models.Player{}, err
+		return models.Player{}, fmt.Errorf("player not found for discord id %s", discordID)
 	}
-
-	for _, p := range players {
-		if strings.EqualFold(p.Name, discordID) {
-			return p, nil
-		}
-	}
-
-	return models.Player{}, fmt.Errorf("player not found for discord id %s", discordID)
+	return models.Player{ID: id, Name: name}, nil
 }

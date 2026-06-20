@@ -656,3 +656,38 @@ func (r *MatchPostgres) RenamePlayer(id int, newName string) error {
 
 	return nil
 }
+
+// GetDiscordIDByPlayerID returns the discord_id for a given player ID.
+func (r *MatchPostgres) GetDiscordIDByPlayerID(playerID int) (string, error) {
+	var discordID sql.NullString
+	err := r.db.QueryRow(
+		`SELECT discord_id FROM players WHERE id = $1 AND is_deleted = FALSE`, playerID,
+	).Scan(&discordID)
+	if err == sql.ErrNoRows {
+		return "", fmt.Errorf("player %d not found", playerID)
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to get discord_id for player %d: %w", playerID, err)
+	}
+	if !discordID.Valid {
+		return "", fmt.Errorf("player %d has no discord_id linked", playerID)
+	}
+	return discordID.String, nil
+}
+
+// GetPlayerByDiscordID returns the player ID and name for a given discord_id.
+// This is an O(1) direct SQL lookup instead of iterating all players in memory.
+func (r *MatchPostgres) GetPlayerByDiscordID(discordID string) (int, string, error) {
+	var id int
+	var name string
+	err := r.db.QueryRow(
+		`SELECT id, name FROM players WHERE discord_id = $1 AND is_deleted = FALSE`, discordID,
+	).Scan(&id, &name)
+	if err == sql.ErrNoRows {
+		return 0, "", fmt.Errorf("player with discord_id %s not found", discordID)
+	}
+	if err != nil {
+		return 0, "", fmt.Errorf("failed to get player by discord_id %s: %w", discordID, err)
+	}
+	return id, name, nil
+}

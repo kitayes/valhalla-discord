@@ -26,6 +26,8 @@ type Match interface {
 	EnsurePlayerExists(name string) (int, error)
 	GetAllPlayers() ([]models.Player, error)
 	GetPlayerNameByID(id int) (string, error)
+	GetDiscordIDByPlayerID(playerID int) (string, error)
+	GetPlayerByDiscordID(discordID string) (int, string, error)
 	WipePlayerByID(id int) error
 	RestorePlayer(id int) error
 	RenamePlayer(id int, newName string) error
@@ -70,10 +72,40 @@ type Telegram interface {
 	SetSetting(key, value string) error
 }
 
+type LobbyMatch interface {
+	Create(req models.CreateLobbyMatchRequest) (int, error)
+	GetByID(id int) (*models.LobbyMatch, error)
+	AtomicSetWinner(matchID int, winner string) (bool, error)
+	GetAllByGuild(guildID string, limit int) ([]models.LobbyMatch, error)
+	GetActiveByGuild(guildID string) (*models.LobbyMatch, error)
+	GetPlayerMMRsBatch(playerIDs []int) (map[int]int, error)
+	UpdatePlayerMMR(playerID, newMMR int) error
+	SaveThreadID(matchID int, threadID string) error
+	GetByThreadID(threadID string) (*models.LobbyMatch, error)
+	GetPlayerNamesByMatchID(matchID int) ([]string, error)
+}
+
+type Bet interface {
+	PlaceBet(req models.PlaceBetRequest) error
+	GetBetsByMatch(matchID int) ([]models.Bet, error)
+	PayoutWinners(matchID int, winningTeam string) (map[int64]int, error)
+	GetPlayerPoints(tgUserID int64) (int, error)
+}
+
+type License interface {
+	IsLicenseValid(guildID string) (bool, error)
+	ExpireLicense(guildID string) error
+	UpgradeLicense(guildID string, expiresAt time.Time) error
+	GetLicenseInfo(guildID string) (status string, expiresAt time.Time, err error)
+}
+
 type Repository struct {
 	Match
 	ProfileLink
 	Telegram
+	LobbyMatch
+	Bet
+	License
 	db *sql.DB
 }
 
@@ -86,6 +118,9 @@ func NewRepository(cfg *Config, db *sql.DB, cacheSize int, embeddingClient *ai.E
 		Match:       matchRepo,
 		ProfileLink: NewProfileLinkPostgres(db),
 		Telegram:    NewTelegramPostgres(db),
+		LobbyMatch:  NewLobbyMatchPostgres(db),
+		Bet:         NewBetPostgres(db),
+		License:     NewLicensePostgres(db),
 		db:          db,
 	}, nil
 }

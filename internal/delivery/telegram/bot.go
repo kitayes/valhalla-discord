@@ -1,10 +1,10 @@
 package telegram
 
 import (
+	"blackwatch/internal/application"
 	"fmt"
 	"strings"
 	"time"
-	"blackwatch/internal/application"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -13,11 +13,12 @@ type Bot struct {
 	bot                *tgbotapi.BotAPI
 	service            application.TelegramService
 	profileLinkService application.ProfileLinkService
+	bettingBot         *BettingBot
 	logger             application.Logger
 	adminIDs           map[int64]struct{}
 }
 
-func NewBot(token string, adminIDs []int64, service application.TelegramService, profileLinkService application.ProfileLinkService, logger application.Logger) (*Bot, error) {
+func NewBot(token string, adminIDs []int64, service application.TelegramService, profileLinkService application.ProfileLinkService, bettingService *application.BettingService, telegramChannelID string, logger application.Logger) (*Bot, error) {
 	bot, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create telegram bot: %w", err)
@@ -30,13 +31,21 @@ func NewBot(token string, adminIDs []int64, service application.TelegramService,
 
 	logger.Info("Telegram bot authorized on account %s", bot.Self.UserName)
 
-	return &Bot{
+	b := &Bot{
 		bot:                bot,
 		service:            service,
 		profileLinkService: profileLinkService,
 		logger:             logger,
 		adminIDs:           admins,
-	}, nil
+	}
+
+	// Initialize betting extension
+	if bettingService != nil && telegramChannelID != "" {
+		b.bettingBot = NewBettingBot(b, bettingService, telegramChannelID, logger)
+		logger.Info("Telegram betting engine initialized for channel %s", telegramChannelID)
+	}
+
+	return b, nil
 }
 
 func (b *Bot) Start() {
@@ -145,7 +154,7 @@ func (b *Bot) processTechnicalDefeat() {
 			}
 		}
 	}
-	
+
 	for adminID := range b.adminIDs {
 		b.sendMessage(adminID, report.String(), "empty")
 	}
