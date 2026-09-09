@@ -1,0 +1,54 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck        # unchecked errors — how the tx.Rollback leaks got in
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - bodyclose
+    - rowserrcheck    # rows.Err() after iterating sql.Rows
+    - sqlclosecheck   # unclosed sql.Rows / sql.Stmt
+    - noctx
+    - sloglint        # slog key/value misuse — the broken logger wrapper
+    - loggercheck     # odd number of key/value args in logging calls
+    - copyloopvar
+    - nilerr
+    - errorlint       # err == sql.ErrNoRows instead of errors.Is
+
+  settings:
+    errcheck:
+      # Discord/Telegram responses are best-effort; failures are already logged
+      # by the transport. Everything else must be handled.
+      exclude-functions:
+        - (*github.com/bwmarrin/discordgo.Session).InteractionRespond
+        - (*github.com/bwmarrin/discordgo.Session).ChannelMessageSend
+    sloglint:
+      no-mixed-args: true
+
+  exclusions:
+    rules:
+      # Tests may ignore errors on helper calls.
+      - path: _test\.go
+        linters:
+          - errcheck
+
+      # option.WithCredentialsFile is deprecated, and so is every option that
+      # takes credentials as a file or as JSON. The replacement is
+      # option.WithAuthCredentials, which means building the credentials through
+      # cloud.google.com/go/auth and promoting it to a direct dependency —
+      # a change to how the bot authenticates to Google, not a lint fix.
+      # Excluded deliberately so the linter is green on a clean tree; migrating
+      # the Sheets/Drive auth is its own task.
+      - path: pkg/sheets/client\.go
+        text: "SA1019: option.WithCredentials"
+        linters:
+          - staticcheck
+
+formatters:
+  enable:
+    - gofmt
