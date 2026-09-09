@@ -1,10 +1,17 @@
 package application
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
+	"unicode"
+	"unicode/utf8"
 )
+
+// minKeywordLength drops words too short to discriminate between FAQ sections.
+const minKeywordLength = 4
 
 // FAQService manages the FAQ knowledge base and answers user questions via DeepSeek/Discord-answers.
 type FAQService struct {
@@ -17,7 +24,7 @@ type FAQService struct {
 
 // FAQClient is the interface for answering questions (DeepSeek API or fallback).
 type FAQClient interface {
-	AnswerQuestion(faqContext, userQuestion string) (string, error)
+	AnswerQuestion(ctx context.Context, faqContext, userQuestion string) (string, error)
 }
 
 // NewFAQService creates a new FAQ service.
@@ -47,7 +54,7 @@ func (s *FAQService) ReloadFAQ() error {
 }
 
 // AnswerQuestion looks up the FAQ and asks DeepSeek (or in-memory search) for an answer.
-func (s *FAQService) AnswerQuestion(userQuestion string) string {
+func (s *FAQService) AnswerQuestion(ctx context.Context, userQuestion string) string {
 	s.mu.RLock()
 	faqContext := s.cachedFAQ
 	s.mu.RUnlock()
@@ -57,7 +64,7 @@ func (s *FAQService) AnswerQuestion(userQuestion string) string {
 	}
 
 	if s.faqClient != nil {
-		answer, err := s.faqClient.AnswerQuestion(faqContext, userQuestion)
+		answer, err := s.faqClient.AnswerQuestion(ctx, faqContext, userQuestion)
 		if err != nil {
 			s.logger.Error("faq: DeepSeek error: %v", err)
 			return s.fallbackSearch(userQuestion, faqContext)
@@ -68,14 +75,91 @@ func (s *FAQService) AnswerQuestion(userQuestion string) string {
 	return s.fallbackSearch(userQuestion, faqContext)
 }
 
-// fallbackSearch performs a simple keyword match against the FAQ when DeepSeek is unavailable.
+// fallbackSearch performs a keyword match against the FAQ when DeepSeek is
+// unavailable. It used to ignore both arguments and return a fixed blurb, so an
+// outage meant nobody could get an answer even when the knowledge base held one.
+//
+// The FAQ is treated as markdown sections separated by headings; the section
+// sharing the most keywords with the question wins.
 func (s *FAQService) fallbackSearch(question, faq string) string {
-	// Return a generic helpful message with the FAQ content
-	return "ℹ️ **Ответ из базы знаний:**\n\nК сожалению, DeepSeek API недоступен. Вот краткая информация:\n\n" +
-		"Используйте команды:\n" +
-		"• `/link <ID>` — привязка Telegram\n" +
-		"• `/profile <ID>` — статистика игрока\n" +
-		"• `/top` — таблица лидеров\n" +
-		"• `/faq <вопрос>` — поиск по базе знаний\n\n" +
-		"Если у вас конкретный вопрос — обратитесь к администратору."
+	best, score := bestFAQSection(question, faq)
+	if score == 0 {
+		return "⚠️ Не нашёл ответа в базе знаний, а ИИ-ассистент сейчас недоступен.\n\n" +
+			"Попробуйте переформулировать вопрос или обратитесь к администратору."
+	}
+
+	return "ℹ️ **Из базы знаний** (ИИ-ассистент недоступен, показываю ближайший раздел):\n\n" + best
+}
+
+// bestFAQSection returns the FAQ section matching the most question keywords,
+// along with the number of keywords it matched.
+func bestFAQSection(question, faq string) (string, int) {
+	keywords := extractKeywords(question)
+	if len(keywords) == 0 {
+		return "", 0
+	}
+
+	var best string
+	bestScore := 0
+	for _, section := range splitFAQSections(faq) {
+		lowered := strings.ToLower(section)
+		score := 0
+		for _, kw := range keywords {
+			if strings.Contains(lowered, kw) {
+				score++
+			}
+		}
+		if score > bestScore {
+			bestScore, best = score, section
+		}
+	}
+
+	if bestScore == 0 {
+		return "", 0
+	}
+	return strings.TrimSpace(best), bestScore
+}
+
+// splitFAQSections breaks the knowledge base at markdown headings, falling back
+// to blank-line paragraphs when it has no headings.
+func splitFAQSections(faq string) []string {
+	var sections []string
+	var current strings.Builder
+
+	hasHeading := false
+	for _, line := range strings.Split(faq, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			hasHeading = true
+			if strings.TrimSpace(current.String()) != "" {
+				sections = append(sections, current.String())
+			}
+			current.Reset()
+		}
+		current.WriteString(line)
+		current.WriteString("\n")
+	}
+	if strings.TrimSpace(current.String()) != "" {
+		sections = append(sections, current.String())
+	}
+
+	if !hasHeading {
+		return strings.Split(faq, "\n\n")
+	}
+	return sections
+}
+
+// extractKeywords lowercases the question and drops punctuation and words too
+// short to carry meaning.
+func extractKeywords(question string) []string {
+	fields := strings.FieldsFunc(strings.ToLower(question), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+
+	var keywords []string
+	for _, f := range fields {
+		if utf8.RuneCountInString(f) >= minKeywordLength {
+			keywords = append(keywords, f)
+		}
+	}
+	return keywords
 }

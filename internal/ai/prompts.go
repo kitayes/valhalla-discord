@@ -3,7 +3,7 @@ package ai
 import "fmt"
 
 const (
-	geminiModel      = "gemini-2.5-flash-lite"
+	geminiModel      = "gemini-3.5-flash"
 	aiTemperature    = 0.1
 	responseMIMEType = "application/json"
 )

@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -14,13 +15,11 @@ func NewLicensePostgres(db *sql.DB) *LicensePostgres {
 	return &LicensePostgres{db: db}
 }
 
-// IsLicenseValid checks whether the guild's license is still active.
-// Returns true if the license is TRIAL or PRO and has not expired.
-func (r *LicensePostgres) IsLicenseValid(guildID string) (bool, error) {
+func (r *LicensePostgres) IsLicenseValid(ctx context.Context, guildID string) (bool, error) {
 	var status string
 	var expiresAt time.Time
 
-	err := r.db.QueryRow(
+	err := r.db.QueryRowContext(ctx,
 		`SELECT license_status, license_expires_at
 		 FROM discord_servers WHERE guild_id = $1`,
 		guildID,
@@ -28,7 +27,7 @@ func (r *LicensePostgres) IsLicenseValid(guildID string) (bool, error) {
 
 	if err == sql.ErrNoRows {
 		// Guild not registered — auto-register with TRIAL
-		return r.autoRegisterTrial(guildID)
+		return r.autoRegisterTrial(ctx, guildID)
 	}
 	if err != nil {
 		return false, fmt.Errorf("failed to check license: %w", err)
@@ -42,8 +41,8 @@ func (r *LicensePostgres) IsLicenseValid(guildID string) (bool, error) {
 }
 
 // autoRegisterTrial creates a new guild entry with TRIAL status (30 days).
-func (r *LicensePostgres) autoRegisterTrial(guildID string) (bool, error) {
-	_, err := r.db.Exec(
+func (r *LicensePostgres) autoRegisterTrial(ctx context.Context, guildID string) (bool, error) {
+	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO discord_servers (guild_id, license_status, license_expires_at)
 		 VALUES ($1, 'TRIAL', $2)
 		 ON CONFLICT (guild_id) DO NOTHING`,
@@ -56,8 +55,8 @@ func (r *LicensePostgres) autoRegisterTrial(guildID string) (bool, error) {
 }
 
 // ExpireLicense sets a guild's license to EXPIRED.
-func (r *LicensePostgres) ExpireLicense(guildID string) error {
-	_, err := r.db.Exec(
+func (r *LicensePostgres) ExpireLicense(ctx context.Context, guildID string) error {
+	_, err := r.db.ExecContext(ctx,
 		`UPDATE discord_servers
 		 SET license_status = 'EXPIRED', license_expires_at = $1
 		 WHERE guild_id = $2`,
@@ -70,8 +69,8 @@ func (r *LicensePostgres) ExpireLicense(guildID string) error {
 }
 
 // UpgradeLicense sets a guild's license to PRO with an expiration date.
-func (r *LicensePostgres) UpgradeLicense(guildID string, expiresAt time.Time) error {
-	_, err := r.db.Exec(
+func (r *LicensePostgres) UpgradeLicense(ctx context.Context, guildID string, expiresAt time.Time) error {
+	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO discord_servers (guild_id, license_status, license_expires_at)
 		 VALUES ($1, 'PRO', $2)
 		 ON CONFLICT (guild_id) DO UPDATE
@@ -85,8 +84,8 @@ func (r *LicensePostgres) UpgradeLicense(guildID string, expiresAt time.Time) er
 }
 
 // GetLicenseInfo returns the full license info for a guild.
-func (r *LicensePostgres) GetLicenseInfo(guildID string) (status string, expiresAt time.Time, err error) {
-	err = r.db.QueryRow(
+func (r *LicensePostgres) GetLicenseInfo(ctx context.Context, guildID string) (status string, expiresAt time.Time, err error) {
+	err = r.db.QueryRowContext(ctx,
 		`SELECT license_status, license_expires_at
 		 FROM discord_servers WHERE guild_id = $1`,
 		guildID,

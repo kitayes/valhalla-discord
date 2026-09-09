@@ -1,8 +1,12 @@
 package discord
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,385 +18,344 @@ import (
 )
 
 // =====================================================================
-// Phase 5: Full Discord Matchmaking — Referee UI, Captains, Team Dist, Atomic Closure
+// Phase 5: Full Discord Matchmaking — Referee UI, Captains, 5-step team dist
 // =====================================================================
 
 const (
-	// create_match command
 	selectMenuCaptainA = "create_match_captain_a"
 	selectMenuCaptainB = "create_match_captain_b"
 	selectMenuTeamA    = "create_match_team_a"
 	selectMenuTeamB    = "create_match_team_b"
 
-	// match closure buttons
 	buttonTeamAWin = "match_team_a_win"
 	buttonTeamBWin = "match_team_b_win"
 
-	// embed colors
 	matchEmbedColor = 0x9B59B6
 	winColor        = 0x2ECC71
 	loseColor       = 0xE74C3C
 )
 
-// =====================================================================
-// Command Registration
-// =====================================================================
-
 func (b *Bot) newCreateMatchCommand() *discordgo.ApplicationCommand {
 	return &discordgo.ApplicationCommand{
 		Name:        "create_match",
-		Description: "Создать матч из активного лобби (Только SUDЬЯ / Рефери)",
+		Description: "Создать матч из активного лобби (Только SUDЬЯ/админы)",
 	}
 }
 
-// MMR-based auto-balance
 func (b *Bot) newBalanceCommand() *discordgo.ApplicationCommand {
 	return &discordgo.ApplicationCommand{
 		Name:        "balance",
-		Description: "Автоматически разделить 10 игроков из лобби на 2 команды с минимальной разницей MMR (Только SUDЬЯ)",
+		Description: "Авто-баланс 10 игроков из лобби на 2 команды по MMR (Только SUDЬЯ/админы)",
 	}
 }
 
-// =====================================================================
-// Component Handler Registration
-// =====================================================================
-
 func (b *Bot) RegisterMatchHandlers() {
-	b.session.AddHandler(b.onMatchSelectMenu)
-	b.session.AddHandler(b.onMatchWinButton)
+	b.session.AddHandler(b.wrapRecover(b.onMatchSelectMenu))
+	b.session.AddHandler(b.wrapRecover(b.onMatchWinButton))
+}
+
+func (b *Bot) RegisterRequeueHandler() {
+	b.session.AddHandler(b.wrapRecover(b.onRequeueButton))
 }
 
 // =====================================================================
-// Step 1: handleCreateMatch — Referee initiates match creation
+// Step 1: handleCreateMatch
 // =====================================================================
 
-func (b *Bot) handleCreateMatch(s *discordgo.Session, i *discordgo.Interaction) {
-	// Referee role check
-	if !b.isReferee(i.Member) {
-		b.respondMessage(s, i, "⛔ Только рефери (роль SUDЬЯ) могут создавать матчи.", true)
+func (b *Bot) handleCreateMatch(ctx context.Context, s *discordgo.Session, i *discordgo.Interaction) {
+	if !b.requireReferee(s, i) {
 		return
 	}
 
 	activePlayers := b.services.Lobby.GetActivePlayers()
-	if len(activePlayers) < 10 {
-		b.respondMessage(s, i,
-			fmt.Sprintf("⚠️ Недостаточно игроков в лобби. Нужно 10, сейчас %d.", len(activePlayers)),
-			true,
-		)
+	if len(activePlayers) < teamSize*2 {
+		b.respondMessage(s, i, fmt.Sprintf("⚠️ Нужно %d игроков в лобби, сейчас %d.", teamSize*2, len(activePlayers)), true)
 		return
 	}
 
-	// Sort by ID for consistent display
-	sort.Slice(activePlayers, func(a, b int) bool {
-		return activePlayers[a].ID < activePlayers[b].ID
-	})
+	sort.Slice(activePlayers, func(a, b int) bool { return activePlayers[a].ID < activePlayers[b].ID })
 
-	// Build options for player select menus
 	var playerOptions []discordgo.SelectMenuOption
 	for _, p := range activePlayers {
-		playerOptions = append(playerOptions, discordgo.SelectMenuOption{
-			Label: p.Name,
-			Value: fmt.Sprintf("%d", p.ID),
-		})
+		playerOptions = append(playerOptions, discordgo.SelectMenuOption{Label: p.Name, Value: fmt.Sprintf("%d", p.ID)})
 	}
 
-	// Step 1: Select Captain A
 	minOne := 1
 	maxOne := 1
-	s.InteractionRespond(i, &discordgo.InteractionResponse{
+	b.respond(s, i, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
 			Content: "🛡️ **Шаг 1/4: Выберите Капитана A**",
 			Flags:   discordgo.MessageFlagsEphemeral,
 			Components: []discordgo.MessageComponent{
-				discordgo.ActionsRow{
-					Components: []discordgo.MessageComponent{
-						discordgo.SelectMenu{
-							CustomID:    selectMenuCaptainA,
-							Placeholder: "Выберите Капитана A...",
-							MinValues:   &minOne,
-							MaxValues:   maxOne,
-							Options:     playerOptions,
-						},
-					},
-				},
+				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+					discordgo.SelectMenu{CustomID: selectMenuCaptainA, Placeholder: "Выберите Капитана A...", MinValues: &minOne, MaxValues: maxOne, Options: playerOptions},
+				}},
 			},
 		},
 	})
 }
-
-// =====================================================================
-// Select Menu Router
-// =====================================================================
 
 func (b *Bot) onMatchSelectMenu(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	if i.Type != discordgo.InteractionMessageComponent {
 		return
 	}
 
-	data := i.MessageComponentData()
-	customID := data.CustomID
+	customID := i.MessageComponentData().CustomID
+	if customID != selectMenuCaptainA &&
+		!strings.HasPrefix(customID, selectMenuCaptainB) &&
+		!strings.HasPrefix(customID, selectMenuTeamA) &&
+		!strings.HasPrefix(customID, selectMenuTeamB) {
+		return
+	}
+
+	ctx, cancel := b.opContext(interactionTimeout)
+	defer cancel()
+
+	// The wizard runs entirely on component interactions, which never pass
+	// through onInteraction — so every step has to carry its own gates. The last
+	// step creates the match, empties the lobby and opens betting; only the WIN
+	// button at the end of the same flow used to check anything.
+	if !b.guardComponent(ctx, s, i.Interaction) {
+		return
+	}
+	if !b.requireReferee(s, i.Interaction) {
+		return
+	}
 
 	if customID == selectMenuCaptainA {
-		b.handleSelectCaptainA(s, i)
-		return
-	}
-	if strings.HasPrefix(customID, selectMenuCaptainB) {
-		b.handleSelectCaptainB(s, i)
-		return
-	}
-	if strings.HasPrefix(customID, selectMenuTeamA) {
-		b.handleSelectTeamA(s, i)
-		return
-	}
-	if customID == selectMenuTeamB {
-		b.handleSelectTeamB(s, i)
-		return
+		b.handleSelectCaptainA(ctx, s, i)
+	} else if strings.HasPrefix(customID, selectMenuCaptainB) {
+		b.handleSelectCaptainB(ctx, s, i)
+	} else if strings.HasPrefix(customID, selectMenuTeamA) {
+		b.handleSelectTeamA(ctx, s, i)
+	} else if strings.HasPrefix(customID, selectMenuTeamB) {
+		b.handleSelectTeamB(ctx, s, i)
 	}
 }
 
-// =====================================================================
-// Step 2: handleSelectCaptainA — Captain A selected, now pick Captain B
-// =====================================================================
-
-func (b *Bot) handleSelectCaptainA(s *discordgo.Session, i *discordgo.InteractionCreate) {
+func (b *Bot) handleSelectCaptainA(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) {
 	if len(i.MessageComponentData().Values) == 0 {
 		return
 	}
-
 	captainAID := i.MessageComponentData().Values[0]
-	captainAName := b.getPlayerName(captainAID)
-
+	captainAName := b.getPlayerName(ctx, captainAID)
 	activePlayers := b.services.Lobby.GetActivePlayers()
 
-	// Build player options excluding Captain A
 	var options []discordgo.SelectMenuOption
 	for _, p := range activePlayers {
 		if fmt.Sprintf("%d", p.ID) == captainAID {
 			continue
 		}
-		options = append(options, discordgo.SelectMenuOption{
-			Label: p.Name,
-			Value: fmt.Sprintf("%d", p.ID),
-		})
+		options = append(options, discordgo.SelectMenuOption{Label: p.Name, Value: fmt.Sprintf("%d", p.ID)})
 	}
 
-	// Store captainAID in the custom_id for next step (using separate select menu)
 	minOne := 1
 	maxOne := 1
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+	b.respond(s, i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
 			Content: fmt.Sprintf("🛡️ Капитан A: **%s**\n\n**Шаг 2/4: Выберите Капитана B**", captainAName),
 			Flags:   discordgo.MessageFlagsEphemeral,
 			Components: []discordgo.MessageComponent{
-				discordgo.ActionsRow{
-					Components: []discordgo.MessageComponent{
-						discordgo.SelectMenu{
-							CustomID:    fmt.Sprintf("%s_%s", selectMenuCaptainB, captainAID),
-							Placeholder: "Выберите Капитана B...",
-							MinValues:   &minOne,
-							MaxValues:   maxOne,
-							Options:     options,
-						},
-					},
-				},
+				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+					discordgo.SelectMenu{CustomID: fmt.Sprintf("%s_%s", selectMenuCaptainB, captainAID), Placeholder: "Выберите Капитана B...", MinValues: &minOne, MaxValues: maxOne, Options: options},
+				}},
 			},
 		},
 	})
 }
 
-// =====================================================================
-// Step 3: handleSelectCaptainB — Both captains selected, now pick Team A (4 players)
-// =====================================================================
-
-func (b *Bot) handleSelectCaptainB(s *discordgo.Session, i *discordgo.InteractionCreate) {
+func (b *Bot) handleSelectCaptainB(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) {
 	if len(i.MessageComponentData().Values) == 0 {
 		return
 	}
-
 	captainBID := i.MessageComponentData().Values[0]
-	captainBName := b.getPlayerName(captainBID)
-
-	// Extract captainAID from the CustomID suffix
-	customID := i.MessageComponentData().CustomID
-	parts := strings.SplitN(customID, "_", 4) // create_match_captain_b_<captainAID>
-	captainAID := parts[len(parts)-1]
-	captainAName := b.getPlayerName(captainAID)
+	captainBName := b.getPlayerName(ctx, captainBID)
+	captainAID, ok := parseCaptainBCustomID(i.MessageComponentData().CustomID)
+	if !ok {
+		b.logger.Error("match: malformed captain B custom ID %q", i.MessageComponentData().CustomID)
+		return
+	}
+	captainAName := b.getPlayerName(ctx, captainAID)
 
 	activePlayers := b.services.Lobby.GetActivePlayers()
-
-	// Build player options excluding both captains
 	var options []discordgo.SelectMenuOption
 	for _, p := range activePlayers {
 		pid := fmt.Sprintf("%d", p.ID)
 		if pid == captainAID || pid == captainBID {
 			continue
 		}
-		options = append(options, discordgo.SelectMenuOption{
-			Label: p.Name,
-			Value: pid,
-		})
+		options = append(options, discordgo.SelectMenuOption{Label: p.Name, Value: pid})
 	}
 
 	minFour := 4
 	maxFour := 4
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+	b.respond(s, i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
-			Content: fmt.Sprintf("🛡️ Капитан A: **%s**\n🛡️ Капитан B: **%s**\n\n**Шаг 3/4: Выберите 4 игроков для Команды A**",
-				captainAName, captainBName),
-			Flags: discordgo.MessageFlagsEphemeral,
+			Content: fmt.Sprintf("🛡️ Капитан A: **%s**\n🛡️ Капитан B: **%s**\n\n**Шаг 3/4: Выберите 4 игроков для Команды A**", captainAName, captainBName),
+			Flags:   discordgo.MessageFlagsEphemeral,
 			Components: []discordgo.MessageComponent{
-				discordgo.ActionsRow{
-					Components: []discordgo.MessageComponent{
-						discordgo.SelectMenu{
-							CustomID:    fmt.Sprintf("%s_%s_%s", selectMenuTeamA, captainAID, captainBID),
-							Placeholder: "Выберите 4 игроков для Команды A...",
-							MinValues:   &minFour,
-							MaxValues:   maxFour,
-							Options:     options,
-						},
-					},
-				},
+				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+					discordgo.SelectMenu{CustomID: fmt.Sprintf("%s_%s_%s", selectMenuTeamA, captainAID, captainBID), Placeholder: "Выберите 4 игроков для Команды A...", MinValues: &minFour, MaxValues: maxFour, Options: options},
+				}},
 			},
 		},
 	})
 }
 
-// =====================================================================
-// Step 4: handleSelectTeamA — Team A selected, remaining players go to Team B
-// =====================================================================
-
-func (b *Bot) handleSelectTeamA(s *discordgo.Session, i *discordgo.InteractionCreate) {
+func (b *Bot) handleSelectTeamA(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) {
 	if len(i.MessageComponentData().Values) < 4 {
 		return
 	}
-
 	teamAValues := i.MessageComponentData().Values
+	captainAID, captainBID, ok := parseTeamACustomID(i.MessageComponentData().CustomID)
+	if !ok {
+		b.logger.Error("match: malformed team A custom ID %q", i.MessageComponentData().CustomID)
+		return
+	}
+	captainAName := b.getPlayerName(ctx, captainAID)
+	captainBName := b.getPlayerName(ctx, captainBID)
 
-	// Parse customID: create_match_team_a_<captainA>_<captainB>
-	customID := i.MessageComponentData().CustomID
-	parts := strings.SplitN(customID, "_", 5)
-	captainAID := parts[len(parts)-2]
-	captainBID := parts[len(parts)-1]
-	captainAName := b.getPlayerName(captainAID)
-	captainBName := b.getPlayerName(captainBID)
-
-	// Team A = captainAID + selected 4 players
 	teamAIDs := []int{parseID(captainAID)}
 	var teamANames []string
 	teamANames = append(teamANames, captainAName)
 	for _, v := range teamAValues {
 		teamAIDs = append(teamAIDs, parseID(v))
-		teamANames = append(teamANames, b.getPlayerName(v))
+		teamANames = append(teamANames, b.getPlayerName(ctx, v))
 	}
 
-	// Team B = captainBID + all remaining active players
+	teamACombined := strings.Join(teamAValues, "-")
+
 	activePlayers := b.services.Lobby.GetActivePlayers()
-	teamASet := make(map[int]bool)
-	for _, id := range teamAIDs {
-		teamASet[id] = true
+	excludeSet := make(map[int]bool)
+	for _, aid := range teamAIDs {
+		excludeSet[aid] = true
+	}
+	excludeSet[parseID(captainBID)] = true
+
+	var options []discordgo.SelectMenuOption
+	for _, p := range activePlayers {
+		if excludeSet[p.ID] {
+			continue
+		}
+		options = append(options, discordgo.SelectMenuOption{Label: p.Name, Value: fmt.Sprintf("%d", p.ID)})
+	}
+
+	minFour := 4
+	maxFour := 4
+	b.respond(s, i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseUpdateMessage,
+		Data: &discordgo.InteractionResponseData{
+			Content: fmt.Sprintf("🛡️ Капитан A: **%s**\n🛡️ Капитан B: **%s**\n👥 Команда A: %s\n\n**Шаг 4/4: Выберите 4 игроков для Команды B**",
+				captainAName, captainBName, strings.Join(teamANames[1:], ", ")),
+			Flags: discordgo.MessageFlagsEphemeral,
+			Components: []discordgo.MessageComponent{
+				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+					discordgo.SelectMenu{CustomID: fmt.Sprintf("%s_%s_%s_%s", selectMenuTeamB, captainAID, captainBID, teamACombined), Placeholder: "Выберите 4 игроков для Команды B...", MinValues: &minFour, MaxValues: maxFour, Options: options},
+				}},
+			},
+		},
+	})
+}
+
+func (b *Bot) handleSelectTeamB(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) {
+	if len(i.MessageComponentData().Values) < 4 {
+		return
+	}
+	teamBValues := i.MessageComponentData().Values
+	captainAID, captainBID, teamAIDStrs, ok := parseTeamBCustomID(i.MessageComponentData().CustomID)
+	if !ok {
+		b.logger.Error("match: malformed team B custom ID %q", i.MessageComponentData().CustomID)
+		return
+	}
+
+	captainAName := b.getPlayerName(ctx, captainAID)
+	captainBName := b.getPlayerName(ctx, captainBID)
+
+	teamAIDs := []int{parseID(captainAID)}
+	var teamANames []string
+	teamANames = append(teamANames, captainAName)
+	for _, s := range teamAIDStrs {
+		id := parseID(s)
+		teamAIDs = append(teamAIDs, id)
+		teamANames = append(teamANames, b.getPlayerName(ctx, s))
 	}
 
 	teamBIDs := []int{parseID(captainBID)}
 	var teamBNames []string
 	teamBNames = append(teamBNames, captainBName)
-
-	for _, p := range activePlayers {
-		if !teamASet[p.ID] && p.ID != parseID(captainBID) && p.ID != parseID(captainAID) {
-			teamBIDs = append(teamBIDs, p.ID)
-			teamBNames = append(teamBNames, p.Name)
-		}
+	for _, v := range teamBValues {
+		id := parseID(v)
+		teamBIDs = append(teamBIDs, id)
+		teamBNames = append(teamBNames, b.getPlayerName(ctx, v))
 	}
 
-	// Validate team sizes
-	if len(teamBIDs) != 5 {
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: fmt.Sprintf("⚠️ Ошибка распределения команд. Команда A: %d, Команда B: %d. Попробуйте заново.", len(teamAIDs), len(teamBIDs)),
-				Flags:   discordgo.MessageFlagsEphemeral,
-			},
-		})
-		return
-	}
+	guildID := b.guildID(i.GuildID)
 
-	// Create the match in the database
-	guildID := i.GuildID
-	if guildID == "" {
-		guildID = defaultGuildID
-	}
-
-	matchID, err := b.services.Lobby.CreateMatch(guildID, parseID(captainAID), parseID(captainBID), teamAIDs, teamBIDs)
+	matchID, err := b.services.Lobby.CreateMatch(ctx, guildID, parseID(captainAID), parseID(captainBID), teamAIDs, teamBIDs)
 	if err != nil {
 		b.logger.Error("match: failed to create: %v", err)
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		b.respond(s, i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: "⚠️ Ошибка при создании матча: " + err.Error(),
-				Flags:   discordgo.MessageFlagsEphemeral,
-			},
+			Data: &discordgo.InteractionResponseData{Content: "⚠️ Ошибка при создании матча: " + err.Error(), Flags: discordgo.MessageFlagsEphemeral},
 		})
 		return
 	}
 
-	// Build public match embed
 	embed := b.buildMatchEmbed(matchID, captainAName, captainBName, teamANames, teamBNames)
+	b.publishCreatedMatch(ctx, s, i.Interaction, matchID, teamAIDs, teamBIDs, embed, captainAName, captainBName)
+	b.logger.Info("match: #%d created | Team A: %s vs Team B: %s", matchID, strings.Join(teamANames, ", "), strings.Join(teamBNames, ", "))
+}
 
-	// Send public message with Team Win buttons (visible only to referees)
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+// publishCreatedMatch is everything that has to happen once a match row exists:
+// clear the drafted players out of the lobby, post the scoreboard with the WIN
+// buttons, cache the roster and arm the betting window.
+//
+// handleSelectTeamB and handleBalance each had their own copy of this, including
+// two byte-identical button blocks. The copy in handleBalance had already
+// drifted — it never logged the created match.
+func (b *Bot) publishCreatedMatch(
+	ctx context.Context,
+	s *discordgo.Session,
+	i *discordgo.Interaction,
+	matchID int,
+	teamAIDs, teamBIDs []int,
+	embed *discordgo.MessageEmbed,
+	captainAName, captainBName string,
+) {
+	allIDs := concatIDs(teamAIDs, teamBIDs)
+	for _, pid := range allIDs {
+		b.services.Lobby.RemovePlayer(pid)
+	}
+	b.setMatchPlayers(matchID, allIDs)
+
+	b.respond(s, i, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Embeds: []*discordgo.MessageEmbed{embed},
-			Components: []discordgo.MessageComponent{
-				discordgo.ActionsRow{
-					Components: []discordgo.MessageComponent{
-						discordgo.Button{
-							Label:    "Team A WIN",
-							Style:    discordgo.SuccessButton,
-							CustomID: fmt.Sprintf("%s_%d", buttonTeamAWin, matchID),
-							Emoji:    &discordgo.ComponentEmoji{Name: "🏆"},
-						},
-						discordgo.Button{
-							Label:    "Team B WIN",
-							Style:    discordgo.DangerButton,
-							CustomID: fmt.Sprintf("%s_%d", buttonTeamBWin, matchID),
-							Emoji:    &discordgo.ComponentEmoji{Name: "🏆"},
-						},
-					},
-				},
-			},
+			Embeds:     []*discordgo.MessageEmbed{embed},
+			Components: matchResultButtons(matchID),
 		},
 	})
 
-	b.logger.Info("match: #%d created | Team A: %s vs Team B: %s", matchID,
-		strings.Join(teamANames, ", "), strings.Join(teamBNames, ", "))
+	b.openBettingWindow(ctx, matchID)
+	b.startBettingTimer(matchID)
+	b.notifyTelegramMatchLive(matchID, captainAName, captainBName)
+}
 
-	// Open betting window for 5 minutes, then auto-close
-	go b.autoCloseBetting(matchID)
-
-	// Notify Telegram about the new match asynchronously
-	go b.notifyTelegramMatchLive(matchID, captainAName, captainBName)
+// matchResultButtons builds the referee's WIN buttons for a match.
+func matchResultButtons(matchID int) []discordgo.MessageComponent {
+	return []discordgo.MessageComponent{
+		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			discordgo.Button{Label: "Team A WIN", Style: discordgo.SuccessButton, CustomID: fmt.Sprintf("%s_%d", buttonTeamAWin, matchID), Emoji: &discordgo.ComponentEmoji{Name: "🏆"}},
+			discordgo.Button{Label: "Team B WIN", Style: discordgo.DangerButton, CustomID: fmt.Sprintf("%s_%d", buttonTeamBWin, matchID), Emoji: &discordgo.ComponentEmoji{Name: "🏆"}},
+		}},
+	}
 }
 
 // =====================================================================
-// Step 5: handleSelectTeamB — (Not used; Team B is auto-selected)
-// =====================================================================
-
-func (b *Bot) handleSelectTeamB(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	// Team B is auto-computed, this is a no-op fallback.
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: "Команда B автоматически сформирована из оставшихся игроков.",
-			Flags:   discordgo.MessageFlagsEphemeral,
-		},
-	})
-}
-
-// =====================================================================
-// Match Closure: Team A WIN / Team B WIN buttons (Referee only)
+// Match Closure
 // =====================================================================
 
 func (b *Bot) onMatchWinButton(s *discordgo.Session, i *discordgo.InteractionCreate) {
@@ -400,164 +363,311 @@ func (b *Bot) onMatchWinButton(s *discordgo.Session, i *discordgo.InteractionCre
 		return
 	}
 
+	// The prefix filter runs before anything with a side effect. discordgo
+	// dispatches every component interaction to every registered handler, so a
+	// gate placed above this check would burn a rate-limit token — and answer
+	// the interaction — once per handler in the process.
 	data := i.MessageComponentData()
 	customID := data.CustomID
-
 	if !strings.HasPrefix(customID, buttonTeamAWin) && !strings.HasPrefix(customID, buttonTeamBWin) {
 		return
 	}
 
-	// Referee role check
-	if !b.isReferee(i.Member) {
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: "⛔ Только рефери (роль SUDЬЯ) могут завершать матчи.",
-				Flags:   discordgo.MessageFlagsEphemeral,
-			},
-		})
+	ctx, cancel := b.opContext(interactionTimeout)
+	defer cancel()
+
+	if !b.guardComponent(ctx, s, i.Interaction) {
+		return
+	}
+	if !b.requireReferee(s, i.Interaction) {
 		return
 	}
 
-	// Parse match ID from custom ID
-	var winner string
-	var matchID int
+	var winner, prefix string
 	if strings.HasPrefix(customID, buttonTeamAWin) {
-		winner = "Team A"
-		fmt.Sscanf(customID, buttonTeamAWin+"_%d", &matchID)
+		winner, prefix = domain.TeamA, buttonTeamAWin
 	} else {
-		winner = "Team B"
-		fmt.Sscanf(customID, buttonTeamBWin+"_%d", &matchID)
+		winner, prefix = domain.TeamB, buttonTeamBWin
+	}
+	matchID := parseID(strings.TrimPrefix(customID, prefix+"_"))
+	if matchID <= 0 {
+		b.logger.Error("match: malformed win button custom ID %q", customID)
+		b.respondMessage(s, i.Interaction, "⚠️ Некорректная кнопка. Обновите сообщение матча.", true)
+		return
 	}
 
-	// Atomic state transition: ACTIVE → PROCESSING → FINISHED
-	success, err := b.services.Lobby.AtomicMatchClosure(matchID, winner)
+	success, err := b.services.Lobby.AtomicMatchClosure(ctx, matchID, winner)
 	if err != nil {
 		b.logger.Error("match: atomic closure failed for #%d: %v", matchID, err)
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		b.respond(s, i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: "⚠️ Ошибка системы при закрытии матча. Операция отменена.",
-				Flags:   discordgo.MessageFlagsEphemeral,
-			},
+			Data: &discordgo.InteractionResponseData{Content: "⚠️ Ошибка системы при закрытии матча.", Flags: discordgo.MessageFlagsEphemeral},
 		})
 		return
 	}
-
 	if !success {
-		// Double-click or already processed — silently ignore
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		b.respond(s, i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{Content: "⏳ Этот матч уже обрабатывается или завершён.", Flags: discordgo.MessageFlagsEphemeral},
+		})
+		return
+	}
+
+	// Stop taking bets before settling them; the 5-minute timer may still be pending.
+	b.closeBettingWindow(ctx, matchID)
+
+	// The pool is settled first and independently of the rating. The two share
+	// nothing but the winner, and hanging the payout off a successful Elo update
+	// meant a failure there left every stake deducted on a match that can never
+	// be replayed — AtomicSetWinner refuses a second attempt and /cancel_match
+	// only takes ACTIVE matches.
+	b.goBackground("telegram-payout", backgroundTimeout, func(bg context.Context) {
+		b.processTelegramPayout(bg, matchID, winner)
+	})
+
+	// MVP/SVP are read off the match screenshot and stored on the match, so an
+	// empty pair here means "use whatever was recognised".
+	newMMRs, tierChanges, err := b.services.EloService.ProcessMatchResult(ctx, matchID, winner, "", "")
+	if err != nil {
+		// The winner is already committed and AtomicSetWinner will refuse a
+		// second attempt, so the rating for this match cannot be replayed by
+		// clicking again. Say so instead of rendering a clean "match finished"
+		// embed over a rating that was never applied.
+		b.logger.Error("elo: failed to process match #%d: %v", matchID, err)
+		b.respondMessage(s, i.Interaction, fmt.Sprintf(
+			"⚠️ Матч #%d закрыт (%s), но рейтинг применён не полностью — требуется ручная проверка. "+
+				"Ставки рассчитываются отдельно.", matchID, winner), false)
+		return
+	}
+
+	if len(newMMRs) > 0 {
+		b.goBackground("sync-mmr-sheet", backgroundTimeout, func(context.Context) {
+			b.services.Lobby.SyncMMRToSheet(newMMRs)
+		})
+		guildID := i.GuildID
+		b.goBackground("sync-tier-roles", backgroundTimeout, func(bg context.Context) {
+			b.syncTierRoles(bg, s, guildID, newMMRs)
+		})
+	}
+	if len(tierChanges) > 0 {
+		channelID := b.tierAnnounceChannel(i.ChannelID)
+		b.goBackground("announce-tier-changes", backgroundTimeout, func(bg context.Context) {
+			b.services.EloService.AnnounceTierChanges(bg, s, channelID, tierChanges)
+		})
+	}
+
+	match, err := b.services.Lobby.GetMatch(ctx, matchID)
+	if err != nil {
+		b.logger.Error("match: closed #%d but failed to reload it for the result embed: %v", matchID, err)
+		b.respondMessage(s, i.Interaction, fmt.Sprintf("✅ Матч #%d закрыт (%s), но карточку результата отрисовать не удалось.", matchID, winner), false)
+		return
+	}
+
+	// The requeue button rides on the result card instead of arriving as its own
+	// message. One match used to leave two messages in the channel, and the
+	// second one carried nothing but a button.
+	embed := b.buildMatchResultEmbed(ctx, match, winner)
+	b.respond(s, i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseUpdateMessage,
+		Data: &discordgo.InteractionResponseData{
+			Embeds: []*discordgo.MessageEmbed{embed},
+			Components: []discordgo.MessageComponent{
+				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+					discordgo.Button{Label: "🔁 Встать в очередь лобби", Style: discordgo.SecondaryButton, CustomID: fmt.Sprintf("requeue_%d", matchID)},
+				}},
+			},
+		},
+	})
+
+	if match.ThreadID != "" {
+		threadID := match.ThreadID
+		b.goBackground("archive-thread", backgroundTimeout, func(bg context.Context) {
+			b.archiveThreadIfMatchFinished(bg, s, threadID)
+		})
+	}
+}
+
+// =====================================================================
+// /cancel_match command
+// =====================================================================
+
+func (b *Bot) handleCancelMatch(ctx context.Context, s *discordgo.Session, i *discordgo.Interaction) {
+	if !b.requireReferee(s, i) {
+		return
+	}
+	matchID := int(i.ApplicationCommandData().Options[0].IntValue())
+
+	playerIDs, err := b.services.Lobby.CancelMatch(ctx, matchID)
+	if err != nil {
+		b.logger.Error("cancel_match: failed to cancel #%d: %v", matchID, err)
+		b.respondMessage(s, i, cancelFailureMessage(err, matchID), true)
+		return
+	}
+
+	// Refund first: the match row is already committed as FINISHED, so from this
+	// point neither this command nor the WIN button can be replayed to move the
+	// stakes. Everything below is cosmetic by comparison. A failure here is
+	// picked up by BettingService.SettlePending on the next sweep.
+	refunded, refundErr := b.services.BettingService.RefundAllBets(ctx, matchID)
+	if refundErr != nil {
+		b.logger.Error("cancel_match: failed to refund bets for #%d, left for the sweep: %v", matchID, refundErr)
+	} else {
+		b.logger.Info("cancel_match: refunded %d bets for #%d", refunded, matchID)
+	}
+
+	refundNote := fmt.Sprintf("ставки возвращены (%d)", refunded)
+	if refundErr != nil {
+		refundNote = "⚠️ **ставки вернуть сразу не удалось — возврат выполнится автоматически**"
+	}
+
+	// Count what actually happened. The previous version discarded the result of
+	// every re-add and then reported all ten players as returned, whether the
+	// lobby was closed, the player was queue-banned, or the lookup failed.
+	names, err := b.services.MatchService.GetPlayerNamesByIDs(ctx, playerIDs)
+	if err != nil {
+		b.logger.Error("cancel_match: failed to resolve rosters for #%d: %v", matchID, err)
+		names = map[int]string{}
+	}
+
+	requeued := 0
+	for _, pid := range playerIDs {
+		discordID, err := b.services.MatchService.GetDiscordIDByPlayerID(ctx, pid)
+		if err != nil {
+			b.logger.Warn("cancel_match: player %d not returned to lobby: %v", pid, err)
+			continue
+		}
+		if _, err := b.services.Lobby.TryAddPlayer(ctx, models.Player{ID: pid, Name: names[pid]}, discordID); err != nil {
+			b.logger.Warn("cancel_match: player %d not returned to lobby: %v", pid, err)
+			continue
+		}
+		requeued++
+	}
+
+	if match, err := b.services.Lobby.GetMatch(ctx, matchID); err != nil {
+		b.logger.Warn("cancel_match: cannot reload match #%d: %v", matchID, err)
+	} else if match.ThreadID != "" {
+		threadID := match.ThreadID
+		if _, err := s.ChannelMessageSend(threadID, fmt.Sprintf("🚫 **Матч #%d отменён судьёй.** %s", matchID, refundNote)); err != nil {
+			b.logger.Warn("cancel_match: failed to post to thread %s: %v", threadID, err)
+		}
+		b.goBackground("archive-thread", backgroundTimeout, func(bg context.Context) {
+			b.archiveThreadIfMatchFinished(bg, s, threadID)
+		})
+	}
+
+	b.respondMessage(s, i, fmt.Sprintf("✅ Матч #%d отменён. Возвращено в лобби: %d из %d. %s",
+		matchID, requeued, len(playerIDs), refundNote), false)
+}
+
+// cancelFailureMessage renders a cancellation refusal. "There is no such match"
+// and "that match is already over" send the referee to different places, so they
+// do not share one message.
+func cancelFailureMessage(err error, matchID int) string {
+	switch {
+	case errors.Is(err, domain.ErrMatchNotFound):
+		return fmt.Sprintf("❌ Матч #%d не найден. Проверьте номер в карточке матча.", matchID)
+	case errors.Is(err, domain.ErrMatchNotActive):
+		return fmt.Sprintf("❌ Матч #%d уже завершён или отменён — отменять нечего.", matchID)
+	default:
+		return fmt.Sprintf("❌ Не удалось отменить матч #%d. Попробуйте ещё раз.", matchID)
+	}
+}
+
+// =====================================================================
+// Requeue button
+// =====================================================================
+
+func (b *Bot) onRequeueButton(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	if i.Type != discordgo.InteractionMessageComponent {
+		return
+	}
+
+	data := i.MessageComponentData()
+	if !strings.HasPrefix(data.CustomID, "requeue_") {
+		return
+	}
+
+	ctx, cancel := b.opContext(interactionTimeout)
+	defer cancel()
+
+	if !b.guardComponent(ctx, s, i.Interaction) {
+		return
+	}
+
+	matchID := parseID(strings.TrimPrefix(data.CustomID, "requeue_"))
+	if matchID <= 0 {
+		b.logger.Error("requeue: malformed custom ID %q", data.CustomID)
+		return
+	}
+
+	member := interactionMember(i.Interaction)
+	if member == nil {
+		return
+	}
+	userID := member.User.ID
+	player, err := b.findPlayerByDiscordID(ctx, userID)
+	if err != nil {
+		b.respond(s, i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
-				Content: "⏳ Этот матч уже обрабатывается или завершён.",
-				Flags:   discordgo.MessageFlagsEphemeral,
+				Content:    "⚠️ Ваш Discord не привязан к профилю игрока. Нажмите кнопку и укажите свой ник в игре.",
+				Components: bindPromptComponents(),
+				Flags:      discordgo.MessageFlagsEphemeral,
 			},
 		})
 		return
 	}
 
-	// Process Elo-MMR (MVP/SVP bonuses applied when AI processes screenshots)
-	newMMRs, tierChanges, err := b.services.EloService.ProcessMatchResult(matchID, winner, "", "")
-	if err != nil {
-		b.logger.Error("elo: failed to process match #%d: %v", matchID, err)
+	// Verify if the player was a participant of the match
+	isParticipant := false
+	if pids, ok := b.getMatchPlayers(matchID); ok {
+		for _, pid := range pids {
+			if pid == player.ID {
+				isParticipant = true
+				break
+			}
+		}
 	} else {
-		if len(newMMRs) > 0 {
-			b.logger.Info("elo: match #%d — %d players' MMR updated", matchID, len(newMMRs))
-			go b.services.Lobby.SyncMMRToSheet(newMMRs)
+		// Fallback: check database if cache expired. A lookup failure is not the
+		// same answer as "you did not play in it" — say so rather than accusing
+		// the user.
+		match, err := b.services.Lobby.GetMatch(ctx, matchID)
+		if err != nil {
+			b.logger.Error("requeue: failed to load match #%d: %v", matchID, err)
+			b.respondMessage(s, i.Interaction, "⚠️ Не удалось проверить состав матча. Попробуйте ещё раз.", true)
+			return
 		}
-		// Announce tier promotions/demotions in guild channel
-		for _, ch := range tierChanges {
-			go b.services.EloService.AnnounceTierChanges(s, i.GuildID, []application.TierChange{ch})
-		}
-	}
-
-	// Process Telegram bet payouts asynchronously
-	go b.processTelegramPayout(matchID, winner)
-
-	// Update the embed with the winner
-	match, _ := b.services.Lobby.GetMatch(matchID)
-	if match != nil {
-		embed := b.buildMatchResultEmbed(match, winner)
-
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseUpdateMessage,
-			Data: &discordgo.InteractionResponseData{
-				Embeds:     []*discordgo.MessageEmbed{embed},
-				Components: []discordgo.MessageComponent{}, // Remove buttons
-			},
-		})
-
-		// Archive the match thread if one exists
-		if match.ThreadID != "" {
-			go b.archiveThreadIfMatchFinished(s, match.ThreadID)
+		allIDs := concatIDs(match.TeamAIDs, match.TeamBIDs)
+		for _, pid := range allIDs {
+			if pid == player.ID {
+				isParticipant = true
+				break
+			}
 		}
 	}
-}
 
-// =====================================================================
-// Embed Builders
-// =====================================================================
-
-func (b *Bot) buildMatchEmbed(matchID int, captainA, captainB string, teamA, teamB []string) *discordgo.MessageEmbed {
-	return &discordgo.MessageEmbed{
-		Title:       fmt.Sprintf("⚔️ МАТЧ #%d АКТИВЕН", matchID),
-		Description: fmt.Sprintf("Капитаны: **%s** vs **%s**\n\nГолосуйте за победителя!", captainA, captainB),
-		Color:       matchEmbedColor,
-		Fields: []*discordgo.MessageEmbedField{
-			{
-				Name:   "🛡️ Team A",
-				Value:  formatPlayerList(teamA),
-				Inline: true,
-			},
-			{
-				Name:   "⚔️ Team B",
-				Value:  formatPlayerList(teamB),
-				Inline: true,
-			},
-		},
-		Footer: &discordgo.MessageEmbedFooter{
-			Text: "Только рефери (SUDЬЯ) могут завершить матч",
-		},
-	}
-}
-
-func (b *Bot) buildMatchResultEmbed(match *models.LobbyMatch, winner string) *discordgo.MessageEmbed {
-	color := winColor
-	if winner == "Team B" {
-		color = loseColor
+	if !isParticipant {
+		b.respondMessage(s, i.Interaction, "⚠️ Вы не участвовали в этом матче.", true)
+		return
 	}
 
-	// Get player names for both teams
-	teamANames := b.getPlayerNames(match.TeamAIDs)
-	teamBNames := b.getPlayerNames(match.TeamBIDs)
-
-	winTeamNames := teamANames
-	winTeamName := "Team A"
-	if winner == "Team B" {
-		winTeamNames = teamBNames
-		winTeamName = "Team B"
+	place, err := b.services.Lobby.TryAddPlayer(ctx, player, userID)
+	if err != nil && !errors.Is(err, domain.ErrAlreadyQueued) {
+		b.logger.Warn("requeue: player %d refused: %v", player.ID, err)
+		b.respondMessage(s, i.Interaction, joinMessage(err), true)
+		return
 	}
 
-	return &discordgo.MessageEmbed{
-		Title:       fmt.Sprintf("🏁 МАТЧ #%d ЗАВЕРШЁН", match.ID),
-		Description: fmt.Sprintf("**Победила: %s!**\n\n%s", winTeamName, formatPlayerList(winTeamNames)),
-		Color:       color,
-		Fields: []*discordgo.MessageEmbedField{
-			{
-				Name:   "🛡️ Team A",
-				Value:  formatPlayerList(teamANames),
-				Inline: true,
-			},
-			{
-				Name:   "⚔️ Team B",
-				Value:  formatPlayerList(teamBNames),
-				Inline: true,
-			},
-		},
-		Footer: &discordgo.MessageEmbedFooter{
-			Text: fmt.Sprintf("Матч #%d | Elo-MMR обновлён", match.ID),
-		},
+	content := "✅ Вы снова в лобби!"
+	if place == application.PlaceWaitlist {
+		content = "ℹ️ Основное лобби заполнено. Вы добавлены в резерв."
 	}
+
+	b.logger.Info("requeue: player %s (ID: %d) rejoined lobby (%s)", player.Name, player.ID, place)
+	b.respond(s, i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{Content: content, Flags: discordgo.MessageFlagsEphemeral},
+	})
 }
 
 // =====================================================================
@@ -572,143 +682,318 @@ func formatPlayerList(names []string) string {
 	return sb.String()
 }
 
-func (b *Bot) getPlayerName(idStr string) string {
-	var id int
-	fmt.Sscanf(idStr, "%d", &id)
-	name, err := b.services.MatchService.GetPlayerNameByID(id)
+// unknownPlayerName is shown when a player row cannot be read. An empty string
+// rendered as "1. ****" in the embed and hid the failure entirely.
+const unknownPlayerName = "неизвестный игрок"
+
+func (b *Bot) getPlayerName(ctx context.Context, idStr string) string {
+	id := parseID(idStr)
+	name, err := b.services.MatchService.GetPlayerNameByID(ctx, id)
 	if err != nil {
-		return fmt.Sprintf("ID:%d", id)
+		b.logger.Warn("discord: cannot resolve name for player %d: %v", id, err)
+		return unknownPlayerName
 	}
 	return name
 }
 
-func (b *Bot) getPlayerNames(ids []int) []string {
+// getPlayerNames resolves a roster in one query, preserving the order of ids.
+func (b *Bot) getPlayerNames(ctx context.Context, ids []int) []string {
+	lookup, err := b.services.MatchService.GetPlayerNamesByIDs(ctx, ids)
+	if err != nil {
+		b.logger.Error("discord: failed to resolve %d player names: %v", len(ids), err)
+		lookup = map[int]string{}
+	}
 	names := make([]string, len(ids))
 	for i, id := range ids {
-		name, err := b.services.MatchService.GetPlayerNameByID(id)
-		if err != nil {
-			name = fmt.Sprintf("ID:%d", id)
+		if name, ok := lookup[id]; ok {
+			names[i] = name
+			continue
 		}
-		names[i] = name
+		names[i] = unknownPlayerName
 	}
 	return names
 }
 
+// parseID converts a select-menu value to a player ID, returning 0 for anything
+// that is not a plain number. Sscanf would accept "42abc" and stop at the first
+// non-digit, quietly turning a malformed ID into a valid-looking one.
 func parseID(s string) int {
-	var id int
-	fmt.Sscanf(s, "%d", &id)
+	id, err := strconv.Atoi(s)
+	if err != nil {
+		return 0
+	}
 	return id
 }
 
 // =====================================================================
-// Cross-Platform: Telegram Notification (called asynchronously)
+// Custom ID encoding for the match creation wizard
+//
+// Each step carries the previous selections in the next component's custom ID.
+// The menu prefixes themselves contain underscores ("create_match_captain_b"),
+// so splitting the whole ID on "_" and counting fields from either end picked up
+// fragments of the prefix — captain IDs arrived as "b_42" or even "a", parsed to
+// 0, and CreateMatch then failed the players(id) foreign key. Trimming the known
+// prefix first makes the split unambiguous.
 // =====================================================================
 
+// parseCaptainBCustomID extracts captain A's ID from the captain B menu.
+func parseCaptainBCustomID(customID string) (captainAID string, ok bool) {
+	rest, found := strings.CutPrefix(customID, selectMenuCaptainB+"_")
+	if !found || rest == "" {
+		return "", false
+	}
+	return rest, true
+}
+
+// parseTeamACustomID extracts both captain IDs from the team A menu.
+func parseTeamACustomID(customID string) (captainAID, captainBID string, ok bool) {
+	rest, found := strings.CutPrefix(customID, selectMenuTeamA+"_")
+	if !found {
+		return "", "", false
+	}
+	parts := strings.SplitN(rest, "_", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
+// parseTeamBCustomID extracts the captains and team A's roster from the team B menu.
+func parseTeamBCustomID(customID string) (captainAID, captainBID string, teamAIDs []string, ok bool) {
+	rest, found := strings.CutPrefix(customID, selectMenuTeamB+"_")
+	if !found {
+		return "", "", nil, false
+	}
+	parts := strings.SplitN(rest, "_", 3)
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return "", "", nil, false
+	}
+	return parts[0], parts[1], strings.Split(parts[2], "-"), true
+}
+
+// notifyTelegramMatchLive fires the Telegram announcement without blocking the
+// interaction. It runs through goBackground like every other detached call: a
+// bare `go` here meant a panic inside the Telegram callback took the process
+// down instead of one announcement.
 func (b *Bot) notifyTelegramMatchLive(matchID int, captainA, captainB string) {
-	if b.services.BettingService == nil {
-		return
-	}
-	b.logger.Info("telegram: notifying match #%d is live (captains: %s vs %s)", matchID, captainA, captainB)
-	// Telegram bot will pick this up via a shared channel or direct API call.
-	// For now, the Telegram bot polls for ACTIVE matches.
+	b.goBackground("telegram-match-live", backgroundTimeout, func(context.Context) {
+		b.services.Lobby.NotifyMatchLive(matchID, captainA, captainB, bettingWindow)
+	})
 }
 
-// autoCloseBetting opens betting for a match and closes it after 5 minutes.
-func (b *Bot) autoCloseBetting(matchID int) {
-	time.Sleep(5 * time.Minute)
-	if err := b.services.Lobby.CloseBetting(matchID); err != nil {
-		b.logger.Error("betting: failed to auto-close match #%d: %v", matchID, err)
-	} else {
-		b.logger.Info("betting: auto-closed for match #%d (5 min elapsed)", matchID)
+// syncTierRoles grants each player the Discord role matching their new tier.
+// A no-op unless at least one TIER_ROLE_* is configured.
+func (b *Bot) syncTierRoles(ctx context.Context, s *discordgo.Session, guildID string, newMMRs map[int]int) {
+	if len(b.tierRoleIDs) == 0 {
+		return
+	}
+	guildID = b.guildID(guildID)
+	if err := b.services.EloService.SyncTierRoles(ctx, s, guildID, b.tierRoleIDs, newMMRs); err != nil {
+		b.logger.Error("match: failed to sync tier roles: %v", err)
 	}
 }
 
-func (b *Bot) processTelegramPayout(matchID int, winningTeam string) {
-	if b.services.BettingService == nil {
+// tierAnnounceChannel picks where rank changes are posted, falling back to the
+// channel the match was closed in.
+func (b *Bot) tierAnnounceChannel(fallback string) string {
+	if b.cfg.TierAnnounceChannelID != "" {
+		return b.cfg.TierAnnounceChannelID
+	}
+	return fallback
+}
+
+// openBettingWindow arms the betting window for a freshly created match.
+// Without it lobby_matches.betting_open stays at its FALSE default and every
+// bet is rejected as "betting closed".
+func (b *Bot) openBettingWindow(ctx context.Context, matchID int) {
+	if err := b.services.Lobby.OpenBetting(ctx, matchID, bettingWindow); err != nil {
+		b.logger.Error("match: failed to open betting for #%d: %v", matchID, err)
 		return
 	}
-	payouts, err := b.services.BettingService.ProcessPayout(matchID, winningTeam)
+	b.logger.Info("match: betting window opened for #%d (%s)", matchID, bettingWindow)
+}
+
+// sweepBetting reconciles the two things that outlive the interaction which
+// started them: betting windows left open by a restart, and settlements that
+// were begun and never finished.
+//
+// It runs once at startup and then on every tick, so a lost timer goroutine
+// cannot leave a match accepting bets forever and a dropped payout cannot leave
+// stakes deducted with nothing to move them.
+func (b *Bot) sweepBetting() {
+	// The recover sits inside one sweep, not around the loop. Wrapping the
+	// goroutine instead meant a single panic killed the ticker for the lifetime
+	// of the process — and this sweep is the safety net that moves money nobody
+	// else will move.
+	sweep := func() {
+		defer func() {
+			if r := recover(); r != nil {
+				b.logger.Error("PANIC in betting sweep: %v\n%s", r, debug.Stack())
+			}
+		}()
+
+		ctx, cancel := b.opContext(backgroundTimeout)
+		defer cancel()
+
+		if n, err := b.services.Lobby.CloseExpiredBetting(ctx); err != nil {
+			b.logger.Error("match: failed to close expired betting windows: %v", err)
+		} else if n > 0 {
+			b.logger.Info("match: closed %d expired betting window(s)", n)
+		}
+
+		if n, err := b.services.BettingService.SettlePending(ctx); err != nil {
+			b.logger.Error("betting: pending settlement sweep failed: %v", err)
+		} else if n > 0 {
+			b.logger.Warn("betting: swept %d match(es) whose settlement had not completed", n)
+		}
+	}
+
+	go func() {
+		sweep()
+
+		ticker := time.NewTicker(bettingSweepInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-b.ctx.Done():
+				return
+			case <-ticker.C:
+				sweep()
+			}
+		}
+	}()
+}
+
+// startBettingTimer closes the betting window once bettingWindow elapses.
+// It waits on the bot's lifetime context rather than sleeping blindly, so a
+// shutdown does not leave the goroutine parked for five minutes.
+func (b *Bot) startBettingTimer(matchID int) {
+	go func() {
+		timer := time.NewTimer(bettingWindow)
+		defer timer.Stop()
+
+		select {
+		case <-b.ctx.Done():
+			return
+		case <-timer.C:
+		}
+
+		ctx, cancel := b.opContext(backgroundTimeout)
+		defer cancel()
+		b.closeBettingWindow(ctx, matchID)
+	}()
+}
+
+func (b *Bot) closeBettingWindow(ctx context.Context, matchID int) {
+	if err := b.services.Lobby.CloseBetting(ctx, matchID); err != nil {
+		b.logger.Error("match: failed to close betting for #%d: %v", matchID, err)
+	}
+}
+
+// concatIDs joins two ID slices into a freshly allocated one. Plain
+// append(a, b...) would write into a's backing array when it has spare
+// capacity, silently corrupting the caller's slice.
+func concatIDs(a, b []int) []int {
+	out := make([]int, 0, len(a)+len(b))
+	out = append(out, a...)
+	out = append(out, b...)
+	return out
+}
+
+// processTelegramPayout settles the bets on a finished match.
+//
+// A failure here means bettors were never credited. The bets stay unsettled
+// (settled_at IS NULL), which is what BettingService.SettlePending looks for on
+// the sweep driven by sweepBetting — so the money still moves, just late.
+func (b *Bot) processTelegramPayout(ctx context.Context, matchID int, winningTeam string) {
+	payouts, err := b.services.BettingService.ProcessPayout(ctx, matchID, winningTeam)
 	if err != nil {
-		b.logger.Error("betting: payout failed for match #%d: %v", matchID, err)
+		b.logger.Error("betting: payout for match #%d (%s) failed, bets left unsettled: %v", matchID, winningTeam, err)
 		return
 	}
-	if payouts != nil {
-		b.logger.Info("betting: match #%d — %d winners paid out", matchID, len(payouts))
-	} else {
-		b.logger.Info("betting: match #%d — no bets to pay out", matchID)
+	b.logger.Info("betting: match #%d paid out to %d bettors", matchID, len(payouts))
+}
+
+// =====================================================================
+// Embed Builders
+// =====================================================================
+
+func (b *Bot) buildMatchEmbed(matchID int, captainA, captainB string, teamA, teamB []string) *discordgo.MessageEmbed {
+	return &discordgo.MessageEmbed{
+		Title: fmt.Sprintf("⚔️ МАТЧ #%d АКТИВЕН", matchID), Description: fmt.Sprintf("Капитаны: **%s** vs **%s**", captainA, captainB),
+		Color: matchEmbedColor,
+		Fields: []*discordgo.MessageEmbedField{
+			{Name: "🛡️ Team A", Value: formatPlayerList(teamA), Inline: true},
+			{Name: "⚔️ Team B", Value: formatPlayerList(teamB), Inline: true},
+		},
+		Footer: &discordgo.MessageEmbedFooter{Text: "Только рефери (SUDЬЯ) могут завершить матч"},
+	}
+}
+
+func (b *Bot) buildMatchResultEmbed(ctx context.Context, match *models.LobbyMatch, winner string) *discordgo.MessageEmbed {
+	color := winColor
+	if winner == domain.TeamB {
+		color = loseColor
+	}
+	return &discordgo.MessageEmbed{
+		Title: fmt.Sprintf("🏁 МАТЧ #%d ЗАВЕРШЁН", match.ID), Description: fmt.Sprintf("**Победила: %s!**", winner),
+		Color: color,
+		Fields: []*discordgo.MessageEmbedField{
+			{Name: "🛡️ Team A", Value: formatPlayerList(b.getPlayerNames(ctx, match.TeamAIDs)), Inline: true},
+			{Name: "⚔️ Team B", Value: formatPlayerList(b.getPlayerNames(ctx, match.TeamBIDs)), Inline: true},
+		},
 	}
 }
 
 // =====================================================================
-// MMR Formatting for Tier Display
+// 2.1 Auto-Balance
 // =====================================================================
 
-func (b *Bot) formatMMRField(playerIDs []int, mmrMap map[int]int) string {
-	var sb strings.Builder
-	for _, pid := range playerIDs {
-		mmr, ok := mmrMap[pid]
-		if !ok {
-			mmr = domain.BaseMMR
-		}
-		name, err := b.services.MatchService.GetPlayerNameByID(pid)
-		if err != nil {
-			name = fmt.Sprintf("ID:%d", pid)
-		}
-		tier := domain.DetermineTier(mmr)
-		sb.WriteString(fmt.Sprintf("• **%s** — %d MMR (%s)\n", name, mmr, tier))
-	}
-	return sb.String()
-}
-
-// =====================================================================
-// 2.1 Auto-Balance: greedy algorithm to split 10 players into 2 teams
-//     minimizing average MMR difference
-// =====================================================================
-
-// handleBalance auto-balances 10 players from the lobby into 2 teams.
-func (b *Bot) handleBalance(s *discordgo.Session, i *discordgo.Interaction) {
-	if !b.isReferee(i.Member) {
-		b.respondMessage(s, i, "⛔ Только рефери (роль SUDЬЯ) могут использовать авто-баланс.", true)
+func (b *Bot) handleBalance(ctx context.Context, s *discordgo.Session, i *discordgo.Interaction) {
+	if !b.requireReferee(s, i) {
 		return
 	}
-
 	activePlayers := b.services.Lobby.GetActivePlayers()
-	if len(activePlayers) < 10 {
-		b.respondMessage(s, i,
-			fmt.Sprintf("⚠️ Нужно 10 игроков в лобби, сейчас %d.", len(activePlayers)),
-			true,
-		)
+	if len(activePlayers) < teamSize*2 {
+		b.respondMessage(s, i, fmt.Sprintf("⚠️ Нужно %d игроков в лобби, сейчас %d.", teamSize*2, len(activePlayers)), true)
 		return
 	}
-
-	// Get MMRs for all active players
 	playerIDs := make([]int, len(activePlayers))
 	for idx, p := range activePlayers {
 		playerIDs[idx] = p.ID
 	}
-
-	mmrMap, err := b.services.Lobby.GetPlayerMMRsBatch(playerIDs)
+	mmrMap, err := b.services.Lobby.GetPlayerMMRsBatch(ctx, playerIDs)
 	if err != nil {
 		b.logger.Error("balance: failed to get MMRs: %v", err)
-		b.respondMessage(s, i, "⚠️ Ошибка получения MMR игроков.", true)
+		b.respondMessage(s, i, "⚠️ Ошибка получения MMR.", true)
 		return
 	}
 
-	// Greedy MMR-balance: sort by MMR descending, alternate between teams
-	sort.Slice(activePlayers, func(a, b int) bool {
-		mmrA := mmrMap[activePlayers[a].ID]
-		mmrB := mmrMap[activePlayers[b].ID]
-		return mmrA > mmrB // descending MMR
-	})
-
-	var teamAIDs, teamBIDs []int
-	var teamANames, teamBNames []string
+	// Sort first, then take the top ten. The other order truncated by join
+	// position while the comment claimed the ten highest-MMR players were being
+	// drafted — harmless only because lobbyCapacity happens to equal ten.
+	sort.Slice(activePlayers, func(a, b int) bool { return mmrMap[activePlayers[a].ID] > mmrMap[activePlayers[b].ID] })
+	if len(activePlayers) > teamSize*2 {
+		activePlayers = activePlayers[:teamSize*2]
+	}
+	teamAIDs := make([]int, 0, teamSize)
+	teamBIDs := make([]int, 0, teamSize)
+	teamANames := make([]string, 0, teamSize)
+	teamBNames := make([]string, 0, teamSize)
 	sumA, sumB := 0, 0
-
 	for _, p := range activePlayers {
 		mmr := mmrMap[p.ID]
-		// Assign to the team with lower total MMR to balance
-		if sumA <= sumB {
+		// The greedy pick must respect the roster size: without the capacity
+		// check a lopsided MMR spread kept feeding the lighter team and produced
+		// matches like 6v4.
+		takeA := sumA <= sumB
+		if len(teamAIDs) >= teamSize {
+			takeA = false
+		} else if len(teamBIDs) >= teamSize {
+			takeA = true
+		}
+
+		if takeA {
 			teamAIDs = append(teamAIDs, p.ID)
 			teamANames = append(teamANames, p.Name)
 			sumA += mmr
@@ -718,90 +1003,18 @@ func (b *Bot) handleBalance(s *discordgo.Session, i *discordgo.Interaction) {
 			sumB += mmr
 		}
 	}
-
 	avgA := float64(sumA) / float64(len(teamAIDs))
 	avgB := float64(sumB) / float64(len(teamBIDs))
-
-	// Choose captains as the highest MMR player on each team
-	captainAID := teamAIDs[0]
-	captainBID := teamBIDs[0]
-
-	guildID := i.GuildID
-	if guildID == "" {
-		guildID = defaultGuildID
-	}
-
-	matchID, err := b.services.Lobby.CreateMatch(guildID, captainAID, captainBID, teamAIDs, teamBIDs)
+	guildID := b.guildID(i.GuildID)
+	matchID, err := b.services.Lobby.CreateMatch(ctx, guildID, teamAIDs[0], teamBIDs[0], teamAIDs, teamBIDs)
 	if err != nil {
 		b.logger.Error("balance: failed to create match: %v", err)
-		b.respondMessage(s, i, "⚠️ Ошибка создания матча: "+err.Error(), true)
+		b.respondMessage(s, i, "⚠️ Ошибка создания матча", true)
 		return
 	}
 
 	embed := b.buildMatchEmbed(matchID, teamANames[0], teamBNames[0], teamANames, teamBNames)
-	embed.Footer = &discordgo.MessageEmbedFooter{
-		Text: fmt.Sprintf("Авто-баланс | Team A avg: %.0f MMR | Team B avg: %.0f MMR", avgA, avgB),
-	}
-
-	s.InteractionRespond(i, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Embeds: []*discordgo.MessageEmbed{embed},
-			Components: []discordgo.MessageComponent{
-				discordgo.ActionsRow{
-					Components: []discordgo.MessageComponent{
-						discordgo.Button{
-							Label:    "Team A WIN",
-							Style:    discordgo.SuccessButton,
-							CustomID: fmt.Sprintf("%s_%d", buttonTeamAWin, matchID),
-							Emoji:    &discordgo.ComponentEmoji{Name: "🏆"},
-						},
-						discordgo.Button{
-							Label:    "Team B WIN",
-							Style:    discordgo.DangerButton,
-							CustomID: fmt.Sprintf("%s_%d", buttonTeamBWin, matchID),
-							Emoji:    &discordgo.ComponentEmoji{Name: "🏆"},
-						},
-					},
-				},
-			},
-		},
-	})
-
-	b.logger.Info("balance: match #%d auto-balanced | Team A: %d (avg %.0f) vs Team B: %d (avg %.0f)",
-		matchID, len(teamAIDs), avgA, len(teamBIDs), avgB)
-}
-
-// =====================================================================
-// 2.2 Dynamic Betting Odds based on MMR difference
-// =====================================================================
-
-// CalculateBettingOdds returns payout multipliers for each team based on MMR difference.
-// Higher MMR team gets lower multiplier (safer bet), lower MMR team gets higher multiplier.
-func CalculateBettingOdds(avgMMRTeamA, avgMMRTeamB float64) (multiplierA, multiplierB float64) {
-	// Base multiplier is 1.5x for equal teams
-	baseMultiplier := 1.5
-
-	// Calculate MMR ratio
-	mmrDiff := avgMMRTeamA - avgMMRTeamB // positive = Team A stronger
-	adjustment := mmrDiff / 400.0        // 400 MMR difference = 1.0 adjustment
-
-	multiplierA = baseMultiplier - adjustment*0.5
-	multiplierB = baseMultiplier + adjustment*0.5
-
-	// Clamp to sensible range
-	if multiplierA < 1.1 {
-		multiplierA = 1.1
-	}
-	if multiplierA > 3.0 {
-		multiplierA = 3.0
-	}
-	if multiplierB < 1.1 {
-		multiplierB = 1.1
-	}
-	if multiplierB > 3.0 {
-		multiplierB = 3.0
-	}
-
-	return multiplierA, multiplierB
+	embed.Footer = &discordgo.MessageEmbedFooter{Text: fmt.Sprintf("Авто-баланс | Team A avg: %.0f | Team B avg: %.0f", avgA, avgB)}
+	b.publishCreatedMatch(ctx, s, i, matchID, teamAIDs, teamBIDs, embed, teamANames[0], teamBNames[0])
+	b.logger.Info("balance: match #%d auto-balanced | Team A avg: %.0f | Team B avg: %.0f", matchID, avgA, avgB)
 }

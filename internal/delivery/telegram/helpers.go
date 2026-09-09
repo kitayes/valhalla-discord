@@ -1,15 +1,40 @@
 package telegram
 
-import tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+import (
+	"context"
+	"time"
+
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+)
+
+// updateTimeout bounds the work done for a single Telegram update or scheduled
+// tick, so a slow query cannot stall the bot indefinitely.
+const updateTimeout = 30 * time.Second
+
+// broadcastInterval paces bulk sends under Telegram's ~30 messages/second cap.
+const broadcastInterval = 50 * time.Millisecond
+
+// broadcastTimeout bounds a whole bulk send, which at the paced rate can take a
+// while for a large list.
+const broadcastTimeout = 10 * time.Minute
 
 func (b *Bot) isAdmin(id int64) bool {
 	_, ok := b.adminIDs[id]
 	return ok
 }
 
+// sendMessage delivers a message and logs delivery failures. It used to discard
+// the send error entirely, so a blocked bot, a deleted chat or a 429 was
+// completely invisible — broadcasts silently reached a fraction of their list.
 func (b *Bot) sendMessage(chatID int64, text string, kbType string) {
+	if err := b.trySendMessage(chatID, text, kbType); err != nil {
+		b.logger.Warn("telegram: failed to send message to %d: %v", chatID, err)
+	}
+}
+
+func (b *Bot) trySendMessage(chatID int64, text string, kbType string) error {
 	if text == "" {
-		return
+		return nil
 	}
 	msg := tgbotapi.NewMessage(chatID, text)
 
@@ -76,7 +101,37 @@ func (b *Bot) sendMessage(chatID int64, text string, kbType string) {
 		msg.ReplyMarkup = tgbotapi.NewRemoveKeyboard(true)
 	}
 
-	b.bot.Send(msg)
+	_, err := b.bot.Send(msg)
+	return err
+}
+
+// broadcast delivers the same message to many chats, pacing the sends.
+//
+// Telegram caps bulk delivery at roughly 30 messages per second and answers 429
+// beyond it. The previous tight loop simply lost everyone past the limit, and
+// with the send error discarded, nobody noticed. Returns delivered and failed
+// counts.
+func (b *Bot) broadcast(ctx context.Context, chatIDs []int64, text, kbType string) (delivered, failed int) {
+	ticker := time.NewTicker(broadcastInterval)
+	defer ticker.Stop()
+
+	for _, id := range chatIDs {
+		select {
+		case <-ctx.Done():
+			b.logger.Warn("telegram: broadcast interrupted after %d of %d: %v",
+				delivered+failed, len(chatIDs), ctx.Err())
+			return delivered, failed
+		case <-ticker.C:
+		}
+
+		if err := b.trySendMessage(id, text, kbType); err != nil {
+			failed++
+			b.logger.Warn("telegram: broadcast to %d failed: %v", id, err)
+			continue
+		}
+		delivered++
+	}
+	return delivered, failed
 }
 
 func valueOrDefault(val, def string) string {

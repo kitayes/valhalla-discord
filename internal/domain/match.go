@@ -103,3 +103,18 @@ func GenerateFileHash(data []byte) string {
 	hash := sha256.Sum256(data)
 	return hex.EncodeToString(hash[:])
 }
+
+// Team names are a cross-service contract: the Discord referee UI writes them,
+// the repository stores them on lobby_matches.winner, and the Telegram betting
+// flow compares against them. They were duplicated as literals in seven places
+// across four packages, so any rename would have silently split the payout logic
+// from the match result.
+const (
+	TeamA = "Team A"
+	TeamB = "Team B"
+)
+
+// IsValidTeam reports whether s names one of the two sides of a match.
+func IsValidTeam(s string) bool {
+	return s == TeamA || s == TeamB
+}

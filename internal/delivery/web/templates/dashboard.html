@@ -159,15 +159,7 @@
                 <div class="label">Players</div>
             </div>
             <div class="card">
-                <div class="value">{{.GuildCount}}</div>
-                <div class="label">Guilds</div>
-            </div>
-            <div class="card">
-                <div class="value">{{.MatchCount}}</div>
-                <div class="label">Matches</div>
-            </div>
-            <div class="card">
-                <div class="value">24h</div>
+                <div class="value">{{.Uptime}}</div>
                 <div class="label">Uptime</div>
             </div>
         </div>
@@ -199,6 +191,7 @@
         <div class="license-form">
             <div class="section-title">// License Management</div>
             <form method="POST" action="/api/license">
+                <input type="hidden" name="csrf_token" value="{{.CSRFToken}}" />
                 <input type="text" name="guild_id" placeholder="Guild ID" required />
                 <select name="action">
                     <option value="upgrade">Upgrade to PRO</option>

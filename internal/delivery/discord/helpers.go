@@ -1,6 +1,33 @@
 package discord
 
-import "blackwatch/internal/application"
+import (
+	"unicode/utf8"
+
+	"blackwatch/internal/application"
+)
+
+// truncateMessage caps a message at Discord's 2000-character limit.
+//
+// Discord counts characters, not bytes, and rejects invalid UTF-8 outright —
+// slicing the string at a byte offset cut Cyrillic player names in half, which
+// is most of the roster here.
+func truncateMessage(msg string) string {
+	if utf8.RuneCountInString(msg) <= maxMessageLength {
+		return msg
+	}
+
+	const notice = "...\n(список обрезан)"
+	limit := maxMessageLength - utf8.RuneCountInString(notice)
+
+	count := 0
+	for idx := range msg {
+		if count == limit {
+			return msg[:idx] + notice
+		}
+		count++
+	}
+	return msg + notice
+}
 
 func calculateWinRate(stats *application.PlayerStats) float64 {
 	if stats.Matches == 0 {

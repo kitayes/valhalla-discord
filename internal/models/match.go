@@ -36,3 +36,16 @@ type Player struct {
 	Name      string    `json:"name"`
 	CreatedAt time.Time `json:"created_at"`
 }
+
+// Medals counts how many MVP and SVPG awards a player earned.
+type Medals struct {
+	MVP int `json:"mvp"`
+	SVP int `json:"svp"`
+}
+
+// MatchResult describes a screenshot that was successfully turned into a match.
+type MatchResult struct {
+	MatchID int    `json:"match_id"`
+	MVP     string `json:"mvp,omitempty"` // player name, empty when no medal was read
+	SVP     string `json:"svp,omitempty"`
+}

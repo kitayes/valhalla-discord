@@ -3,9 +3,12 @@ package main
 import (
 	"blackwatch/migrations"
 	"context"
+	"errors"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"blackwatch/internal/ai"
 	"blackwatch/internal/application"
@@ -21,6 +24,13 @@ import (
 	_ "github.com/lib/pq"
 )
 
+// shutdownTimeout bounds how long in-flight admin requests may finish.
+const shutdownTimeout = 10 * time.Second
+
+// startupTimeout bounds database connection, migrations and cache warm-up, so a
+// database that never answers fails the boot instead of hanging it.
+const startupTimeout = 60 * time.Second
+
 func main() {
 	_ = godotenv.Load()
 
@@ -31,12 +41,19 @@ func main() {
 
 	log := logger.NewLogger(&logger.Config{Level: cfg.LogLevel})
 
-	db, err := repository.NewPostgresDB(&cfg.Repo)
+	startupCtx, startupCancel := context.WithTimeout(context.Background(), startupTimeout)
+	defer startupCancel()
+
+	db, err := repository.NewPostgresDB(startupCtx, &cfg.Repo)
 	if err != nil {
 		log.Error("failed to init db: %s", err.Error())
 		return
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			log.Error("failed to close db: %s", err.Error())
+		}
+	}()
 
 	log.Info("Running migrations...")
 	if err := repository.RunMigrations(db, migrations.FS); err != nil {
@@ -48,7 +65,7 @@ func main() {
 	embeddingClient := ai.NewEmbeddingClient()
 	log.Info("Ollama embedding client initialized")
 
-	repos, err := repository.NewRepository(&cfg.Repo, db, cfg.PlayerCacheSize, embeddingClient)
+	repos, err := repository.NewRepository(startupCtx, &cfg.Repo, db, cfg.PlayerCacheSize, embeddingClient)
 	if err != nil {
 		log.Error("failed to init repository: %s", err.Error())
 		return
@@ -61,15 +78,20 @@ func main() {
 	}
 
 	var sheetsClient sheets.Client
-	if _, err := os.Stat("google-credentials.json"); err == nil {
-		sheetsClient, err = sheets.NewGoogleSheetsClient("google-credentials.json")
+	if _, err := os.Stat(cfg.GoogleCredentialsPath); err == nil {
+		sheetsClient, err = sheets.NewGoogleSheetsClient(cfg.GoogleCredentialsPath)
 		if err != nil {
 			log.Error("failed to init google sheets: %s", err.Error())
+		} else if cfg.SpreadsheetID == "" {
+			// Credentials without a target sheet make every sync fail at the API
+			// with an empty ID, which only ever showed up as a logged error.
+			sheetsClient = nil
+			log.Warn("GOOGLE_SHEET_ID is not set, sheets integration disabled")
 		} else {
-			log.Info("Google Sheets service initialized")
+			log.Info("Google Sheets service initialized for sheet %s", cfg.SpreadsheetID)
 		}
 	} else {
-		log.Warn("google-credentials.json not found, sheets integration disabled")
+		log.Warn("%s not found, sheets integration disabled", cfg.GoogleCredentialsPath)
 	}
 
 	services := application.NewService(repos, gemini, sheetsClient, cfg.GoogleOwnerEmail, cfg.SpreadsheetID, cfg.HTTPTimeoutSec, log)
@@ -88,11 +110,28 @@ func main() {
 		log.Warn("DEEPSEEK_KEY not set, FAQ assistant disabled")
 	}
 
-	discordBot := discord.NewBot(&cfg, services, log)
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// The Telegram bot is built and its callbacks are installed BEFORE the
+	// Discord bot starts serving. Wiring them afterwards raced: discordgo
+	// dispatches handlers on its own goroutines, and those handlers read the
+	// very callback fields main was still assigning.
+	var telegramBot *telegram.Bot
+	if cfg.TelegramToken != "" {
+		telegramBot, err = telegram.NewBot(cfg.TelegramToken, cfg.TelegramAdminIDs, services.TelegramService, services.ProfileLinkService, services.BettingService, cfg.TelegramChannelID, log)
+		if err != nil {
+			log.Error("failed to init telegram bot: %s", err.Error())
+		} else if betting := telegramBot.BettingBot(); betting != nil {
+			services.Lobby.SetMatchLiveCallback(betting.NotifyMatchLive)
+			services.BettingService.SetPayoutCallback(betting.NotifyMatchResult)
+			services.BettingService.SetRefundCallback(betting.NotifyMatchCancelled)
+		}
+	} else {
+		log.Warn("TELEGRAM_TOKEN not set, telegram bot disabled")
+	}
+
+	discordBot := discord.NewBot(&cfg, services, log)
 	if err := discordBot.Init(); err != nil {
 		log.Error("failed to init discord bot: %s", err.Error())
 		return
@@ -104,27 +143,25 @@ func main() {
 		}
 	}()
 
-	var telegramBot *telegram.Bot
-	if cfg.TelegramToken != "" {
-		telegramBot, err = telegram.NewBot(cfg.TelegramToken, cfg.TelegramAdminIDs, services.TelegramService, services.ProfileLinkService, services.BettingService, cfg.TelegramChannelID, log)
-		if err != nil {
-			log.Error("failed to init telegram bot: %s", err.Error())
-		} else {
-			go telegramBot.Start()
-			log.Info("Telegram bot started")
-		}
-	} else {
-		log.Warn("TELEGRAM_TOKEN not set, telegram bot disabled")
+	if telegramBot != nil {
+		go telegramBot.Start(ctx)
+		log.Info("Telegram bot started")
 	}
 
-	// Start web admin dashboard if port is configured
-	if cfg.WebAdminPort != "" && cfg.WebAdminKey != "" {
-		adminServer, err := web.NewAdminServer(services, log, cfg.WebAdminPort, cfg.WebAdminKey)
+	// The dashboard only starts when an admin key was explicitly configured —
+	// there is deliberately no default key to fall back on.
+	var adminServer *web.AdminServer
+	if !cfg.WebAdminEnabled() {
+		log.Warn("WEB_ADMIN_KEY not set, admin dashboard disabled")
+	} else {
+		adminServer, err = web.NewAdminServer(services, log, cfg.WebAdminPort, cfg.WebAdminKey, cfg.WebAdminTrustedProxies)
 		if err != nil {
 			log.Error("failed to init web admin: %s", err.Error())
+			adminServer = nil
 		} else {
+			srv := adminServer
 			go func() {
-				if err := adminServer.Start(); err != nil {
+				if err := srv.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 					log.Error("web admin server error: %s", err.Error())
 				}
 			}()
@@ -136,9 +173,31 @@ func main() {
 	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
 	<-quit
 
+	log.Info("Shutdown signal received, stopping...")
+	cancel()
+
+	// Each stage gets its own deadline. Sharing one budget meant a stuck admin
+	// connection could burn the whole window and hand the Sheets drain a context
+	// that had already expired — exactly the case the drain exists for.
+	if adminServer != nil {
+		adminCtx, adminCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		if err := adminServer.Shutdown(adminCtx); err != nil {
+			log.Error("web admin shutdown error: %s", err.Error())
+		}
+		adminCancel()
+	}
+
 	discordBot.Stop()
 	if telegramBot != nil {
 		telegramBot.Stop()
 	}
+
+	// Wait for in-flight Google Sheets syncs before closing the DB.
+	syncCtx, syncCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer syncCancel()
+	if err := services.MatchService.Shutdown(syncCtx); err != nil {
+		log.Error("match service shutdown error: %s", err.Error())
+	}
+
 	log.Info("Bots Stopped")
 }

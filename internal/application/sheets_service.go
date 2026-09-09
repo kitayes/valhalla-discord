@@ -1,8 +1,9 @@
 package application
 
 import (
-	"fmt"
 	"blackwatch/pkg/sheets"
+	"context"
+	"fmt"
 )
 
 const (
@@ -31,7 +32,7 @@ func NewSheetsServiceImpl(client sheets.Client, ownerEmail string) *SheetsServic
 	}
 }
 
-func (s *SheetsServiceImpl) EnsureSheetExists() (string, error) {
+func (s *SheetsServiceImpl) EnsureSheetExists(ctx context.Context) (string, error) {
 	if s.spreadsheetID != "" {
 		return s.spreadsheetURL, nil
 	}
@@ -56,7 +57,7 @@ func (s *SheetsServiceImpl) EnsureSheetExists() (string, error) {
 	return url, nil
 }
 
-func (s *SheetsServiceImpl) UpdateStats(data [][]interface{}) error {
+func (s *SheetsServiceImpl) UpdateStats(ctx context.Context, data [][]interface{}) error {
 	if s.spreadsheetID == "" {
 		return fmt.Errorf("spreadsheet not initialized, call EnsureSheetExists first")
 	}
@@ -72,14 +73,14 @@ func (s *SheetsServiceImpl) UpdateStats(data [][]interface{}) error {
 	return nil
 }
 
-func (s *SheetsServiceImpl) GetSpreadsheetURL() string {
+func (s *SheetsServiceImpl) GetSpreadsheetURL(ctx context.Context) string {
 	if s.spreadsheetID == "" {
 		return ""
 	}
 	return fmt.Sprintf("https://docs.google.com/spreadsheets/d/%s", s.spreadsheetID)
 }
 
-func (s *SheetsServiceImpl) SetSpreadsheetID(id string) {
+func (s *SheetsServiceImpl) SetSpreadsheetID(ctx context.Context, id string) {
 	s.spreadsheetID = id
 	s.spreadsheetURL = fmt.Sprintf("https://docs.google.com/spreadsheets/d/%s", id)
 }

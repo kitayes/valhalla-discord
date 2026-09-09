@@ -1,6 +1,8 @@
 package logger
 
 import (
+	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"strings"
@@ -21,16 +23,30 @@ func NewLogger(cfg *Config) *Logger {
 }
 
 func (l *Logger) Error(format string, v ...interface{}) {
-	l.logger.Error(format, v...)
+	l.log(slog.LevelError, format, v...)
 }
 func (l *Logger) Warn(format string, v ...interface{}) {
-	l.logger.Warn(format, v...)
+	l.log(slog.LevelWarn, format, v...)
 }
 func (l *Logger) Info(format string, v ...interface{}) {
-	l.logger.Info(format, v...)
+	l.log(slog.LevelInfo, format, v...)
 }
 func (l *Logger) Debug(format string, v ...interface{}) {
-	l.logger.Debug(format, v...)
+	l.log(slog.LevelDebug, format, v...)
+}
+
+// log renders the Printf-style format string into the slog message.
+// slog treats variadic arguments as key/value pairs, so passing them through
+// untouched would emit the raw format string plus a !BADKEY entry.
+func (l *Logger) log(level slog.Level, format string, v ...interface{}) {
+	if !l.logger.Enabled(context.Background(), level) {
+		return
+	}
+	msg := format
+	if len(v) > 0 {
+		msg = fmt.Sprintf(format, v...)
+	}
+	l.logger.Log(context.Background(), level, msg)
 }
 
 func getLoggerLevel(logLevel string) slog.Level {

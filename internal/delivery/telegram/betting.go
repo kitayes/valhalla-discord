@@ -1,10 +1,15 @@
 package telegram
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"blackwatch/internal/application"
+	"blackwatch/internal/domain"
 	"blackwatch/internal/models"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -13,7 +18,31 @@ import (
 const (
 	callbackBetTeamA = "bet_team_a"
 	callbackBetTeamB = "bet_team_b"
+
+	// maxQuickBet caps what one tap on the team button stakes. The button has no
+	// amount picker, so it bets the whole balance up to this ceiling.
+	maxQuickBet = 50
 )
+
+// betFailureMessage turns a betting error into something the user can act on.
+// The raw error used to be echoed straight into the Telegram alert, which put
+// driver messages in front of players.
+func betFailureMessage(err error) string {
+	switch {
+	case errors.Is(err, domain.ErrBettingClosed):
+		return "⌛️ Ставки заблокированы. Игра перешла в мид-гейм."
+	case errors.Is(err, domain.ErrAlreadyBet):
+		return "Вы уже поставили на этот матч."
+	case errors.Is(err, domain.ErrInsufficientPoints):
+		return "Недостаточно очков для ставки."
+	case errors.Is(err, domain.ErrPlayerNotFound):
+		return "Ваш Telegram не привязан к игроку. Используйте /link <код> в Discord."
+	case errors.Is(err, domain.ErrMatchNotFound):
+		return "Матч не найден."
+	default:
+		return "Не удалось принять ставку. Попробуйте позже."
+	}
+}
 
 type BettingBot struct {
 	bot            *Bot
@@ -31,19 +60,25 @@ func NewBettingBot(bot *Bot, bettingService *application.BettingService, channel
 	}
 }
 
-func (bb *BettingBot) NotifyMatchLive(matchID int, captainA, captainB string) {
+// NotifyMatchLive announces a match and opens the betting keyboard.
+//
+// window is how long bets are accepted. It is spelled out in the message
+// because the window is short and closes silently: without it a player has no
+// way to tell whether they have five minutes or five seconds.
+func (bb *BettingBot) NotifyMatchLive(matchID int, captainA, captainB string, window time.Duration) {
 	if bb.channelID == "" {
 		bb.logger.Warn("betting: TELEGRAM_CHANNEL_ID not configured — skipping match notification")
 		return
 	}
 
 	text := fmt.Sprintf(
-		"МАТЧ #%d АКТИВЕН!**\n\n"+
+		"*МАТЧ #%d АКТИВЕН*\n\n"+
 			"Team A: Капитан %s\n"+
 			"Team B: Капитан %s\n\n"+
-			"Ставьте свои очки! У вас есть 100 очков по умолчанию.\n"+
+			"Ставки принимаются до *%s* (%d мин).\n"+
 			"Используйте кнопки ниже, чтобы сделать ставку.",
 		matchID, captainA, captainB,
+		time.Now().Add(window).Format("15:04"), int(window.Minutes()),
 	)
 
 	inlineKeyboard := tgbotapi.NewInlineKeyboardMarkup(
@@ -77,7 +112,7 @@ func (bb *BettingBot) NotifyMatchLive(matchID int, captainA, captainB string) {
 	}
 }
 
-func (bb *BettingBot) HandleCallback(callback *tgbotapi.CallbackQuery) {
+func (bb *BettingBot) HandleCallback(ctx context.Context, callback *tgbotapi.CallbackQuery) {
 	data := callback.Data
 	userID := callback.From.ID
 	username := callback.From.UserName
@@ -85,38 +120,49 @@ func (bb *BettingBot) HandleCallback(callback *tgbotapi.CallbackQuery) {
 	bb.logger.Debug("betting: callback from %s (%d): %s", username, userID, data)
 
 	if strings.HasPrefix(data, callbackBetTeamA) || strings.HasPrefix(data, callbackBetTeamB) {
-		bb.handleBetCallback(callback)
+		bb.handleBetCallback(ctx, callback)
 		return
 	}
+
+	// Every callback must be answered, otherwise Telegram leaves the button
+	// spinning on the client until it times out.
+	bb.bot.apiRespond(callback, "", false)
 }
 
-func (bb *BettingBot) handleBetCallback(callback *tgbotapi.CallbackQuery) {
+func (bb *BettingBot) handleBetCallback(ctx context.Context, callback *tgbotapi.CallbackQuery) {
 	data := callback.Data
 	userID := callback.From.ID
 	username := callback.From.UserName
 
-	var teamChosen string
-	var matchID int
+	var teamChosen, prefix string
 	if strings.HasPrefix(data, callbackBetTeamA) {
-		teamChosen = "Team A"
-		fmt.Sscanf(data, callbackBetTeamA+"_%d", &matchID)
+		teamChosen, prefix = domain.TeamA, callbackBetTeamA
 	} else {
-		teamChosen = "Team B"
-		fmt.Sscanf(data, callbackBetTeamB+"_%d", &matchID)
+		teamChosen, prefix = domain.TeamB, callbackBetTeamB
 	}
 
-	// Check if betting window is still open
-	if bb.bettingService != nil {
-		open, err := bb.bettingService.IsBettingOpen(matchID)
-		if err == nil && !open {
-			bb.bot.apiRespond(callback, "⌛️ Ставки заблокированы. Игра перешла в мид-гейм.", true)
+	// A malformed callback used to leave matchID at 0 and surface as a confusing
+	// "match 0 not found" further down.
+	matchID, err := strconv.Atoi(strings.TrimPrefix(data, prefix+"_"))
+	if err != nil || matchID <= 0 {
+		bb.logger.Warn("betting: malformed callback data %q from user %d", data, userID)
+		bb.bot.apiRespond(callback, "Некорректная кнопка ставки.", true)
+		return
+	}
+
+	// The betting window is not pre-checked here any more. PlaceBet re-reads it
+	// inside its own transaction anyway, and the pre-check queried a second,
+	// different implementation that ignored betting_closes_at — so it answered
+	// "open" past the deadline, drew the keyboard, and let PlaceBet do the
+	// refusing.
+	points, err := bb.bettingService.GetPlayerPoints(ctx, userID)
+	if err != nil {
+		if errors.Is(err, domain.ErrPlayerNotFound) {
+			bb.bot.apiRespond(callback, "Ваш Telegram не привязан к игроку. Используйте /link <код> в Discord.", true)
 			return
 		}
-	}
-
-	points, err := bb.bettingService.GetPlayerPoints(userID)
-	if err != nil {
-		bb.bot.apiRespond(callback, fmt.Sprintf("Ваш Telegram не привязан к игроку. Используйте /link <код> в Discord."), true)
+		bb.logger.Error("betting: failed to read points for user %d: %v", userID, err)
+		bb.bot.apiRespond(callback, "Не удалось прочитать баланс. Попробуйте позже.", true)
 		return
 	}
 
@@ -126,8 +172,8 @@ func (bb *BettingBot) handleBetCallback(callback *tgbotapi.CallbackQuery) {
 	}
 
 	amount := points
-	if amount > 50 {
-		amount = 50
+	if amount > maxQuickBet {
+		amount = maxQuickBet
 	}
 
 	req := models.PlaceBetRequest{
@@ -137,10 +183,9 @@ func (bb *BettingBot) handleBetCallback(callback *tgbotapi.CallbackQuery) {
 		Amount:     amount,
 	}
 
-	err = bb.bettingService.PlaceBet(req)
-	if err != nil {
-		bb.logger.Error("betting: user %d failed to place bet: %v", userID, err)
-		bb.bot.apiRespond(callback, fmt.Sprintf("Ошибка ставки: %s", err.Error()), true)
+	if err := bb.bettingService.PlaceBet(ctx, req); err != nil {
+		bb.logger.Error("betting: user %d failed to place bet on match #%d: %v", userID, matchID, err)
+		bb.bot.apiRespond(callback, betFailureMessage(err), true)
 		return
 	}
 
@@ -151,8 +196,8 @@ func (bb *BettingBot) handleBetCallback(callback *tgbotapi.CallbackQuery) {
 
 	bb.logger.Info("betting: user %d (%s) bet %d on %s (match #%d)", userID, username, amount, teamChosen, matchID)
 }
-func (bb *BettingBot) NotifyMatchResult(matchID int, winningTeam string, payouts map[int64]int) {
 
+func (bb *BettingBot) NotifyMatchResult(res application.PayoutResult) {
 	if bb.channelID == "" {
 		return
 	}
@@ -162,7 +207,7 @@ func (bb *BettingBot) NotifyMatchResult(matchID int, winningTeam string, payouts
 		return
 	}
 
-	summary := application.FormatPayoutSummary(payouts, winningTeam)
+	summary := application.FormatPayoutSummary(res)
 
 	msg := tgbotapi.NewMessage(channelChatID, summary)
 	msg.ParseMode = "Markdown"
@@ -171,72 +216,24 @@ func (bb *BettingBot) NotifyMatchResult(matchID int, winningTeam string, payouts
 	if err != nil {
 		bb.logger.Error("betting: failed to send match result to channel: %v", err)
 	} else {
-		bb.logger.Info("betting: match #%d result published to Telegram channel", matchID)
+		bb.logger.Info("betting: match #%d result published to Telegram channel", res.MatchID)
 	}
 }
 
-func (bb *BettingBot) HandleBetCommand(chatID int64, text string) string {
-	parts := strings.Fields(text)
-	if len(parts) < 3 {
-		return "Используйте: `/bet <ID матча> <Team A|Team B> <сумма>`\nНапример: `/bet 42 Team A 25`"
-	}
-
-	matchID := 0
-	fmt.Sscanf(parts[1], "%d", &matchID)
-	teamChosen := parts[2]
-	amount := 0
-	if len(parts) >= 4 {
-		fmt.Sscanf(parts[3], "%d", &amount)
-	}
-
-	if matchID <= 0 {
-		return "Неверный ID матча."
-	}
-	if teamChosen != "Team A" && teamChosen != "Team B" {
-		return "Команда должна быть 'Team A' или 'Team B'."
-	}
-	if amount <= 0 {
-		amount = 10
-	}
-
-	req := models.PlaceBetRequest{
-		MatchID:    matchID,
-		TgUserID:   chatID,
-		TeamChosen: teamChosen,
-		Amount:     amount,
-	}
-
-	err := bb.bettingService.PlaceBet(req)
-	if err != nil {
-		return fmt.Sprintf("Ошибка ставки: %s", err.Error())
-	}
-
-	return fmt.Sprintf("Ставка принята!\n\n Матч #%d\n Команда: **%s**\n Сумма: %d очков",
-		matchID, teamChosen, amount)
-}
-
-func (bb *BettingBot) HandleBalanceCommand(chatID int64) string {
-	points, err := bb.bettingService.GetPlayerPoints(chatID)
-	if err != nil {
-		return fmt.Sprintf("Ваш Telegram не привязан к игроку. Используйте /link <код> в Discord.")
-	}
-	return fmt.Sprintf("Ваш баланс: %d очков", points)
-}
+// HandleBetCommand and HandleBalanceCommand were removed: nothing dispatched to
+// them. They duplicated the callback flow with weaker validation (two unchecked
+// Sscanf calls, their own "Team A"/"Team B" literals) and identified the bettor
+// by chat id rather than From.ID, which is the group's id in a group chat.
+// Betting is placed through the inline keyboard in handleBetCallback.
 
 func (bb *BettingBot) resolveChannelID() int64 {
 	if bb.channelID == "" {
 		return 0
 	}
 
-	var id int64
-	if _, err := fmt.Sscanf(bb.channelID, "%d", &id); err == nil && id != 0 {
+	if id, err := strconv.ParseInt(bb.channelID, 10, 64); err == nil && id != 0 {
 		return id
 	}
-
-	chatConfig := tgbotapi.ChatConfig{
-		ChatID: 0,
-	}
-	_ = chatConfig
 
 	chat, err := bb.bot.bot.GetChat(tgbotapi.ChatInfoConfig{
 		ChatConfig: tgbotapi.ChatConfig{
@@ -248,6 +245,27 @@ func (bb *BettingBot) resolveChannelID() int64 {
 		return 0
 	}
 	return chat.ID
+}
+func (bb *BettingBot) NotifyMatchCancelled(matchID int, refundedCount int) {
+	if bb.channelID == "" {
+		return
+	}
+
+	channelChatID := bb.resolveChannelID()
+	if channelChatID == 0 {
+		return
+	}
+
+	text := fmt.Sprintf("🚫 **МАТЧ #%d ОТМЕНЕН СУДЬЕЙ!**\n\nВсе сделанные ставки (%d) были отменены, очки возвращены на баланс пользователей.", matchID, refundedCount)
+	msg := tgbotapi.NewMessage(channelChatID, text)
+	msg.ParseMode = "Markdown"
+
+	_, err := bb.bot.bot.Send(msg)
+	if err != nil {
+		bb.logger.Error("betting: failed to send cancel notification to channel: %v", err)
+	} else {
+		bb.logger.Info("betting: match #%d cancellation published to Telegram channel", matchID)
+	}
 }
 
 func (b *Bot) apiRespond(callback *tgbotapi.CallbackQuery, text string, showAlert bool) {

@@ -1,5 +1,11 @@
 package application
 
+import "time"
+
+// sheetSyncTimeout bounds a detached Google Sheets sync. The callback that
+// triggers it has no request to inherit a deadline from, so it needs its own.
+const sheetSyncTimeout = 2 * time.Minute
+
 const (
 	defaultStatsCacheTTL = 60 // seconds
 
@@ -7,27 +13,7 @@ const (
 
 	maxImageDownloadSize = 10 * 1024 * 1024 // 10MB
 
-	maxMessageLength     = 2000
-	maxMessageTruncation = 1900
-
-	topPlayersLimit = 10
-
 	signatureSeparator = "|"
 
-	maxConcurrentImageUploads = 3
-
-	colorGold         = 0xFFD700
-	colorBlue         = 0x3498DB
-	colorTelegramBlue = 0x0088CC
-
-	sheetsHeaderColor     = "FFD700" // Gold
-	sheetsTextColor       = "000000" // Black
-	sheetsBackgroundColor = "FFFFFF" // White
-	sheetsPermissionRole  = "reader"
-	sheetsPermissionType  = "anyone"
-
 	minDeathsForKDA = 1
-
-	excelSheetName       = "Статистика"
-	excelDefaultRowCount = 1000
 )

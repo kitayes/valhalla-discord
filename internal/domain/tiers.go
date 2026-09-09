@@ -6,14 +6,13 @@ import "fmt"
 type Tier string
 
 const (
-	TierObsidian Tier = "OBSIDIAN" // S-Tier: 2200+
-	TierOnyx     Tier = "ONYX"     // A-Tier: 1800-2199
-	TierCarbon   Tier = "CARBON"   // B-Tier: 1400-1799
-	TierGraphite Tier = "GRAPHITE" // C-Tier: 1000-1399
-	TierUnranked Tier = "UNRANKED" // Below 1000
+	TierObsidian Tier = "OBSIDIAN"
+	TierOnyx     Tier = "ONYX"
+	TierCarbon   Tier = "CARBON"
+	TierGraphite Tier = "GRAPHITE"
+	TierUnranked Tier = "UNRANKED"
 )
 
-// Role names for Discord tier roles.
 var TierRoleNames = map[Tier]string{
 	TierObsidian: "OBSIDIAN",
 	TierOnyx:     "ONYX",
@@ -21,7 +20,6 @@ var TierRoleNames = map[Tier]string{
 	TierGraphite: "GRAPHITE",
 }
 
-// DetermineTier returns the tier for a given MMR value.
 func DetermineTier(mmr int) Tier {
 	switch {
 	case mmr >= 2200:
@@ -37,7 +35,6 @@ func DetermineTier(mmr int) Tier {
 	}
 }
 
-// FormatTierDisplay returns a styled string representation of a tier for embeds.
 func FormatTierDisplay(t Tier) string {
 	switch t {
 	case TierObsidian:
@@ -53,7 +50,6 @@ func FormatTierDisplay(t Tier) string {
 	}
 }
 
-// FormatTierWithMMR returns a combined display with MMR.
 func FormatTierWithMMR(mmr int) string {
 	tier := DetermineTier(mmr)
 	return fmt.Sprintf("%s (%d MMR)", FormatTierDisplay(tier), mmr)

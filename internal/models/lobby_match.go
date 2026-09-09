@@ -23,6 +23,8 @@ type LobbyMatch struct {
 	Status      LobbyMatchStatus `json:"status"`
 	ThreadID    string           `json:"thread_id,omitempty"` // Discord thread ID
 	BettingOpen bool             `json:"betting_open"`        // Whether betting is still open
+	MVP         string           `json:"mvp,omitempty"`       // read off the scoreboard screenshot
+	SVP         string           `json:"svp,omitempty"`
 	CreatedAt   time.Time        `json:"created_at"`
 }
 

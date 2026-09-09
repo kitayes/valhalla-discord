@@ -1,10 +1,16 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"sort"
 
+	"blackwatch/internal/domain"
 	"blackwatch/internal/models"
+
+	"github.com/lib/pq"
 )
 
 type BetPostgres struct {
@@ -15,37 +21,64 @@ func NewBetPostgres(db *sql.DB) *BetPostgres {
 	return &BetPostgres{db: db}
 }
 
-// PlaceBet atomically deducts points from the player and logs the bet.
-func (r *BetPostgres) PlaceBet(req models.PlaceBetRequest) error {
-	tx, err := r.db.Begin()
+// PlaceBet atomically verifies the betting window, deducts points and logs the bet.
+//
+// The FOR SHARE on lobby_matches is what orders this against settlement: closing
+// a match updates that row, so AtomicSetWinner waits for every in-flight bet and
+// every bet started afterwards reads the closed status and is refused.
+func (r *BetPostgres) PlaceBet(ctx context.Context, req models.PlaceBetRequest) error {
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer func() {
-		if err != nil {
-			tx.Rollback()
-		}
-	}()
+	// Safe to call unconditionally: Rollback after a successful Commit is a no-op.
+	defer tx.Rollback() //nolint:errcheck // best-effort cleanup
+
+	// The window can close between the caller's check and this transaction.
+	// The stored deadline is checked alongside the flag: after a restart the
+	// flag can still read TRUE with no timer left to clear it, which would let
+	// bets land on a match whose result is already known.
+	//
+	// A NULL deadline counts as closed, the same reading CloseExpiredBetting
+	// uses. The two used to disagree — this side treated NULL as "open forever",
+	// the sweeper as "expired" — so a row left open by the pre-deadline code took
+	// bets until the next sweep happened to run.
+	var bettingOpen bool
+	var status string
+	err = tx.QueryRowContext(ctx,
+		`SELECT betting_open AND betting_closes_at IS NOT NULL AND betting_closes_at > NOW(), status
+		   FROM lobby_matches WHERE id = $1 FOR SHARE`,
+		req.MatchID,
+	).Scan(&bettingOpen, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("match %d: %w", req.MatchID, domain.ErrMatchNotFound)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to check betting window: %w", err)
+	}
+	if !bettingOpen || string(models.LobbyMatchStatusActive) != status {
+		return fmt.Errorf("match %d: %w", req.MatchID, domain.ErrBettingClosed)
+	}
 
 	// Verify player exists and has enough points
 	var currentPoints int
-	err = tx.QueryRow(
+	err = tx.QueryRowContext(ctx,
 		`SELECT points FROM players WHERE tg_id = $1 FOR UPDATE`,
 		req.TgUserID,
 	).Scan(&currentPoints)
-	if err == sql.ErrNoRows {
-		return fmt.Errorf("Telegram user %d not linked to any player", req.TgUserID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("telegram user %d: %w", req.TgUserID, domain.ErrPlayerNotFound)
 	}
 	if err != nil {
 		return fmt.Errorf("failed to get player points: %w", err)
 	}
 
 	if currentPoints < req.Amount {
-		return fmt.Errorf("insufficient points: have %d, need %d", currentPoints, req.Amount)
+		return fmt.Errorf("have %d, need %d: %w", currentPoints, req.Amount, domain.ErrInsufficientPoints)
 	}
 
 	// Deduct points
-	_, err = tx.Exec(
+	_, err = tx.ExecContext(ctx,
 		`UPDATE players SET points = points - $1 WHERE tg_id = $2`,
 		req.Amount, req.TgUserID,
 	)
@@ -53,34 +86,42 @@ func (r *BetPostgres) PlaceBet(req models.PlaceBetRequest) error {
 		return fmt.Errorf("failed to deduct points: %w", err)
 	}
 
-	// Log the bet
-	_, err = tx.Exec(
+	// Log the bet. "One bet per user per match" is enforced by the partial
+	// unique index on (match_id, tg_user_id) WHERE settled_at IS NULL, not by a
+	// prior SELECT: a COUNT(*) read here takes no lock on rows that do not exist
+	// yet, so two concurrent taps both saw zero and both inserted — the bettor
+	// ended up backing both teams and could not lose.
+	_, err = tx.ExecContext(ctx,
 		`INSERT INTO match_bets (match_id, tg_user_id, team_chosen, amount)
 		 VALUES ($1, $2, $3, $4)`,
 		req.MatchID, req.TgUserID, req.TeamChosen, req.Amount,
 	)
 	if err != nil {
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == pgUniqueViolation {
+			return fmt.Errorf("match %d: %w", req.MatchID, domain.ErrAlreadyBet)
+		}
 		return fmt.Errorf("failed to insert bet: %w", err)
 	}
 
 	return tx.Commit()
 }
 
-// GetBetsByMatch retrieves all bets for a given match ID.
-func (r *BetPostgres) GetBetsByMatch(matchID int) ([]models.Bet, error) {
-	rows, err := r.db.Query(
-		`SELECT id, match_id, tg_user_id, team_chosen, amount, created_at
-		 FROM match_bets WHERE match_id = $1`, matchID,
+// GetBetsByMatch retrieves all bets for a given match ID, settled ones included.
+func (r *BetPostgres) GetBetsByMatch(ctx context.Context, matchID int) ([]models.Bet, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, match_id, tg_user_id, team_chosen, amount, created_at, settled_at, payout
+		 FROM match_bets WHERE match_id = $1 ORDER BY id`, matchID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query bets: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // best-effort cleanup
 
 	var bets []models.Bet
 	for rows.Next() {
-		var b models.Bet
-		if err := rows.Scan(&b.ID, &b.MatchID, &b.TgUserID, &b.TeamChosen, &b.Amount, &b.CreatedAt); err != nil {
+		b, err := scanBet(rows)
+		if err != nil {
 			return nil, fmt.Errorf("failed to scan bet: %w", err)
 		}
 		bets = append(bets, b)
@@ -88,31 +129,138 @@ func (r *BetPostgres) GetBetsByMatch(matchID int) ([]models.Bet, error) {
 	return bets, rows.Err()
 }
 
-// PayoutWinners credits winning bettors with their winnings.
+// PendingSettlements lists matches that are over but still hold live bets.
+//
+// Settlement is driven from a Discord interaction, and any single step of that
+// path can drop it: the rating update fails and the handler returns before the
+// payout is scheduled, the payout goroutine loses its database connection, or
+// the process is restarted between cancelling a match and refunding it. In every
+// one of those cases the match is already FINISHED, so neither the WIN button
+// nor /cancel_match can be replayed to finish the job — the points stayed
+// deducted with nothing left to move them.
+//
+// Winner is invalid for a cancelled match, which is the caller's cue to refund
+// rather than pay out.
+func (r *BetPostgres) PendingSettlements(ctx context.Context) ([]models.PendingSettlement, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT DISTINCT m.id, m.winner
+		   FROM match_bets b
+		   JOIN lobby_matches m ON m.id = b.match_id
+		  WHERE b.settled_at IS NULL
+		    AND m.status = 'FINISHED'
+		  ORDER BY m.id`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query pending settlements: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // best-effort cleanup
+
+	var pending []models.PendingSettlement
+	for rows.Next() {
+		var p models.PendingSettlement
+		var winner sql.NullString
+		if err := rows.Scan(&p.MatchID, &winner); err != nil {
+			return nil, fmt.Errorf("failed to scan pending settlement: %w", err)
+		}
+		p.Winner = winner.String
+		p.Cancelled = !winner.Valid || winner.String == ""
+		pending = append(pending, p)
+	}
+	return pending, rows.Err()
+}
+
+// PayoutWinners credits winning bettors with their share of the pool.
 // winningTeam is "Team A" or "Team B".
-// Returns the list of winning bet user IDs and their payout amounts.
-func (r *BetPostgres) PayoutWinners(matchID int, winningTeam string) (map[int64]int, error) {
-	tx, err := r.db.Begin()
+//
+// Only unsettled bets are considered, so calling it twice for the same match
+// pays out once. Returns tgUserID -> total points credited.
+func (r *BetPostgres) PayoutWinners(ctx context.Context, matchID int, winningTeam string) (map[int64]int, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer func() {
-		if err != nil {
-			tx.Rollback()
-		}
-	}()
+	defer tx.Rollback() //nolint:errcheck // best-effort cleanup
 
-	// Get all bets for this match
-	bets, err := r.getBetsByMatchTx(tx, matchID)
+	bets, err := r.lockUnsettledBets(ctx, tx, matchID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get bets: %w", err)
 	}
 
+	payouts := make(map[int64]int)
 	if len(bets) == 0 {
-		return nil, tx.Commit() // No bets to pay out
+		// Nothing live to settle — either no bets at all, or already paid out.
+		return payouts, tx.Commit()
 	}
 
-	// Calculate total pool and winning pool
+	shares := calculatePayoutShares(bets, winningTeam)
+
+	for _, b := range bets {
+		if share := shares[b.ID]; share > 0 {
+			payouts[b.TgUserID] += share
+		}
+	}
+	if err := creditPlayers(ctx, tx, payouts); err != nil {
+		return nil, err
+	}
+
+	for _, b := range bets {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE match_bets SET settled_at = NOW(), payout = $1 WHERE id = $2`,
+			shares[b.ID], b.ID,
+		); err != nil {
+			return nil, fmt.Errorf("failed to settle bet %d: %w", b.ID, err)
+		}
+	}
+
+	return payouts, tx.Commit()
+}
+
+// creditPlayers adds points to each account in ascending tg_id order.
+//
+// The order matters. PayoutWinners and RefundAllBets both take their row locks
+// match_bets -> players, which serialises them against each other for one match,
+// but says nothing about two different matches settling at the same time. With
+// the credits issued in map-iteration order, two such transactions sharing a
+// pair of bettors grabbed the same players rows in opposite orders and
+// deadlocked; Postgres then aborted one of the settlements.
+func creditPlayers(ctx context.Context, tx *sql.Tx, credits map[int64]int) error {
+	tgIDs := make([]int64, 0, len(credits))
+	for tgID := range credits {
+		tgIDs = append(tgIDs, tgID)
+	}
+	sort.Slice(tgIDs, func(i, j int) bool { return tgIDs[i] < tgIDs[j] })
+
+	for _, tgID := range tgIDs {
+		amount := credits[tgID]
+		if amount <= 0 {
+			continue
+		}
+		res, err := tx.ExecContext(ctx,
+			`UPDATE players SET points = points + $1 WHERE tg_id = $2`, amount, tgID)
+		if err != nil {
+			return fmt.Errorf("failed to credit player %d: %w", tgID, err)
+		}
+		// A missing players row must abort the whole settlement. Ignoring the
+		// row count credited nobody and still let the caller mark the bet
+		// settled, which turns "this account is gone" into points that quietly
+		// evaporate with no record that they were owed.
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("failed to confirm credit for player %d: %w", tgID, err)
+		}
+		if affected == 0 {
+			return fmt.Errorf("cannot credit %d points to telegram user %d: %w",
+				amount, tgID, domain.ErrPlayerNotFound)
+		}
+	}
+	return nil
+}
+
+// calculatePayoutShares distributes the whole pool across the winning bets in
+// proportion to their stake. The integer remainder left over by the division is
+// handed out one point at a time (largest remainder first, bet ID as tie-break)
+// so that the sum of payouts equals the pool exactly and the result is
+// deterministic. If nobody backed the winning team, the pool is consumed.
+func calculatePayoutShares(bets []models.Bet, winningTeam string) map[int]int {
 	totalPool := 0
 	winningPool := 0
 	var winners []models.Bet
@@ -125,69 +273,95 @@ func (r *BetPostgres) PayoutWinners(matchID int, winningTeam string) (map[int64]
 		}
 	}
 
-	payouts := make(map[int64]int)
-
-	if len(winners) == 0 {
-		// No winners — return nothing (losing pool stays consumed)
-		return payouts, tx.Commit()
+	shares := make(map[int]int, len(bets))
+	if len(winners) == 0 || winningPool == 0 {
+		return shares
 	}
 
-	// Distribute winning pool proportionally
+	distributed := 0
+	type remainder struct {
+		betID int
+		rem   int
+	}
+	remainders := make([]remainder, 0, len(winners))
+
 	for _, w := range winners {
-		var share int
-		if winningPool > 0 {
-			share = (w.Amount * totalPool) / winningPool
-		} else {
-			share = w.Amount // Fallback: return original bet
-		}
-
-		// Credit points back to winner
-		_, err := tx.Exec(
-			`UPDATE players SET points = points + $1 WHERE tg_id = $2`,
-			share, w.TgUserID,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to credit winner %d: %w", w.TgUserID, err)
-		}
-
-		payouts[w.TgUserID] = share
+		gross := w.Amount * totalPool
+		share := gross / winningPool
+		shares[w.ID] = share
+		distributed += share
+		remainders = append(remainders, remainder{betID: w.ID, rem: gross % winningPool})
 	}
 
-	return payouts, tx.Commit()
+	leftover := totalPool - distributed
+	if leftover <= 0 {
+		return shares
+	}
+
+	sort.Slice(remainders, func(i, j int) bool {
+		if remainders[i].rem != remainders[j].rem {
+			return remainders[i].rem > remainders[j].rem
+		}
+		return remainders[i].betID < remainders[j].betID
+	})
+
+	for i := 0; i < leftover && i < len(remainders); i++ {
+		shares[remainders[i].betID]++
+	}
+	return shares
 }
 
-// getBetsByMatchTx is an internal transaction-aware variant.
-func (r *BetPostgres) getBetsByMatchTx(tx *sql.Tx, matchID int) ([]models.Bet, error) {
-	rows, err := tx.Query(
-		`SELECT id, match_id, tg_user_id, team_chosen, amount, created_at
-		 FROM match_bets WHERE match_id = $1
-		 ORDER BY created_at`, matchID,
+// lockUnsettledBets reads and locks every live bet of a match. Rows are fully
+// consumed before the caller issues any write: lib/pq cannot interleave a query
+// and an exec on the same connection.
+func (r *BetPostgres) lockUnsettledBets(ctx context.Context, tx *sql.Tx, matchID int) ([]models.Bet, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id, match_id, tg_user_id, team_chosen, amount, created_at, settled_at, payout
+		 FROM match_bets WHERE match_id = $1 AND settled_at IS NULL
+		 ORDER BY id FOR UPDATE`, matchID,
 	)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // best-effort cleanup
 
 	var bets []models.Bet
 	for rows.Next() {
-		var b models.Bet
-		if err := rows.Scan(&b.ID, &b.MatchID, &b.TgUserID, &b.TeamChosen, &b.Amount, &b.CreatedAt); err != nil {
+		b, err := scanBet(rows)
+		if err != nil {
 			return nil, err
 		}
 		bets = append(bets, b)
 	}
-	return bets, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return bets, rows.Close()
+}
+
+func scanBet(rows *sql.Rows) (models.Bet, error) {
+	var b models.Bet
+	var settledAt sql.NullTime
+	if err := rows.Scan(&b.ID, &b.MatchID, &b.TgUserID, &b.TeamChosen,
+		&b.Amount, &b.CreatedAt, &settledAt, &b.Payout); err != nil {
+		return models.Bet{}, err
+	}
+	if settledAt.Valid {
+		t := settledAt.Time
+		b.SettledAt = &t
+	}
+	return b, nil
 }
 
 // GetPlayerPoints returns the current points for a player by Telegram ID.
-func (r *BetPostgres) GetPlayerPoints(tgUserID int64) (int, error) {
+func (r *BetPostgres) GetPlayerPoints(ctx context.Context, tgUserID int64) (int, error) {
 	var points int
-	err := r.db.QueryRow(
+	err := r.db.QueryRowContext(ctx,
 		`SELECT points FROM players WHERE tg_id = $1`,
 		tgUserID,
 	).Scan(&points)
-	if err == sql.ErrNoRows {
-		return 0, fmt.Errorf("Telegram user %d not linked to any player", tgUserID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("telegram user %d: %w", tgUserID, domain.ErrPlayerNotFound)
 	}
 	if err != nil {
 		return 0, fmt.Errorf("failed to get player points: %w", err)
@@ -195,12 +369,49 @@ func (r *BetPostgres) GetPlayerPoints(tgUserID int64) (int, error) {
 	return points, nil
 }
 
-// IsBettingOpen checks if the betting window is still open for a match.
-func (r *BetPostgres) IsBettingOpen(matchID int) (bool, error) {
-	var open bool
-	err := r.db.QueryRow(`SELECT betting_open FROM lobby_matches WHERE id = $1`, matchID).Scan(&open)
-	if err == sql.ErrNoRows {
-		return false, fmt.Errorf("match %d not found", matchID)
+// RefundAllBets returns every live bet of a match to its owner and marks the
+// bets settled. Already settled bets are left alone, so a repeated call is a
+// no-op. Returns the number of refunded bets.
+//
+// Rows are locked match_bets -> players, the same order PayoutWinners uses, and
+// the credits themselves go out in ascending tg_id order — see creditPlayers.
+func (r *BetPostgres) RefundAllBets(ctx context.Context, matchID int) (int, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	return open, err
+	defer tx.Rollback() //nolint:errcheck // best-effort cleanup
+
+	bets, err := r.lockUnsettledBets(ctx, tx, matchID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to lock bets: %w", err)
+	}
+	if len(bets) == 0 {
+		return 0, tx.Commit()
+	}
+
+	refunds := make(map[int64]int, len(bets))
+	for _, b := range bets {
+		refunds[b.TgUserID] += b.Amount
+	}
+	if err := creditPlayers(ctx, tx, refunds); err != nil {
+		return 0, err
+	}
+
+	res, err := tx.ExecContext(ctx,
+		`UPDATE match_bets SET settled_at = NOW(), payout = amount
+		  WHERE match_id = $1 AND settled_at IS NULL`, matchID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("failed to mark bets refunded: %w", err)
+	}
+	refunded, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to count refunded bets: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("failed to commit refund: %w", err)
+	}
+	return int(refunded), nil
 }

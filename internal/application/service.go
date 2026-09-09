@@ -1,6 +1,7 @@
 package application
 
 import (
+	"context"
 	"time"
 
 	"blackwatch/internal/models"
@@ -9,8 +10,8 @@ import (
 )
 
 type AIProvider interface {
-	ParseImage(data []byte) (*models.Match, error)
-	ParseImageWithPlayers(data []byte, expectedPlayers []string) (*models.Match, error)
+	ParseImage(ctx context.Context, data []byte) (*models.Match, error)
+	ParseImageWithPlayers(ctx context.Context, data []byte, expectedPlayers []string) (*models.Match, error)
 }
 
 type Logger interface {
@@ -21,36 +22,49 @@ type Logger interface {
 }
 
 type MatchService interface {
-	ProcessImage(data []byte) (int, error)
-	ProcessImageWithPlayers(data []byte, expectedPlayers []string) (int, error)
-	ProcessImageFromURL(url string) (int, error)
-	ProcessImageFromURLWithPlayers(url string, expectedPlayers []string) (int, error)
-	GetExcelReport() ([]byte, error)
-	SyncToGoogleSheet() (string, error)
-	SetTimer(dateStr string) error
-	ResetGlobal() error
-	ResetPlayer(name, dateStr string) error
-	DeleteMatch(id int) error
-	WipeAllData() error
-	RenamePlayer(id int, newName string) error
+	ProcessImage(ctx context.Context, data []byte) (*models.MatchResult, error)
+	ProcessImageWithPlayers(ctx context.Context, data []byte, expectedPlayers []string) (*models.MatchResult, error)
+	ProcessImageFromURL(ctx context.Context, url string) (*models.MatchResult, error)
+	ProcessImageFromURLWithPlayers(ctx context.Context, url string, expectedPlayers []string) (*models.MatchResult, error)
+	GetExcelReport(ctx context.Context) ([]byte, error)
+	SyncToGoogleSheet(ctx context.Context) (string, error)
+	SetTimer(ctx context.Context, dateStr string) error
+	ResetGlobal(ctx context.Context) error
+	ResetPlayer(ctx context.Context, name, dateStr string) error
+	DeleteMatch(ctx context.Context, id int) error
+	WipeAllData(ctx context.Context) error
+	RenamePlayer(ctx context.Context, id int, newName string) error
 
-	GetLeaderboard(sortBy string) ([]*PlayerStats, error)
+	GetLeaderboard(ctx context.Context, sortBy string) ([]*PlayerStats, error)
 
-	GetPlayerList() ([]models.Player, error)
-	GetPlayerNameByID(id int) (string, error)
-	GetDiscordIDByPlayerID(playerID int) (string, error)
-	GetPlayerByDiscordID(discordID string) (int, string, error)
-	GetHistoryByID(id int) ([]string, error)
-	WipePlayerByID(id int) error
-	GetPlayerStats(name string) (*PlayerStats, error)
-	GetPlayerStatsByID(id int) (*PlayerStats, error)
+	GetPlayerList(ctx context.Context) ([]models.Player, error)
+	GetPlayerNameByID(ctx context.Context, id int) (string, error)
+	GetPlayerNamesByIDs(ctx context.Context, ids []int) (map[int]string, error)
+	GetDiscordIDByPlayerID(ctx context.Context, playerID int) (string, error)
+	GetPlayerByDiscordID(ctx context.Context, discordID string) (int, string, error)
+	BindDiscordID(ctx context.Context, playerID int, discordID string, force bool) (string, error)
+	BindDiscordByName(ctx context.Context, nickname, discordID string) (int, bool, error)
+	FindPlayerByName(ctx context.Context, nickname string) (int, string, error)
+	SuggestPlayerNames(ctx context.Context, prefix string, limit int) ([]models.Player, error)
+	UnbindDiscordID(ctx context.Context, playerID int) (string, error)
+	GetHistoryByID(ctx context.Context, id int) ([]string, error)
+	WipePlayerByID(ctx context.Context, id int) error
+	GetPlayerStats(ctx context.Context, name string) (*PlayerStats, error)
+	GetPlayerStatsByID(ctx context.Context, id int) (*PlayerStats, error)
+	GetLifetimeMedals(ctx context.Context, playerID int) (models.Medals, error)
+
+	// Shutdown drains in-flight background work (currently Google Sheets syncs)
+	// before the process exits. It is part of the interface rather than
+	// something main sniffs for with a type assertion on an anonymous
+	// interface literal.
+	Shutdown(ctx context.Context) error
 }
 
 type LicenseService interface {
-	IsLicenseValid(guildID string) (bool, error)
-	UpgradeLicense(guildID string, expiresAt time.Time) error
-	ExpireLicense(guildID string) error
-	GetLicenseInfo(guildID string) (status string, expiresAt time.Time, err error)
+	IsLicenseValid(ctx context.Context, guildID string) (bool, error)
+	UpgradeLicense(ctx context.Context, guildID string, expiresAt time.Time) error
+	ExpireLicense(ctx context.Context, guildID string) error
+	GetLicenseInfo(ctx context.Context, guildID string) (status string, expiresAt time.Time, err error)
 }
 
 type Service struct {
@@ -66,20 +80,21 @@ type Service struct {
 
 func NewService(repos *repository.Repository, ai AIProvider, sheetsClient sheets.Client, ownerEmail, spreadsheetID string, httpTimeoutSec int, logger Logger) *Service {
 	matchSvc := NewMatchServiceImpl(repos.Match, ai, sheetsClient, ownerEmail, spreadsheetID, httpTimeoutSec, logger)
-	lobby := NewLobbyService(logger)
+	lobby := NewLobbyService(logger, repos.LobbyMatch, repos.QueueBan)
 
-	// Wire the lobby with the match repository for DB-backed match lifecycle
-	lobby.SetMatchRepository(repos.LobbyMatch)
-
-	// Wire sheet syncer: when MMR updates happen, sync to Google Sheets asynchronously
+	// Wire sheet syncer: when MMR updates happen, sync to Google Sheets asynchronously.
+	// The callback runs detached from any request, so it gets its own bounded context.
 	lobby.SetSheetSyncer(func(mmrUpdates map[int]int) {
-		if sheetsClient != nil {
-			_, err := matchSvc.SyncToGoogleSheet()
-			if err != nil {
-				logger.Error("lobby: failed to sync MMR to sheets: %v", err)
-			} else {
-				logger.Info("lobby: MMR synced to Google Sheets (%d players)", len(mmrUpdates))
-			}
+		if sheetsClient == nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), sheetSyncTimeout)
+		defer cancel()
+
+		if _, err := matchSvc.SyncToGoogleSheet(ctx); err != nil {
+			logger.Error("lobby: failed to sync MMR to sheets: %v", err)
+		} else {
+			logger.Info("lobby: MMR synced to Google Sheets (%d players)", len(mmrUpdates))
 		}
 	})
 

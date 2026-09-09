@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -9,7 +10,7 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
-func (b *Bot) handleAdminCommand(chatID int64, text string) {
+func (b *Bot) handleAdminCommand(ctx context.Context, chatID int64, text string) {
 	if text == "/start" || strings.HasPrefix(text, "/admin") {
 		response := "Админ-панель:\n\n" +
 			"/list_teams - Краткий список и кол-во\n" +
@@ -27,12 +28,14 @@ func (b *Bot) handleAdminCommand(chatID int64, text string) {
 	}
 
 	if text == "/export" {
-		csvData, err := b.service.GenerateTeamsCSV()
+		csvData, err := b.service.GenerateTeamsCSV(ctx)
 		if err != nil {
 			b.sendMessage(chatID, "Ошибка: "+err.Error(), "main_menu")
 		} else {
 			fileBytes := tgbotapi.FileBytes{Name: "teams.csv", Bytes: csvData}
-			b.bot.Send(tgbotapi.NewDocument(chatID, fileBytes))
+			if _, err := b.bot.Send(tgbotapi.NewDocument(chatID, fileBytes)); err != nil {
+				b.logger.Error("telegram: failed to send teams.csv to %d: %v", chatID, err)
+			}
 		}
 		return
 	}
@@ -44,7 +47,7 @@ func (b *Bot) handleAdminCommand(chatID int64, text string) {
 		if err != nil {
 			b.sendMessage(chatID, "Ошибка! Формат: /set_tourney 20.05.2024 18:00", "main_menu")
 		} else {
-			b.service.SetTournamentTime(t)
+			b.service.SetTournamentTime(ctx, t)
 			b.sendMessage(chatID, fmt.Sprintf("Время турнира установлено: %s\nНапоминание в: %s\nТех. поражение в: %s",
 				t.Format(layout),
 				t.Add(-30*time.Minute).Format("15:04"),
@@ -54,68 +57,89 @@ func (b *Bot) handleAdminCommand(chatID int64, text string) {
 	}
 
 	if text == "/list_solo" {
-		b.sendMessage(chatID, b.service.GetSoloPlayersList(), "main_menu")
+		b.sendMessage(chatID, b.service.GetSoloPlayersList(ctx), "main_menu")
 		return
 	}
 
 	if text == "/export_solo" {
-		data, err := b.service.GenerateSoloPlayersCSV()
+		data, err := b.service.GenerateSoloPlayersCSV(ctx)
 		if err != nil {
 			b.sendMessage(chatID, "Ошибка: "+err.Error(), "main_menu")
 		} else {
 			file := tgbotapi.FileBytes{Name: "solo_players.csv", Bytes: data}
-			b.bot.Send(tgbotapi.NewDocument(chatID, file))
+			if _, err := b.bot.Send(tgbotapi.NewDocument(chatID, file)); err != nil {
+				b.logger.Error("telegram: failed to send solo_players.csv to %d: %v", chatID, err)
+			}
 		}
 		return
 	}
 
 	if text == "/list_teams" {
-		b.sendMessage(chatID, b.service.GetTeamsList(), "main_menu")
+		b.sendMessage(chatID, b.service.GetTeamsList(ctx), "main_menu")
 		return
 	}
 
 	if strings.HasPrefix(text, "/check_team ") {
 		teamName := strings.TrimPrefix(text, "/check_team ")
-		b.sendMessage(chatID, b.service.AdminGetTeamDetails(teamName), "main_menu")
+		b.sendMessage(chatID, b.service.AdminGetTeamDetails(ctx, teamName), "main_menu")
 		return
 	}
 
 	if strings.HasPrefix(text, "/broadcast ") {
 		msgText := strings.TrimPrefix(text, "/broadcast ")
-		ids, _ := b.service.GetBroadcastList()
-		for _, id := range ids {
-			b.sendMessage(id, "СООБЩЕНИЕ ОТ ОРГАНИЗАТОРОВ:\n\n"+msgText, "empty")
+		ids, err := b.service.GetBroadcastList(ctx)
+		if err != nil {
+			b.sendMessage(chatID, "Ошибка получения списка рассылки: "+err.Error(), "main_menu")
+			return
 		}
-		b.sendMessage(chatID, fmt.Sprintf("Рассылка на %d чел. завершена.", len(ids)), "main_menu")
+		if len(ids) == 0 {
+			b.sendMessage(chatID, "Некому рассылать: список пуст.", "main_menu")
+			return
+		}
+
+		// A paced broadcast outlives this update's deadline, so it runs detached
+		// with its own budget and reports back when finished.
+		b.sendMessage(chatID, fmt.Sprintf("Рассылка на %d чел. запущена...", len(ids)), "main_menu")
+		go func() {
+			bgCtx, cancel := context.WithTimeout(context.Background(), broadcastTimeout)
+			defer cancel()
+
+			delivered, failed := b.broadcast(bgCtx, ids, "СООБЩЕНИЕ ОТ ОРГАНИЗАТОРОВ:\n\n"+msgText, "empty")
+			report := fmt.Sprintf("Рассылка завершена.\nДоставлено: %d из %d", delivered, len(ids))
+			if failed > 0 {
+				report += fmt.Sprintf("\nНе доставлено: %d (заблокировали бота или удалили чат)", failed)
+			}
+			b.sendMessage(chatID, report, "main_menu")
+		}()
 		return
 	}
 
 	if text == "/close_reg" {
-		b.service.SetRegistrationOpen(false)
+		b.service.SetRegistrationOpen(ctx, false)
 		b.sendMessage(chatID, "Регистрация закрыта.", "main_menu")
 		return
 	}
 	if text == "/open_reg" {
-		b.service.SetRegistrationOpen(true)
+		b.service.SetRegistrationOpen(ctx, true)
 		b.sendMessage(chatID, "Регистрация открыта.", "main_menu")
 		return
 	}
 
 	if strings.HasPrefix(text, "/del_team ") {
 		name := strings.TrimPrefix(text, "/del_team ")
-		b.sendMessage(chatID, b.service.AdminDeleteTeam(name), "main_menu")
+		b.sendMessage(chatID, b.service.AdminDeleteTeam(ctx, name), "main_menu")
 		return
 	}
 
 	if strings.HasPrefix(text, "/reset_user ") {
 		idStr := strings.TrimPrefix(text, "/reset_user ")
 		id, _ := strconv.ParseInt(idStr, 10, 64)
-		b.sendMessage(chatID, b.service.AdminResetUser(id), "main_menu")
+		b.sendMessage(chatID, b.service.AdminResetUser(ctx, id), "main_menu")
 		return
 	}
 }
 
-func (b *Bot) handleUserCommand(chatID int64, text string, username string) {
+func (b *Bot) handleUserCommand(ctx context.Context, chatID int64, text string, username string) {
 	if strings.HasPrefix(text, "/link ") {
 		code := strings.TrimPrefix(text, "/link ")
 		code = strings.TrimSpace(code)
@@ -124,7 +148,7 @@ func (b *Bot) handleUserCommand(chatID int64, text string, username string) {
 			return
 		}
 
-		err := b.profileLinkService.LinkTelegramAccount(code, chatID, username)
+		err := b.profileLinkService.LinkTelegramAccount(ctx, code, chatID, username)
 		if err != nil {
 			b.sendMessage(chatID, "Ошибка привязки: "+err.Error(), "empty")
 		} else {
@@ -139,14 +163,14 @@ func (b *Bot) handleUserCommand(chatID int64, text string, username string) {
 			b.sendMessage(chatID, "Используйте: /edit_player [номер]", "empty")
 		} else {
 			slot, _ := strconv.Atoi(parts[1])
-			response, kbType := b.service.StartEditPlayer(chatID, slot)
+			response, kbType := b.service.StartEditPlayer(ctx, chatID, slot)
 			b.sendMessage(chatID, response, kbType)
 		}
 		return
 	}
 
-	var response string
-	var kbType string = "empty"
+	// Every branch below, default included, sets both values.
+	var response, kbType string
 
 	switch text {
 	case "/start":
@@ -157,20 +181,20 @@ func (b *Bot) handleUserCommand(chatID int64, text string, username string) {
 		kbType = "main_menu"
 
 	case "/reg_solo":
-		response, kbType = b.service.StartSoloRegistration(chatID)
+		response, kbType = b.service.StartSoloRegistration(ctx, chatID)
 	case "/reg_team":
-		response, kbType = b.service.StartTeamRegistration(chatID)
+		response, kbType = b.service.StartTeamRegistration(ctx, chatID)
 	case "/my_team":
-		response = b.service.GetTeamInfo(chatID)
+		response = b.service.GetTeamInfo(ctx, chatID)
 		kbType = "empty"
 	case "/checkin":
-		response = b.service.ToggleCheckIn(chatID)
+		response = b.service.ToggleCheckIn(ctx, chatID)
 		kbType = "empty"
 	case "/delete_team":
-		response = b.service.DeleteTeam(chatID)
+		response = b.service.DeleteTeam(ctx, chatID)
 		kbType = "empty"
 	case "/profile":
-		profile, err := b.profileLinkService.GetLinkedProfileByTelegram(chatID)
+		profile, err := b.profileLinkService.GetLinkedProfileByTelegram(ctx, chatID)
 		if err != nil || profile == nil {
 			response = "Ваш аккаунт не привязан к Discord профилю.\n\nИспользуйте /link <код> для привязки.\nКод можно получить в Discord командой /link <ID игрока>"
 		} else {
@@ -209,19 +233,19 @@ func (b *Bot) handleUserCommand(chatID int64, text string, username string) {
 		}
 		kbType = "empty"
 	case "/report":
-		response, kbType = b.service.StartReport(chatID)
+		response, kbType = b.service.StartReport(ctx, chatID)
 
 	default:
-		response, kbType = b.service.HandleUserInput(chatID, text)
+		response, kbType = b.service.HandleUserInput(ctx, chatID, text)
 	}
 
 	b.sendMessage(chatID, response, kbType)
 }
 
-func (b *Bot) handlePhoto(chatID int64, msg *tgbotapi.Message) {
+func (b *Bot) handlePhoto(ctx context.Context, chatID int64, msg *tgbotapi.Message) {
 	photoID := msg.Photo[len(msg.Photo)-1].FileID
 	caption := msg.Caption
-	resp := b.service.HandleReport(chatID, photoID, caption)
+	resp := b.service.HandleReport(ctx, chatID, photoID, caption)
 
 	if strings.HasPrefix(resp, "ADMIN_REPORT:") {
 		parts := strings.SplitN(resp, ":", 3)
@@ -229,12 +253,23 @@ func (b *Bot) handlePhoto(chatID int64, msg *tgbotapi.Message) {
 			fileID := parts[1]
 			reportText := parts[2]
 
+			delivered := 0
 			for adminID := range b.adminIDs {
 				photoMsg := tgbotapi.NewPhoto(adminID, tgbotapi.FileID(fileID))
 				photoMsg.Caption = "НОВЫЙ РЕЗУЛЬТАТ МАТЧА:\n\n" + reportText
-				b.bot.Send(photoMsg)
+				if _, err := b.bot.Send(photoMsg); err != nil {
+					b.logger.Error("telegram: failed to forward match report to admin %d: %v", adminID, err)
+					continue
+				}
+				delivered++
 			}
-			b.sendMessage(chatID, "Скриншот отправлен судьям!", "empty")
+			// Reported honestly: the previous version claimed the screenshot had
+			// reached the referees even when every send had failed.
+			if delivered == 0 {
+				b.sendMessage(chatID, "Не удалось отправить скриншот судьям. Попробуйте ещё раз.", "empty")
+			} else {
+				b.sendMessage(chatID, "Скриншот отправлен судьям!", "empty")
+			}
 		}
 	} else {
 		b.sendMessage(chatID, resp, "empty")

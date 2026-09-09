@@ -2,6 +2,7 @@ package ai
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -38,9 +39,13 @@ type embeddingResponse struct {
 	Embedding []float64 `json:"embedding"`
 }
 
-// GetEmbedding sends a string (e.g., a player nickname) to the local Ollama container
-// and returns the embedding vector as []float64.
-func (c *EmbeddingClient) GetEmbedding(text string) ([]float64, error) {
+// GetEmbedding sends a string (e.g., a player nickname) to the local Ollama
+// container and returns the embedding vector as []float64.
+//
+// It takes a context: this is a network call on the player-matching path, and
+// without one a hung Ollama held the caller for the client timeout regardless of
+// whether the request behind it had already been abandoned.
+func (c *EmbeddingClient) GetEmbedding(ctx context.Context, text string) ([]float64, error) {
 	reqBody := embeddingRequest{
 		Model:  embeddingModel,
 		Prompt: text,
@@ -51,11 +56,17 @@ func (c *EmbeddingClient) GetEmbedding(text string) ([]float64, error) {
 		return nil, fmt.Errorf("failed to marshal embedding request: %w", err)
 	}
 
-	resp, err := c.httpClient.Post(ollamaEmbeddingsURL, "application/json", bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ollamaEmbeddingsURL, bytes.NewReader(payload))
+	if err != nil {
+		return nil, fmt.Errorf("failed to build embedding request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to call ollama embeddings API: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // best-effort cleanup
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)

@@ -1,14 +1,29 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"blackwatch/internal/ai"
+	"blackwatch/internal/domain"
 	"blackwatch/internal/models"
+
+	"github.com/lib/pq"
 )
+
+// pgUniqueViolation is the Postgres SQLSTATE for a unique constraint breach.
+const pgUniqueViolation = "23505"
+
+// ErrDiscordIDTaken reports that the Discord account is already bound to a
+// different player. Callers turn it into a message the user can act on.
+var ErrDiscordIDTaken = errors.New("this Discord account is already linked to another player")
+
+// ErrTelegramIDTaken is ErrDiscordIDTaken's counterpart for players.tg_id.
+var ErrTelegramIDTaken = errors.New("this Telegram account is already linked to another player")
 
 const (
 	cosineSimilarityThreshold = 0.28
@@ -24,24 +39,36 @@ type MatchPostgres struct {
 	embeddingClient *ai.EmbeddingClient
 }
 
-func NewMatchPostgres(db *sql.DB, cacheSize int, embeddingClient *ai.EmbeddingClient) (*MatchPostgres, error) {
+// NewMatchPostgres builds the repository and warms the player-name cache.
+//
+// A failed warm-up is now an error rather than a silent empty cache: every
+// player lookup falls back to a query plus an Ollama embedding round trip on a
+// cache miss, so starting cold and never knowing it is exactly the failure that
+// hides until the matching path is slow for everyone.
+func NewMatchPostgres(ctx context.Context, db *sql.DB, cacheSize int, embeddingClient *ai.EmbeddingClient) (*MatchPostgres, error) {
 	cache, err := NewPlayerCache(cacheSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create player cache: %w", err)
 	}
 
-	rows, err := db.Query("SELECT id, name FROM players WHERE is_deleted = FALSE ORDER BY id")
-	if err == nil {
-		defer rows.Close()
-		var players []models.Player
-		for rows.Next() {
-			var p models.Player
-			if err := rows.Scan(&p.ID, &p.Name); err == nil {
-				players = append(players, p)
-			}
-		}
-		cache.LoadAll(players)
+	rows, err := db.QueryContext(ctx, "SELECT id, name FROM players WHERE is_deleted = FALSE ORDER BY id")
+	if err != nil {
+		return nil, fmt.Errorf("failed to warm player cache: %w", err)
 	}
+	defer rows.Close() //nolint:errcheck // best-effort cleanup
+
+	var players []models.Player
+	for rows.Next() {
+		var p models.Player
+		if err := rows.Scan(&p.ID, &p.Name); err != nil {
+			return nil, fmt.Errorf("failed to scan player for cache: %w", err)
+		}
+		players = append(players, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read players for cache: %w", err)
+	}
+	cache.LoadAll(players)
 
 	return &MatchPostgres{
 		db:              db,
@@ -50,20 +77,19 @@ func NewMatchPostgres(db *sql.DB, cacheSize int, embeddingClient *ai.EmbeddingCl
 	}, nil
 }
 
-func (r *MatchPostgres) Create(match models.Match) (int, error) {
-	tx, err := r.db.Begin()
+func (r *MatchPostgres) Create(ctx context.Context, match models.Match) (int, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer func() {
-		if err != nil {
-			tx.Rollback()
-		}
-	}()
+	// Safe to call unconditionally: Rollback after a successful Commit is a
+	// no-op. The previous `if err != nil` guard missed every early return where
+	// err was shadowed by a `:=` inside a block, leaking the connection.
+	defer tx.Rollback() //nolint:errcheck // best-effort cleanup
 
 	var matchID int
 	query := "INSERT INTO matches (file_hash, match_signature) VALUES ($1, $2) RETURNING id"
-	err = tx.QueryRow(query, match.FileHash, match.MatchSignature).Scan(&matchID)
+	err = tx.QueryRowContext(ctx, query, match.FileHash, match.MatchSignature).Scan(&matchID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to insert match: %w", err)
 	}
@@ -71,7 +97,7 @@ func (r *MatchPostgres) Create(match models.Match) (int, error) {
 	// Collect all player IDs (using cache for fast lookups)
 	playerIDs := make([]int, len(match.Players))
 	for i, p := range match.Players {
-		playerID, err := r.EnsurePlayerExists(p.PlayerName)
+		playerID, err := r.EnsurePlayerExists(ctx, p.PlayerName)
 		if err != nil {
 			return 0, fmt.Errorf("failed to ensure player exists: %w", err)
 		}
@@ -79,8 +105,12 @@ func (r *MatchPostgres) Create(match models.Match) (int, error) {
 	}
 
 	// Batch insert all player results in one query
-	if err := r.batchInsertPlayerResults(tx, matchID, match.Players, playerIDs); err != nil {
+	if err := r.batchInsertPlayerResults(ctx, tx, matchID, match.Players, playerIDs); err != nil {
 		return 0, fmt.Errorf("failed to insert player results: %w", err)
+	}
+
+	if err := r.recordMedals(ctx, tx, matchID, match, playerIDs); err != nil {
+		return 0, fmt.Errorf("failed to record medals: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -89,28 +119,138 @@ func (r *MatchPostgres) Create(match models.Match) (int, error) {
 	return matchID, nil
 }
 
-func (r *MatchPostgres) Exists(fileHash, matchSignature string) (bool, error) {
+// recordMedals stores the MVP/SVPG winners on the match and bumps the players'
+// lifetime counters.
+//
+// A medal name is only accepted when it matches somebody on this match's
+// scoreboard — the name is OCR output and must never create or reassign a
+// player, unlike the roster itself which goes through EnsurePlayerExists.
+func (r *MatchPostgres) recordMedals(ctx context.Context, tx *sql.Tx, matchID int, match models.Match, playerIDs []int) error {
+	mvpID := resolveMedalPlayerID(match.MVP, match.Players, playerIDs)
+	svpID := resolveMedalPlayerID(match.SVP, match.Players, playerIDs)
+
+	if mvpID == 0 && svpID == 0 {
+		return nil
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE matches SET mvp_player_id = $1, svp_player_id = $2 WHERE id = $3`,
+		nullableID(mvpID), nullableID(svpID), matchID,
+	); err != nil {
+		return fmt.Errorf("failed to set medal winners: %w", err)
+	}
+
+	if mvpID != 0 {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE players SET mvp_count = mvp_count + 1 WHERE id = $1`, mvpID,
+		); err != nil {
+			return fmt.Errorf("failed to increment mvp_count for player %d: %w", mvpID, err)
+		}
+	}
+	if svpID != 0 {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE players SET svp_count = svp_count + 1 WHERE id = $1`, svpID,
+		); err != nil {
+			return fmt.Errorf("failed to increment svp_count for player %d: %w", svpID, err)
+		}
+	}
+	return nil
+}
+
+// resolveMedalPlayerID maps a medal name onto one of the match's own players.
+// Returns 0 when the name is empty or does not belong to this scoreboard.
+func resolveMedalPlayerID(medalName string, players []models.PlayerResult, playerIDs []int) int {
+	if strings.TrimSpace(medalName) == "" || len(playerIDs) != len(players) {
+		return 0
+	}
+	normalized := normalizeForComparison(medalName)
+	for i, p := range players {
+		if normalizeForComparison(p.PlayerName) == normalized {
+			return playerIDs[i]
+		}
+	}
+	return 0
+}
+
+func nullableID(id int) interface{} {
+	if id == 0 {
+		return nil
+	}
+	return id
+}
+
+// GetMedalCountsAfter returns per-player medal tallies for matches played since
+// the given date, so awards can be reported per season rather than for all time.
+func (r *MatchPostgres) GetMedalCountsAfter(ctx context.Context, date time.Time) (map[int]models.Medals, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT player_id,
+		        SUM(is_mvp) AS mvp,
+		        SUM(is_svp) AS svp
+		   FROM (
+		        SELECT mvp_player_id AS player_id, 1 AS is_mvp, 0 AS is_svp
+		          FROM matches
+		         WHERE mvp_player_id IS NOT NULL AND is_deleted = FALSE AND created_at >= $1
+		        UNION ALL
+		        SELECT svp_player_id AS player_id, 0 AS is_mvp, 1 AS is_svp
+		          FROM matches
+		         WHERE svp_player_id IS NOT NULL AND is_deleted = FALSE AND created_at >= $1
+		   ) medals
+		  GROUP BY player_id`, date,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query medal counts: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // best-effort cleanup
+
+	counts := make(map[int]models.Medals)
+	for rows.Next() {
+		var playerID, mvp, svp int
+		if err := rows.Scan(&playerID, &mvp, &svp); err != nil {
+			return nil, fmt.Errorf("failed to scan medal counts: %w", err)
+		}
+		counts[playerID] = models.Medals{MVP: mvp, SVP: svp}
+	}
+	return counts, rows.Err()
+}
+
+// GetLifetimeMedals returns a player's all-time medal counters.
+func (r *MatchPostgres) GetLifetimeMedals(ctx context.Context, playerID int) (models.Medals, error) {
+	var m models.Medals
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COALESCE(mvp_count, 0), COALESCE(svp_count, 0) FROM players WHERE id = $1`,
+		playerID,
+	).Scan(&m.MVP, &m.SVP)
+	if errors.Is(err, sql.ErrNoRows) {
+		return models.Medals{}, nil
+	}
+	if err != nil {
+		return models.Medals{}, fmt.Errorf("failed to get lifetime medals for player %d: %w", playerID, err)
+	}
+	return m, nil
+}
+
+func (r *MatchPostgres) Exists(ctx context.Context, fileHash, matchSignature string) (bool, error) {
 	var exists bool
 	query := "SELECT EXISTS(SELECT 1 FROM matches WHERE (file_hash=$1 OR match_signature=$2) AND is_deleted = FALSE)"
-	err := r.db.QueryRow(query, fileHash, matchSignature).Scan(&exists)
+	err := r.db.QueryRowContext(ctx, query, fileHash, matchSignature).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("failed to check match existence: %w", err)
 	}
 	return exists, nil
 }
 
-func (r *MatchPostgres) GetAllAfter(date time.Time) ([]models.Match, error) {
+func (r *MatchPostgres) GetAllAfter(ctx context.Context, date time.Time) ([]models.Match, error) {
 	query := `
 		SELECT m.id, m.created_at, pr.player_name, pr.result, pr.kills, pr.deaths, pr.assists, pr.player_id
 		FROM matches m
 		JOIN player_results pr ON m.id = pr.match_id
 		WHERE m.created_at >= $1 AND m.is_deleted = FALSE AND pr.is_deleted = FALSE
 	`
-	rows, err := r.db.Query(query, date)
+	rows, err := r.db.QueryContext(ctx, query, date)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query matches: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // best-effort cleanup
 
 	matchesMap := make(map[int]*models.Match)
 	for rows.Next() {
@@ -129,6 +269,12 @@ func (r *MatchPostgres) GetAllAfter(date time.Time) ([]models.Match, error) {
 		}
 		matchesMap[id].Players = append(matchesMap[id].Players, pr)
 	}
+	// A connection that drops mid-iteration ends the loop just like a clean
+	// finish. Unchecked, this fed a truncated match set into the season stats
+	// and silently produced a wrong leaderboard.
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read matches: %w", err)
+	}
 
 	var result []models.Match
 	for _, m := range matchesMap {
@@ -137,9 +283,9 @@ func (r *MatchPostgres) GetAllAfter(date time.Time) ([]models.Match, error) {
 	return result, nil
 }
 
-func (r *MatchPostgres) Delete(id int) error {
+func (r *MatchPostgres) Delete(ctx context.Context, id int) error {
 	query := "UPDATE matches SET is_deleted = TRUE, deleted_at = NOW() WHERE id = $1 AND is_deleted = FALSE"
-	res, err := r.db.Exec(query, id)
+	res, err := r.db.ExecContext(ctx, query, id)
 	if err != nil {
 		return fmt.Errorf("failed to soft delete match: %w", err)
 	}
@@ -151,16 +297,16 @@ func (r *MatchPostgres) Delete(id int) error {
 		return sql.ErrNoRows
 	}
 
-	_, err = r.db.Exec("UPDATE player_results SET is_deleted = TRUE WHERE match_id = $1", id)
+	_, err = r.db.ExecContext(ctx, "UPDATE player_results SET is_deleted = TRUE WHERE match_id = $1", id)
 	if err != nil {
 		return fmt.Errorf("failed to soft delete player results: %w", err)
 	}
 	return nil
 }
 
-func (r *MatchPostgres) Restore(id int) error {
+func (r *MatchPostgres) Restore(ctx context.Context, id int) error {
 	query := "UPDATE matches SET is_deleted = FALSE, deleted_at = NULL WHERE id = $1 AND is_deleted = TRUE"
-	res, err := r.db.Exec(query, id)
+	res, err := r.db.ExecContext(ctx, query, id)
 	if err != nil {
 		return fmt.Errorf("failed to restore match: %w", err)
 	}
@@ -172,23 +318,23 @@ func (r *MatchPostgres) Restore(id int) error {
 		return sql.ErrNoRows
 	}
 
-	_, err = r.db.Exec("UPDATE player_results SET is_deleted = FALSE WHERE match_id = $1", id)
+	_, err = r.db.ExecContext(ctx, "UPDATE player_results SET is_deleted = FALSE WHERE match_id = $1", id)
 	if err != nil {
 		return fmt.Errorf("failed to restore player results: %w", err)
 	}
 	return nil
 }
 
-func (r *MatchPostgres) WipeAll() error {
-	_, err := r.db.Exec("UPDATE matches SET is_deleted = TRUE, deleted_at = NOW() WHERE is_deleted = FALSE")
+func (r *MatchPostgres) WipeAll(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx, "UPDATE matches SET is_deleted = TRUE, deleted_at = NOW() WHERE is_deleted = FALSE")
 	if err != nil {
 		return fmt.Errorf("failed to soft delete all matches: %w", err)
 	}
-	_, err = r.db.Exec("UPDATE player_results SET is_deleted = TRUE WHERE is_deleted = FALSE")
+	_, err = r.db.ExecContext(ctx, "UPDATE player_results SET is_deleted = TRUE WHERE is_deleted = FALSE")
 	if err != nil {
 		return fmt.Errorf("failed to soft delete all player results: %w", err)
 	}
-	_, err = r.db.Exec("UPDATE players SET is_deleted = TRUE, deleted_at = NOW() WHERE is_deleted = FALSE")
+	_, err = r.db.ExecContext(ctx, "UPDATE players SET is_deleted = TRUE, deleted_at = NOW() WHERE is_deleted = FALSE")
 	if err != nil {
 		return fmt.Errorf("failed to soft delete all players: %w", err)
 	}
@@ -199,8 +345,8 @@ func (r *MatchPostgres) WipeAll() error {
 	return nil
 }
 
-func (r *MatchPostgres) SetSeasonStartDate(date time.Time) error {
-	_, err := r.db.Exec(`
+func (r *MatchPostgres) SetSeasonStartDate(ctx context.Context, date time.Time) error {
+	_, err := r.db.ExecContext(ctx, `
        INSERT INTO bot_settings (key, value) VALUES ('season_start_date', $1)
        ON CONFLICT (key) DO UPDATE SET value = $1
     `, date.Format(time.RFC3339))
@@ -210,10 +356,10 @@ func (r *MatchPostgres) SetSeasonStartDate(date time.Time) error {
 	return nil
 }
 
-func (r *MatchPostgres) GetSeasonStartDate() (time.Time, error) {
+func (r *MatchPostgres) GetSeasonStartDate(ctx context.Context) (time.Time, error) {
 	var val string
-	err := r.db.QueryRow("SELECT value FROM bot_settings WHERE key = 'season_start_date'").Scan(&val)
-	if err == sql.ErrNoRows {
+	err := r.db.QueryRowContext(ctx, "SELECT value FROM bot_settings WHERE key = 'season_start_date'").Scan(&val)
+	if errors.Is(err, sql.ErrNoRows) {
 		return time.Date(defaultSeasonStartYear, defaultSeasonStartMonth, defaultSeasonStartDay, 0, 0, 0, 0, time.UTC), nil
 	}
 	if err != nil {
@@ -226,8 +372,8 @@ func (r *MatchPostgres) GetSeasonStartDate() (time.Time, error) {
 	return parsed, nil
 }
 
-func (r *MatchPostgres) SetPlayerResetDate(playerName string, date time.Time) error {
-	_, err := r.db.Exec(`
+func (r *MatchPostgres) SetPlayerResetDate(ctx context.Context, playerName string, date time.Time) error {
+	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO player_resets (player_name, reset_date) VALUES ($1, $2)
 		ON CONFLICT (player_name) DO UPDATE SET reset_date = $2
 	`, playerName, date)
@@ -237,12 +383,12 @@ func (r *MatchPostgres) SetPlayerResetDate(playerName string, date time.Time) er
 	return nil
 }
 
-func (r *MatchPostgres) GetPlayerResetDates() (map[string]time.Time, error) {
-	rows, err := r.db.Query("SELECT player_name, reset_date FROM player_resets")
+func (r *MatchPostgres) GetPlayerResetDates(ctx context.Context) (map[string]time.Time, error) {
+	rows, err := r.db.QueryContext(ctx, "SELECT player_name, reset_date FROM player_resets")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get player reset dates: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // best-effort cleanup
 
 	res := make(map[string]time.Time)
 	for rows.Next() {
@@ -252,10 +398,13 @@ func (r *MatchPostgres) GetPlayerResetDates() (map[string]time.Time, error) {
 			res[name] = date
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read player reset dates: %w", err)
+	}
 	return res, nil
 }
 
-func (r *MatchPostgres) GetHistory(playerID int, limit int) ([]models.Match, error) {
+func (r *MatchPostgres) GetHistory(ctx context.Context, playerID int, limit int) ([]models.Match, error) {
 	query := `
 		SELECT m.id, m.created_at, pr.result, pr.kills, pr.deaths, pr.assists, pr.player_name
 		FROM matches m
@@ -264,11 +413,11 @@ func (r *MatchPostgres) GetHistory(playerID int, limit int) ([]models.Match, err
 		ORDER BY m.created_at DESC
 		LIMIT $2
 	`
-	rows, err := r.db.Query(query, playerID, limit)
+	rows, err := r.db.QueryContext(ctx, query, playerID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get player history: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // best-effort cleanup
 
 	var matches []models.Match
 	for rows.Next() {
@@ -282,10 +431,13 @@ func (r *MatchPostgres) GetHistory(playerID int, limit int) ([]models.Match, err
 		m.Players = []models.PlayerResult{pr}
 		matches = append(matches, m)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read player history: %w", err)
+	}
 	return matches, nil
 }
 
-func (r *MatchPostgres) EnsurePlayerExists(name string) (int, error) {
+func (r *MatchPostgres) EnsurePlayerExists(ctx context.Context, name string) (int, error) {
 	normalizedInput := normalizeForComparison(name)
 
 	if id, found := r.playerCache.Get(normalizedInput); found {
@@ -298,7 +450,7 @@ func (r *MatchPostgres) EnsurePlayerExists(name string) (int, error) {
 		WHERE LOWER(TRIM(name)) = $1 AND is_deleted = FALSE
 		LIMIT 1
 	`
-	err := r.db.QueryRow(exactQuery, normalizedInput).Scan(&id)
+	err := r.db.QueryRowContext(ctx, exactQuery, normalizedInput).Scan(&id)
 	if err == nil {
 		r.playerCache.Set(normalizedInput, id)
 		return id, nil
@@ -306,7 +458,7 @@ func (r *MatchPostgres) EnsurePlayerExists(name string) (int, error) {
 
 	// Vector-based cosine similarity search via Ollama embeddings
 	if r.embeddingClient != nil {
-		embedding, embErr := r.embeddingClient.GetEmbedding(name)
+		embedding, embErr := r.embeddingClient.GetEmbedding(ctx, name)
 		if embErr == nil && len(embedding) > 0 {
 			embeddingStr := ai.FormatEmbeddingForPG(embedding)
 			vectorQuery := `
@@ -318,7 +470,7 @@ func (r *MatchPostgres) EnsurePlayerExists(name string) (int, error) {
 			`
 			var candidateID int
 			var candidateName string
-			err := r.db.QueryRow(vectorQuery, embeddingStr, cosineSimilarityThreshold).Scan(&candidateID, &candidateName)
+			err := r.db.QueryRowContext(ctx, vectorQuery, embeddingStr, cosineSimilarityThreshold).Scan(&candidateID, &candidateName)
 			if err == nil {
 				r.playerCache.Set(normalizedInput, candidateID)
 				return candidateID, nil
@@ -334,9 +486,9 @@ func (r *MatchPostgres) EnsurePlayerExists(name string) (int, error) {
 	`
 	likePattern := "%" + normalizedInput[:min(len(normalizedInput), 3)] + "%"
 
-	rows, err := r.db.Query(fuzzyQuery, likePattern)
+	rows, err := r.db.QueryContext(ctx, fuzzyQuery, likePattern)
 	if err == nil {
-		defer rows.Close()
+		defer rows.Close() //nolint:errcheck // best-effort cleanup
 
 		for rows.Next() {
 			var candidateID int
@@ -351,24 +503,30 @@ func (r *MatchPostgres) EnsurePlayerExists(name string) (int, error) {
 				return candidateID, nil
 			}
 		}
+		// A truncated candidate list here only means the fuzzy match found
+		// nothing, so fall through to creating the player — but log it, since
+		// that silently creates a duplicate of an existing one.
+		if err := rows.Err(); err != nil {
+			return 0, fmt.Errorf("failed to scan fuzzy name candidates: %w", err)
+		}
 	}
 
 	// Generate embedding for the new player
 	var embeddingStr string
 	if r.embeddingClient != nil {
-		embedding, embErr := r.embeddingClient.GetEmbedding(name)
+		embedding, embErr := r.embeddingClient.GetEmbedding(ctx, name)
 		if embErr == nil && len(embedding) > 0 {
 			embeddingStr = ai.FormatEmbeddingForPG(embedding)
 		}
 	}
 
 	if embeddingStr != "" {
-		err = r.db.QueryRow(`
+		err = r.db.QueryRowContext(ctx, `
 			INSERT INTO players (name, name_embedding) VALUES ($1, $2)
 			ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
 			RETURNING id`, name, embeddingStr).Scan(&id)
 	} else {
-		err = r.db.QueryRow(`
+		err = r.db.QueryRowContext(ctx, `
 			INSERT INTO players (name) VALUES ($1)
 			ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
 			RETURNING id`, name).Scan(&id)
@@ -391,6 +549,7 @@ func min(a, b int) int {
 }
 
 func (r *MatchPostgres) batchInsertPlayerResults(
+	ctx context.Context,
 	tx *sql.Tx,
 	matchID int,
 	players []models.PlayerResult,
@@ -425,7 +584,7 @@ func (r *MatchPostgres) batchInsertPlayerResults(
 
 	query += strings.Join(placeholders, ", ")
 
-	_, err := tx.Exec(query, values...)
+	_, err := tx.ExecContext(ctx, query, values...)
 	if err != nil {
 		return fmt.Errorf("batch insert failed: %w", err)
 	}
@@ -503,50 +662,88 @@ func levenshteinDistance(a, b string) int {
 	return matrix[len(a)][len(b)]
 }
 
-func (r *MatchPostgres) GetAllPlayers() ([]models.Player, error) {
-	rows, err := r.db.Query("SELECT id, name FROM players WHERE is_deleted = FALSE ORDER BY id")
+func (r *MatchPostgres) GetAllPlayers(ctx context.Context) ([]models.Player, error) {
+	rows, err := r.db.QueryContext(ctx, "SELECT id, name FROM players WHERE is_deleted = FALSE ORDER BY id")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get all players: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // best-effort cleanup
 
 	var players []models.Player
 	for rows.Next() {
 		var p models.Player
 		if err := rows.Scan(&p.ID, &p.Name); err != nil {
-			continue
+			return nil, fmt.Errorf("failed to scan player: %w", err)
 		}
 		players = append(players, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read players: %w", err)
 	}
 	return players, nil
 }
 
-func (r *MatchPostgres) GetPlayerNameByID(id int) (string, error) {
+func (r *MatchPostgres) GetPlayerNameByID(ctx context.Context, id int) (string, error) {
 	var name string
-	err := r.db.QueryRow("SELECT name FROM players WHERE id = $1 AND is_deleted = FALSE", id).Scan(&name)
+	err := r.db.QueryRowContext(ctx, "SELECT name FROM players WHERE id = $1 AND is_deleted = FALSE", id).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("player %d: %w", id, domain.ErrPlayerNotFound)
+	}
 	if err != nil {
-		return "", fmt.Errorf("player with ID %d not found: %w", id, err)
+		return "", fmt.Errorf("failed to get name for player %d: %w", id, err)
 	}
 	return name, nil
 }
 
-func (r *MatchPostgres) WipePlayerByID(id int) error {
-	name, err := r.GetPlayerNameByID(id)
+// GetPlayerNamesByIDs resolves many players in one round trip. The per-player
+// lookup it replaces ran once per participant, so building a single match embed
+// cost ten queries and closing a match cost another ten.
+func (r *MatchPostgres) GetPlayerNamesByIDs(ctx context.Context, ids []int) (map[int]string, error) {
+	names := make(map[int]string, len(ids))
+	if len(ids) == 0 {
+		return names, nil
+	}
+
+	rows, err := r.db.QueryContext(ctx,
+		"SELECT id, name FROM players WHERE id = ANY($1) AND is_deleted = FALSE",
+		pq.Array(ids),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get player names: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // best-effort cleanup
+
+	for rows.Next() {
+		var id int
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, fmt.Errorf("failed to scan player name: %w", err)
+		}
+		names[id] = name
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read player names: %w", err)
+	}
+	return names, nil
+}
+
+func (r *MatchPostgres) WipePlayerByID(ctx context.Context, id int) error {
+	name, err := r.GetPlayerNameByID(ctx, id)
 	if err != nil {
 		return fmt.Errorf("игрок с ID %d не найден: %w", id, err)
 	}
 
-	_, err = r.db.Exec("UPDATE player_results SET is_deleted = TRUE WHERE player_id = $1", id)
+	_, err = r.db.ExecContext(ctx, "UPDATE player_results SET is_deleted = TRUE WHERE player_id = $1", id)
 	if err != nil {
 		return fmt.Errorf("failed to soft delete player results: %w", err)
 	}
 
-	_, err = r.db.Exec("DELETE FROM player_resets WHERE player_name = $1", name)
+	_, err = r.db.ExecContext(ctx, "DELETE FROM player_resets WHERE player_name = $1", name)
 	if err != nil {
 		return fmt.Errorf("failed to delete player resets: %w", err)
 	}
 
-	_, err = r.db.Exec("UPDATE players SET is_deleted = TRUE, deleted_at = NOW() WHERE id = $1", id)
+	_, err = r.db.ExecContext(ctx, "UPDATE players SET is_deleted = TRUE, deleted_at = NOW() WHERE id = $1", id)
 	if err != nil {
 		return fmt.Errorf("failed to soft delete player: %w", err)
 	}
@@ -557,18 +754,18 @@ func (r *MatchPostgres) WipePlayerByID(id int) error {
 	return nil
 }
 
-func (r *MatchPostgres) RestorePlayer(id int) error {
-	_, err := r.db.Exec("UPDATE players SET is_deleted = FALSE, deleted_at = NULL WHERE id = $1 AND is_deleted = TRUE", id)
+func (r *MatchPostgres) RestorePlayer(ctx context.Context, id int) error {
+	_, err := r.db.ExecContext(ctx, "UPDATE players SET is_deleted = FALSE, deleted_at = NULL WHERE id = $1 AND is_deleted = TRUE", id)
 	if err != nil {
 		return fmt.Errorf("failed to restore player: %w", err)
 	}
 
-	_, err = r.db.Exec("UPDATE player_results SET is_deleted = FALSE WHERE player_id = $1", id)
+	_, err = r.db.ExecContext(ctx, "UPDATE player_results SET is_deleted = FALSE WHERE player_id = $1", id)
 	if err != nil {
 		return fmt.Errorf("failed to restore player results: %w", err)
 	}
 
-	name, err := r.GetPlayerNameByID(id)
+	name, err := r.GetPlayerNameByID(ctx, id)
 	if err == nil {
 		normalized := normalizeForComparison(name)
 		r.playerCache.Set(normalized, id)
@@ -577,8 +774,8 @@ func (r *MatchPostgres) RestorePlayer(id int) error {
 	return nil
 }
 
-func (r *MatchPostgres) RenamePlayer(id int, newName string) error {
-	oldName, err := r.GetPlayerNameByID(id)
+func (r *MatchPostgres) RenamePlayer(ctx context.Context, id int, newName string) error {
+	oldName, err := r.GetPlayerNameByID(ctx, id)
 	if err != nil {
 		return fmt.Errorf("failed to get player name: %w", err)
 	}
@@ -586,24 +783,21 @@ func (r *MatchPostgres) RenamePlayer(id int, newName string) error {
 	// Generate embedding for the new name
 	var embeddingStr string
 	if r.embeddingClient != nil {
-		embedding, embErr := r.embeddingClient.GetEmbedding(newName)
+		embedding, embErr := r.embeddingClient.GetEmbedding(ctx, newName)
 		if embErr == nil && len(embedding) > 0 {
 			embeddingStr = ai.FormatEmbeddingForPG(embedding)
 		}
 	}
 
-	tx, err := r.db.Begin()
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer func() {
-		if err != nil {
-			tx.Rollback()
-		}
-	}()
+	// Safe to call unconditionally: Rollback after a successful Commit is a no-op.
+	defer tx.Rollback() //nolint:errcheck // best-effort cleanup
 
 	// Log the name change in history
-	_, err = tx.Exec(
+	_, err = tx.ExecContext(ctx,
 		"INSERT INTO player_nickname_history (player_id, old_name, new_name) VALUES ($1, $2, $3)",
 		id, oldName, newName,
 	)
@@ -614,12 +808,12 @@ func (r *MatchPostgres) RenamePlayer(id int, newName string) error {
 	// Update player name and embedding
 	var playerResult sql.Result
 	if embeddingStr != "" {
-		playerResult, err = tx.Exec(
+		playerResult, err = tx.ExecContext(ctx,
 			"UPDATE players SET name = $1, name_embedding = $2 WHERE id = $3 AND is_deleted = FALSE",
 			newName, embeddingStr, id,
 		)
 	} else {
-		playerResult, err = tx.Exec(
+		playerResult, err = tx.ExecContext(ctx,
 			"UPDATE players SET name = $1 WHERE id = $2 AND is_deleted = FALSE",
 			newName, id,
 		)
@@ -628,14 +822,16 @@ func (r *MatchPostgres) RenamePlayer(id int, newName string) error {
 		return fmt.Errorf("failed to rename player: %w", err)
 	}
 
-	rows, _ := playerResult.RowsAffected()
+	rows, err := playerResult.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
 	if rows == 0 {
-		tx.Rollback()
 		return fmt.Errorf("игрок с ID %d не найден", id)
 	}
 
 	// Cascade: update player_name in all past matches (player_results table)
-	_, err = tx.Exec(
+	_, err = tx.ExecContext(ctx,
 		"UPDATE player_results SET player_name = $1 WHERE player_id = $2",
 		newName, id,
 	)
@@ -658,33 +854,228 @@ func (r *MatchPostgres) RenamePlayer(id int, newName string) error {
 }
 
 // GetDiscordIDByPlayerID returns the discord_id for a given player ID.
-func (r *MatchPostgres) GetDiscordIDByPlayerID(playerID int) (string, error) {
+func (r *MatchPostgres) GetDiscordIDByPlayerID(ctx context.Context, playerID int) (string, error) {
 	var discordID sql.NullString
-	err := r.db.QueryRow(
+	err := r.db.QueryRowContext(ctx,
 		`SELECT discord_id FROM players WHERE id = $1 AND is_deleted = FALSE`, playerID,
 	).Scan(&discordID)
-	if err == sql.ErrNoRows {
-		return "", fmt.Errorf("player %d not found", playerID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("player %d: %w", playerID, domain.ErrPlayerNotFound)
 	}
 	if err != nil {
 		return "", fmt.Errorf("failed to get discord_id for player %d: %w", playerID, err)
 	}
 	if !discordID.Valid {
-		return "", fmt.Errorf("player %d has no discord_id linked", playerID)
+		return "", fmt.Errorf("player %d: %w", playerID, domain.ErrDiscordNotLinked)
 	}
 	return discordID.String, nil
 }
 
-// GetPlayerByDiscordID returns the player ID and name for a given discord_id.
-// This is an O(1) direct SQL lookup instead of iterating all players in memory.
-func (r *MatchPostgres) GetPlayerByDiscordID(discordID string) (int, string, error) {
+// SetDiscordID binds a Discord account to a player.
+//
+// The column is guarded by a unique index, so a Discord account that already
+// owns another profile is rejected here rather than silently owning two.
+func (r *MatchPostgres) SetDiscordID(ctx context.Context, playerID int, discordID string) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE players SET discord_id = $1 WHERE id = $2 AND is_deleted = FALSE`,
+		discordID, playerID,
+	)
+	if err != nil {
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == pgUniqueViolation {
+			return ErrDiscordIDTaken
+		}
+		return fmt.Errorf("failed to bind discord_id to player %d: %w", playerID, err)
+	}
+
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to count bound players: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("player %d not found", playerID)
+	}
+	return nil
+}
+
+// ClearDiscordID releases a player's Discord binding.
+func (r *MatchPostgres) ClearDiscordID(ctx context.Context, playerID int) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE players SET discord_id = NULL WHERE id = $1 AND is_deleted = FALSE`, playerID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to unbind player %d: %w", playerID, err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to count unbound players: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("player %d not found", playerID)
+	}
+	return nil
+}
+
+// FindPlayerByExactName resolves a nickname to a player, matching only on the
+// name itself.
+//
+// EnsurePlayerExists is deliberately not reused here. It falls back to an
+// embedding similarity search, which is right for screenshot OCR — the parser
+// mangles nicknames and a near match is almost always the same person. It is
+// wrong for a self-service claim: somebody typing "Gunnar" would be handed the
+// existing "Gunnarr" profile, which belongs to somebody else.
+//
+// Returns domain.ErrPlayerNotFound when no player carries that name.
+func (r *MatchPostgres) FindPlayerByExactName(ctx context.Context, name string) (int, string, error) {
+	var id int
+	var stored string
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, name FROM players
+		  WHERE LOWER(TRIM(name)) = LOWER(TRIM($1)) AND is_deleted = FALSE
+		  ORDER BY id LIMIT 1`, name,
+	).Scan(&id, &stored)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, "", fmt.Errorf("player %q: %w", name, domain.ErrPlayerNotFound)
+	}
+	if err != nil {
+		return 0, "", fmt.Errorf("failed to look up player %q: %w", name, err)
+	}
+	return id, stored, nil
+}
+
+// SuggestPlayerNames lists players whose name matches the prefix, for Discord's
+// autocomplete. Prefix matches come first so typing the start of a nickname
+// surfaces it before any substring hit.
+//
+// Discord caps a response at 25 choices and expects it within three seconds, so
+// the cap belongs in the query rather than in a filter over every player.
+func (r *MatchPostgres) SuggestPlayerNames(ctx context.Context, prefix string, limit int) ([]models.Player, error) {
+	if limit <= 0 || limit > 25 {
+		limit = 25
+	}
+	pattern := strings.ToLower(strings.TrimSpace(prefix))
+
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, name FROM players
+		  WHERE is_deleted = FALSE
+		    AND ($1 = '' OR LOWER(name) LIKE '%' || $1 || '%')
+		  ORDER BY (LOWER(name) LIKE $1 || '%') DESC, name
+		  LIMIT $2`, pattern, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to suggest player names: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // best-effort cleanup
+
+	var players []models.Player
+	for rows.Next() {
+		var p models.Player
+		if err := rows.Scan(&p.ID, &p.Name); err != nil {
+			return nil, fmt.Errorf("failed to scan suggestion: %w", err)
+		}
+		players = append(players, p)
+	}
+	return players, rows.Err()
+}
+
+// CreatePlayerWithDiscord creates a player already bound to a Discord account.
+//
+// One statement, so a refused binding cannot leave an empty profile behind: the
+// alternative — insert, then bind, then delete on failure — is a compensating
+// path that stops compensating the moment the process dies between the two.
+// A Discord account that already owns a profile trips the unique index and
+// comes back as ErrDiscordIDTaken.
+func (r *MatchPostgres) CreatePlayerWithDiscord(ctx context.Context, name, discordID string) (int, error) {
+	var id int
+	err := r.db.QueryRowContext(ctx,
+		`INSERT INTO players (name, discord_id) VALUES ($1, $2) RETURNING id`,
+		strings.TrimSpace(name), discordID,
+	).Scan(&id)
+	if err != nil {
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == pgUniqueViolation {
+			return 0, ErrDiscordIDTaken
+		}
+		return 0, fmt.Errorf("failed to create player %q: %w", name, err)
+	}
+
+	r.playerCache.Set(normalizeForComparison(name), id)
+	return id, nil
+}
+
+// SetTelegramID binds a Telegram account to a player.
+//
+// players.tg_id is the column the betting code resolves a bettor through. It is
+// guarded by a unique index, so a Telegram account that already owns another
+// profile is rejected here rather than silently owning two — the same shape as
+// SetDiscordID above, because it is the same kind of binding.
+func (r *MatchPostgres) SetTelegramID(ctx context.Context, playerID int, telegramID int64) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE players SET tg_id = $1 WHERE id = $2 AND is_deleted = FALSE`,
+		telegramID, playerID,
+	)
+	if err != nil {
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == pgUniqueViolation {
+			return ErrTelegramIDTaken
+		}
+		return fmt.Errorf("failed to bind tg_id to player %d: %w", playerID, err)
+	}
+
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to count bound players: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("player %d: %w", playerID, domain.ErrPlayerNotFound)
+	}
+	return nil
+}
+
+// ClearTelegramID releases a player's Telegram binding.
+func (r *MatchPostgres) ClearTelegramID(ctx context.Context, playerID int) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE players SET tg_id = NULL WHERE id = $1 AND is_deleted = FALSE`, playerID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to unlink player %d: %w", playerID, err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to count unlinked players: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("player %d: %w", playerID, domain.ErrPlayerNotFound)
+	}
+	return nil
+}
+
+// GetPlayerByTelegramID returns the player bound to a Telegram account.
+func (r *MatchPostgres) GetPlayerByTelegramID(ctx context.Context, telegramID int64) (int, string, error) {
 	var id int
 	var name string
-	err := r.db.QueryRow(
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, name FROM players WHERE tg_id = $1 AND is_deleted = FALSE`, telegramID,
+	).Scan(&id, &name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, "", fmt.Errorf("tg_id %d: %w", telegramID, domain.ErrPlayerNotFound)
+	}
+	if err != nil {
+		return 0, "", fmt.Errorf("failed to look up player by tg_id: %w", err)
+	}
+	return id, name, nil
+}
+
+// GetPlayerByDiscordID returns the player ID and name for a given discord_id.
+// This is an O(1) direct SQL lookup instead of iterating all players in memory.
+func (r *MatchPostgres) GetPlayerByDiscordID(ctx context.Context, discordID string) (int, string, error) {
+	var id int
+	var name string
+	err := r.db.QueryRowContext(ctx,
 		`SELECT id, name FROM players WHERE discord_id = $1 AND is_deleted = FALSE`, discordID,
 	).Scan(&id, &name)
-	if err == sql.ErrNoRows {
-		return 0, "", fmt.Errorf("player with discord_id %s not found", discordID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, "", fmt.Errorf("discord_id %s: %w", discordID, domain.ErrPlayerNotFound)
 	}
 	if err != nil {
 		return 0, "", fmt.Errorf("failed to get player by discord_id %s: %w", discordID, err)

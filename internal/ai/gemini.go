@@ -28,13 +28,13 @@ func NewGeminiClient(apiKey string) (*GeminiClient, error) {
 	return &GeminiClient{model: model}, nil
 }
 
-func (g *GeminiClient) ParseImage(data []byte) (*models.Match, error) {
-	return g.ParseImageWithPlayers(data, nil)
+func (g *GeminiClient) ParseImage(ctx context.Context, data []byte) (*models.Match, error) {
+	return g.ParseImageWithPlayers(ctx, data, nil)
 }
 
 // ParseImageWithPlayers analyzes a scoreboard screenshot with optional expected player names
 // for dynamic prompt substitution, improving OCR accuracy.
-func (g *GeminiClient) ParseImageWithPlayers(data []byte, expectedPlayers []string) (*models.Match, error) {
+func (g *GeminiClient) ParseImageWithPlayers(ctx context.Context, data []byte, expectedPlayers []string) (*models.Match, error) {
 	processor := NewImageProcessor()
 	optimizedData, err := processor.OptimizeForAI(data)
 	if err != nil {
@@ -48,7 +48,7 @@ func (g *GeminiClient) ParseImageWithPlayers(data []byte, expectedPlayers []stri
 		genai.Text(promptText),
 	}
 
-	resp, err := g.model.GenerateContent(context.Background(), prompt...)
+	resp, err := g.model.GenerateContent(ctx, prompt...)
 	if err != nil {
 		return nil, err
 	}

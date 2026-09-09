@@ -32,3 +32,14 @@ func comparePlayersByPriority(p1, p2 *PlayerStats) bool {
 	kda2 := calculateKDA(p2.Kills, p2.Deaths, p2.Assists)
 	return kda1 > kda2
 }
+
+// comparePlayersByWinRate ranks by win rate first, then falls back to the
+// default priority so the order stays deterministic for players who are tied.
+func comparePlayersByWinRate(p1, p2 *PlayerStats) bool {
+	wr1 := calculateWinRate(p1.Wins, p1.Matches)
+	wr2 := calculateWinRate(p2.Wins, p2.Matches)
+	if wr1 != wr2 {
+		return wr1 > wr2
+	}
+	return comparePlayersByPriority(p1, p2)
+}

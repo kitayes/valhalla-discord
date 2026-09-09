@@ -55,7 +55,7 @@ func NewDeepSeekClient(apiKey string) *DeepSeekClient {
 }
 
 // AnswerQuestion sends a user question with FAQ context to DeepSeek and returns the answer.
-func (c *DeepSeekClient) AnswerQuestion(faqContext, userQuestion string) (string, error) {
+func (c *DeepSeekClient) AnswerQuestion(ctx context.Context, faqContext, userQuestion string) (string, error) {
 	if c.apiKey == "" {
 		return "", fmt.Errorf("deepseek: API key not configured")
 	}
@@ -82,7 +82,7 @@ func (c *DeepSeekClient) AnswerQuestion(faqContext, userQuestion string) (string
 		return "", fmt.Errorf("deepseek: marshal error: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(context.Background(), "POST", deepseekEndpoint, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", deepseekEndpoint, bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("deepseek: request error: %w", err)
 	}
@@ -94,7 +94,7 @@ func (c *DeepSeekClient) AnswerQuestion(faqContext, userQuestion string) (string
 	if err != nil {
 		return "", fmt.Errorf("deepseek: API call failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // best-effort cleanup
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {

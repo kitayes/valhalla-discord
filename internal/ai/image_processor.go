@@ -32,7 +32,7 @@ func (p *ImageProcessor) OptimizeForAI(data []byte) ([]byte, error) {
 	bounds := img.Bounds()
 	width := bounds.Dx()
 
-	var optimized image.Image = img
+	optimized := img
 
 	if width > maxImageWidth {
 		optimized = imaging.Resize(img, maxImageWidth, 0, imaging.Lanczos)

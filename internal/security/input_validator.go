@@ -1,8 +1,8 @@
 package security
 
 import (
-	"fmt"
 	"blackwatch/internal/domain"
+	"fmt"
 )
 
 const (

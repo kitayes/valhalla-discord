@@ -10,11 +10,18 @@ services:
       - ollama
     env_file:
       - .env
+    ports:
+      # The admin dashboard. Bound to loopback: it authenticates with a single
+      # shared key, so it is meant to sit behind a reverse proxy that terminates
+      # TLS, not to be published straight onto the host's interfaces. Without
+      # this mapping the dashboard listened inside the container and nothing
+      # could reach it.
+      - "127.0.0.1:${WEB_ADMIN_PORT:-8080}:${WEB_ADMIN_PORT:-8080}"
     environment:
       - REPO_DB_HOST=db
       - REPO_DB_PORT=5432
       - REPO_DB_USERNAME=postgres
-      - REPO_DB_PASSWORD=blackwatch
+      - REPO_DB_PASSWORD=${REPO_DB_PASSWORD:?REPO_DB_PASSWORD must be set in .env}
       - REPO_DB_NAME=blackwatch_db
       - REPO_DB_SSLMODE=disable
 
@@ -24,10 +31,13 @@ services:
     restart: always
     environment:
       - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=blackwatch
+      - POSTGRES_PASSWORD=${REPO_DB_PASSWORD:?REPO_DB_PASSWORD must be set in .env}
       - POSTGRES_DB=blackwatch_db
     ports:
-      - "5435:5432"
+      # Bound to loopback: the database was reachable on every interface of the
+      # host. The app talks to it over the compose network and does not need this
+      # mapping at all — it is here only for local psql access.
+      - "127.0.0.1:5435:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
 
