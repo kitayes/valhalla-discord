@@ -45,3 +45,31 @@ func TestParsePlayerLine(t *testing.T) {
 		})
 	}
 }
+
+// MLBB ids are 8–10 digits and zones 4–5; anything else is most likely a
+// typo, but the bot only warns — a new region could prove it wrong.
+func TestPlausibilityWarnings(t *testing.T) {
+	cases := []struct {
+		line playerLine
+		want []string // substrings, one per warning; nil = no warnings
+	}{
+		{playerLine{GameID: "123456789", ZoneID: "1234"}, nil},
+		{playerLine{GameID: "12345678", ZoneID: "12345"}, nil},
+		{playerLine{GameID: "1234567890", ZoneID: "1234"}, nil},
+		{playerLine{GameID: "123", ZoneID: "1234"}, []string{"GameID 123"}},
+		{playerLine{GameID: "123456789", ZoneID: "1"}, []string{"Zone ID 1"}},
+		{playerLine{GameID: "12345678901", ZoneID: "123456"}, []string{"GameID", "Zone ID"}},
+	}
+	for _, tc := range cases {
+		got := plausibilityWarnings(tc.line)
+		if len(got) != len(tc.want) {
+			t.Errorf("%+v: %v, want %d warning(s)", tc.line, got, len(tc.want))
+			continue
+		}
+		for i := range got {
+			if !strings.Contains(got[i], tc.want[i]) {
+				t.Errorf("%+v: warning %q lacks %q", tc.line, got[i], tc.want[i])
+			}
+		}
+	}
+}

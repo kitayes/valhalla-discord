@@ -90,3 +90,17 @@ func isDigits(s string) bool {
 	}
 	return true
 }
+
+// plausibilityWarnings flags ids that do not look like MLBB ids: game ids are
+// 8–10 digits and zone ids 4–5. The line is still accepted — a new region
+// could prove the rule wrong — but the captain is told before picking a role.
+func plausibilityWarnings(line playerLine) []string {
+	var out []string
+	if n := len(line.GameID); n < 8 || n > 10 {
+		out = append(out, fmt.Sprintf("⚠️ GameID %s: обычно 8–10 цифр", line.GameID))
+	}
+	if n := len(line.ZoneID); n < 4 || n > 5 {
+		out = append(out, fmt.Sprintf("⚠️ Zone ID %s: обычно 4–5 цифр", line.ZoneID))
+	}
+	return out
+}

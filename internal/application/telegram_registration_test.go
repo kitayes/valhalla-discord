@@ -420,3 +420,49 @@ func TestCheckinButtonNeedsACaptain(t *testing.T) {
 		t.Errorf("resp = %q, want captain-only refusal", resp)
 	}
 }
+
+// A suspicious id is flagged above the role prompt, and the role step always
+// offers a way back to the line without cancelling the whole registration.
+func TestSuspiciousLineWarnsAndRedoReturnsToLine(t *testing.T) {
+	svc, repo := newTelegramSvc()
+	team := 10
+	repo.teams[team] = &models.TelegramTeam{ID: team, Name: "A"}
+	p := repo.addPlayer(1, &team, true, "team_line_2")
+
+	resp, kb := drive(t, svc, 1, "Vasya 123 1234 25")
+	if p.FSMState != "team_role_2" || kb != KbRegRoles || !strings.Contains(resp, "обычно 8") {
+		t.Fatalf("state=%q kb=%q resp=%q", p.FSMState, kb, resp)
+	}
+
+	resp, kb = act(t, svc, 1, "redo", "")
+	if p.FSMState != "team_line_2" || kb != KbRegCancel || !strings.Contains(resp, "2/7") {
+		t.Fatalf("redo: state=%q kb=%q resp=%q", p.FSMState, kb, resp)
+	}
+	// The row already written is reused, not duplicated.
+	drive(t, svc, 1, "Vasya 123456789 1234 25")
+	if len(repo.members) != 1 || repo.members[0].GameID != "123456789" {
+		t.Errorf("after redo: members=%d first=%+v", len(repo.members), repo.members[0])
+	}
+}
+
+func TestRedoKeepsFixAndEditFlows(t *testing.T) {
+	svc, repo := newTelegramSvc()
+	team := 10
+	repo.teams[team] = &models.TelegramTeam{ID: team, Name: "A"}
+	p := repo.addPlayer(1, &team, true, "team_fixrole_1")
+
+	act(t, svc, 1, "redo", "")
+	if p.FSMState != "team_fix_1" {
+		t.Errorf("fixrole redo → %q, want team_fix_1", p.FSMState)
+	}
+	p.FSMState = "team_editrole_1"
+	act(t, svc, 1, "redo", "")
+	if p.FSMState != "team_edit_1" {
+		t.Errorf("editrole redo → %q, want team_edit_1", p.FSMState)
+	}
+	p.FSMState = models.StateSoloRole
+	act(t, svc, 1, "redo", "")
+	if p.FSMState != models.StateSoloLine {
+		t.Errorf("solo redo → %q, want solo_line", p.FSMState)
+	}
+}

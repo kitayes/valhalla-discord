@@ -57,6 +57,7 @@ func regKeyboard(kbType string) (tgbotapi.InlineKeyboardMarkup, bool) {
 		return tgbotapi.NewInlineKeyboardMarkup(
 			tgbotapi.NewInlineKeyboardRow(regBtn("Gold", "role", "Gold"), regBtn("Exp", "role", "Exp"), regBtn("Mid", "role", "Mid")),
 			tgbotapi.NewInlineKeyboardRow(regBtn("Roam", "role", "Roam"), regBtn("Jungle", "role", "Jungle")),
+			tgbotapi.NewInlineKeyboardRow(regBtn("↩️ Исправить строку", "redo")),
 			cancel,
 		), true
 

@@ -119,7 +119,16 @@ func linePrompt(slot int, initial bool) (string, string) {
 const soloLinePrompt = "Отправь одной строкой: Ник GameID ZoneID Звёзды\nПример: Kitayes 123456789 1234 25"
 
 func rolePrompt(line playerLine) string {
-	return fmt.Sprintf("%s · %s (%s) · %d⭐\nРоль?", line.Nick, line.GameID, line.ZoneID, line.Stars)
+	var sb strings.Builder
+	for _, w := range plausibilityWarnings(line) {
+		sb.WriteString(w)
+		sb.WriteString("\n")
+	}
+	if sb.Len() > 0 {
+		sb.WriteString("Если ошибка — «Исправить строку».\n\n")
+	}
+	fmt.Fprintf(&sb, "%s · %s (%s) · %d⭐\nРоль?", line.Nick, line.GameID, line.ZoneID, line.Stars)
+	return sb.String()
 }
 
 func rolePromptFromRow(p *models.TelegramPlayer) string {
@@ -365,6 +374,8 @@ func (s *TelegramServiceImpl) HandleRegAction(ctx context.Context, tgID int64, a
 	switch action {
 	case "delete", "delete_yes", "delete_no":
 		return s.handleDelete(ctx, p, action)
+	case "redo":
+		return s.redoLine(ctx, p)
 	}
 
 	// Solo.
@@ -436,6 +447,34 @@ func (s *TelegramServiceImpl) HandleRegAction(ctx context.Context, tgID int64, a
 		return s.afterSlot(ctx, p, slot, fmt.Sprintf("✅ Игрок %d: %s\n", slot, s.slotSummary(ctx, p, slot)))
 	}
 	return msgStaleButton, KbNone
+}
+
+// redoLine is the "fix the line" button on the role step: back to the line
+// prompt of the same slot. The row already written is simply overwritten.
+func (s *TelegramServiceImpl) redoLine(ctx context.Context, p *models.TelegramPlayer) (string, string) {
+	tgID := *p.TelegramID
+	if p.FSMState == models.StateSoloRole {
+		s.setState(ctx, tgID, models.StateSoloLine)
+		return soloLinePrompt, KbRegCancel
+	}
+	prefix, slot, ok := slotState(p.FSMState)
+	if !ok || p.TeamID == nil {
+		return msgStaleButton, KbNone
+	}
+	var linePrefix string
+	switch prefix {
+	case models.StateTeamRolePrefix:
+		linePrefix = models.StateTeamLinePrefix
+	case models.StateTeamFixRolePrefix:
+		linePrefix = models.StateTeamFixPrefix
+	case models.StateTeamEditRolePrefix:
+		linePrefix = models.StateTeamEditPrefix
+	default:
+		return msgStaleButton, KbNone
+	}
+	s.setState(ctx, tgID, linePrefix+strconv.Itoa(slot))
+	msg, _ := linePrompt(slot, false)
+	return msg, KbRegCancel
 }
 
 // handleCardAction serves the ✏️ / ➕ / 🗑 buttons of both cards. editPrefix
