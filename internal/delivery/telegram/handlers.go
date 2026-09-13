@@ -184,8 +184,7 @@ func (b *Bot) handleUserCommand(ctx context.Context, chatID int64, text string, 
 		response = b.service.ToggleCheckIn(ctx, chatID)
 		kbType = "empty"
 	case "/delete_team":
-		response = b.service.DeleteTeam(ctx, chatID)
-		kbType = "empty"
+		response, kbType = b.service.HandleRegAction(ctx, chatID, "delete", "")
 	case "/profile":
 		profile, err := b.profileLinkService.GetLinkedProfileByTelegram(ctx, chatID)
 		if err != nil || profile == nil {

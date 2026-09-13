@@ -260,15 +260,44 @@ func TestTypedCancelDuringRegistration(t *testing.T) {
 	}
 }
 
-func TestDeleteFromCard(t *testing.T) {
+// One accidental tap used to wipe a seven-player roster. Deleting now asks.
+func TestDeleteAsksForConfirmation(t *testing.T) {
 	svc, repo := newTelegramSvc()
 	team := 10
 	repo.teams[team] = &models.TelegramTeam{ID: team, Name: "A"}
 	p := repo.addPlayer(1, &team, true, models.StateTeamConfirm)
 
-	_, kb := act(t, svc, 1, "delete", "")
+	resp, kb := act(t, svc, 1, "delete", "")
+	if _, ok := repo.teams[team]; !ok || kb != KbRegDeleteConfirm || !strings.Contains(resp, "A") {
+		t.Fatalf("delete: exists=%v kb=%q resp=%q", ok, kb, resp)
+	}
+
+	_, kb = act(t, svc, 1, "delete_no", "")
+	if _, ok := repo.teams[team]; !ok || !strings.HasPrefix(kb, KbRegConfirm) || p.FSMState != models.StateTeamConfirm {
+		t.Fatalf("delete_no: exists=%v kb=%q state=%q, want back on the card", ok, kb, p.FSMState)
+	}
+
+	act(t, svc, 1, "delete", "")
+	_, kb = act(t, svc, 1, "delete_yes", "")
 	if _, ok := repo.teams[team]; ok || kb != "main_menu" || p.FSMState != models.StateIdle {
-		t.Errorf("team still there=%v kb=%q state=%q", ok, kb, p.FSMState)
+		t.Errorf("delete_yes: exists=%v kb=%q state=%q", ok, kb, p.FSMState)
+	}
+}
+
+// /delete_team goes through the same confirmation.
+func TestDeleteCommandAsksToo(t *testing.T) {
+	svc, repo := newTelegramSvc()
+	team := 10
+	repo.teams[team] = &models.TelegramTeam{ID: team, Name: "A"}
+	repo.addPlayer(1, &team, true, models.StateIdle)
+
+	_, kb := act(t, svc, 1, "delete", "")
+	if kb != KbRegDeleteConfirm {
+		t.Fatalf("kb=%q", kb)
+	}
+	_, kb = act(t, svc, 1, "delete_no", "")
+	if _, ok := repo.teams[team]; !ok || !strings.HasPrefix(kb, KbRegCard) {
+		t.Errorf("delete_no from idle: exists=%v kb=%q, want the /my_team card", ok, kb)
 	}
 }
 

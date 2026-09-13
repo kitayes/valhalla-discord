@@ -11,13 +11,14 @@ import (
 // Keyboard types for the registration flow. Delivery renders them as inline
 // keyboards; the ones with a suffix carry rendering parameters after ":".
 const (
-	KbRegCancel      = "reg_cancel"
-	KbRegRoles       = "reg_roles"
-	KbRegSkip        = "reg_skip"
-	KbRegConfirm     = "reg_confirm"      // "reg_confirm:<n>": ✏️ 1..n, ✅, 🗑
-	KbRegCard        = "reg_card"         // "reg_card:<n>:<add>": ✏️ 1..n, 🗑, ➕ when add != ""
-	KbRegSoloConfirm = "reg_solo_confirm" // ✅, ✏️
-	KbRegCheckin     = "reg_checkin"      // ✅ Подтвердить участие (in the reminder)
+	KbRegCancel        = "reg_cancel"
+	KbRegRoles         = "reg_roles"
+	KbRegSkip          = "reg_skip"
+	KbRegConfirm       = "reg_confirm"        // "reg_confirm:<n>": ✏️ 1..n, ✅, 🗑
+	KbRegCard          = "reg_card"           // "reg_card:<n>:<add>": ✏️ 1..n, 🗑, ➕ when add != ""
+	KbRegSoloConfirm   = "reg_solo_confirm"   // ✅, ✏️
+	KbRegCheckin       = "reg_checkin"        // ✅ Подтвердить участие (in the reminder)
+	KbRegDeleteConfirm = "reg_delete_confirm" // 🗑 Да, удалить / ↩️ Нет
 )
 
 const playerLineFormat = "Формат: Ник GameID ZoneID Звёзды"
@@ -361,6 +362,10 @@ func (s *TelegramServiceImpl) HandleRegAction(ctx context.Context, tgID int64, a
 	if action == "checkin" {
 		return s.confirmCheckIn(ctx, p)
 	}
+	switch action {
+	case "delete", "delete_yes", "delete_no":
+		return s.handleDelete(ctx, p, action)
+	}
 
 	// Solo.
 	switch p.FSMState {
@@ -462,9 +467,36 @@ func (s *TelegramServiceImpl) handleCardAction(ctx context.Context, p *models.Te
 		s.setState(ctx, tgID, editPrefix+strconv.Itoa(slot))
 		msg, _ := linePrompt(slot, false)
 		return msg, KbRegCancel
+	}
+	return msgStaleButton, KbNone
+}
+
+// handleDelete is the 🗑 button and /delete_team: ask first, act on "yes",
+// and on "no" put the captain back on whichever card they came from.
+func (s *TelegramServiceImpl) handleDelete(ctx context.Context, p *models.TelegramPlayer, action string) (string, string) {
+	tgID := *p.TelegramID
+	if p.TeamID == nil || !p.IsCaptain {
+		return "Только капитан может удалить команду.", KbNone
+	}
+	switch action {
 	case "delete":
+		team, err := s.repo.GetTeamByID(ctx, *p.TeamID)
+		if err != nil || team == nil {
+			return "Команда не найдена.", KbNone
+		}
+		n := len(s.roster(ctx, team.ID))
+		return fmt.Sprintf("Удалить команду '%s'? Будут удалены все %d игрок(ов). Это нельзя отменить.", team.Name, n), KbRegDeleteConfirm
+	case "delete_yes":
 		s.setState(ctx, tgID, models.StateIdle)
 		return s.DeleteTeam(ctx, tgID), "main_menu"
+	case "delete_no":
+		switch p.FSMState {
+		case models.StateTeamConfirm:
+			return s.confirmCard(ctx, p)
+		case models.StateIdle:
+			return s.teamCard(ctx, p)
+		}
+		return "Удаление отменено.", KbNone
 	}
 	return msgStaleButton, KbNone
 }
