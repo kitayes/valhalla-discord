@@ -274,9 +274,9 @@ func (b *Bot) broadcastCheckInReminder(ctx context.Context) {
 	for _, team := range teams {
 		for _, p := range team.Players {
 			if p.IsCaptain && p.TelegramID != nil {
-				msg := fmt.Sprintf("ВНИМАНИЕ, Капитан!\nВаша команда '%s' не прошла Check-in.\n\nУ вас есть время до %s, чтобы нажать /checkin, иначе — ТЕХНИЧЕСКОЕ ПОРАЖЕНИЕ.",
+				msg := fmt.Sprintf("ВНИМАНИЕ, Капитан!\nВаша команда '%s' не прошла Check-in.\n\nНажмите кнопку ниже до %s, иначе — ТЕХНИЧЕСКОЕ ПОРАЖЕНИЕ.",
 					team.Name, tTime.In(b.location).Add(technicalDefeatGrace).Format("15:04"))
-				b.sendMessage(*p.TelegramID, msg, "empty")
+				b.sendMessage(*p.TelegramID, msg, application.KbRegCheckin)
 			}
 		}
 	}

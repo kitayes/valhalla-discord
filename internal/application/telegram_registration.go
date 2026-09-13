@@ -17,6 +17,7 @@ const (
 	KbRegConfirm     = "reg_confirm"      // "reg_confirm:<n>": ✏️ 1..n, ✅, 🗑
 	KbRegCard        = "reg_card"         // "reg_card:<n>:<add>": ✏️ 1..n, 🗑, ➕ when add != ""
 	KbRegSoloConfirm = "reg_solo_confirm" // ✅, ✏️
+	KbRegCheckin     = "reg_checkin"      // ✅ Подтвердить участие (in the reminder)
 )
 
 const playerLineFormat = "Формат: Ник GameID ZoneID Звёзды"
@@ -357,6 +358,9 @@ func (s *TelegramServiceImpl) HandleRegAction(ctx context.Context, tgID int64, a
 	if action == "cancel" {
 		return s.cancelRegistration(ctx, p)
 	}
+	if action == "checkin" {
+		return s.confirmCheckIn(ctx, p)
+	}
 
 	// Solo.
 	switch p.FSMState {
@@ -498,4 +502,24 @@ func (s *TelegramServiceImpl) afterSlot(ctx context.Context, p *models.TelegramP
 	s.setState(ctx, tg, models.StateTeamLinePrefix+strconv.Itoa(next))
 	msg, kb := linePrompt(next, true)
 	return ack + msg, kb
+}
+
+// confirmCheckIn is the reminder's button. Unlike /checkin it never toggles
+// off, and it works in any FSM state: the reminder arrives whatever the
+// captain happens to be doing in the bot.
+func (s *TelegramServiceImpl) confirmCheckIn(ctx context.Context, p *models.TelegramPlayer) (string, string) {
+	if p.TeamID == nil || !p.IsCaptain {
+		return "Только капитан зарегистрированной команды может пройти check-in.", KbNone
+	}
+	team, err := s.repo.GetTeamByID(ctx, *p.TeamID)
+	if err != nil || team == nil {
+		return "Команда не найдена.", KbNone
+	}
+	if !team.IsCheckedIn {
+		if err := s.repo.SetCheckIn(ctx, team.ID, true); err != nil {
+			s.logWrite("SetCheckIn", err)
+			return "Не удалось подтвердить участие. Попробуйте /checkin.", KbNone
+		}
+	}
+	return fmt.Sprintf("✅ Check-in подтверждён. Команда '%s' участвует в турнире.", team.Name), KbNone
 }

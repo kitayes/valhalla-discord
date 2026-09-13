@@ -362,3 +362,32 @@ func TestRegistrationOpenWithoutTournamentTime(t *testing.T) {
 		t.Error("closed with no tournament scheduled")
 	}
 }
+
+// The 30-minute reminder carries a button; it must work whatever the captain
+// is doing in the bot at that moment and must never un-check (unlike /checkin).
+func TestCheckinButtonConfirmsFromAnyState(t *testing.T) {
+	svc, repo := newTelegramSvc()
+	team := 10
+	repo.teams[team] = &models.TelegramTeam{ID: team, Name: "A"}
+	p := repo.addPlayer(1, &team, true, "team_line_3")
+
+	for i := 0; i < 2; i++ {
+		resp, kb := act(t, svc, 1, "checkin", "")
+		if !repo.teams[team].IsCheckedIn || !strings.Contains(resp, "подтверждён") || kb != KbNone {
+			t.Fatalf("press %d: checked=%v resp=%q kb=%q", i+1, repo.teams[team].IsCheckedIn, resp, kb)
+		}
+	}
+	if p.FSMState != "team_line_3" {
+		t.Errorf("check-in changed the FSM state to %q", p.FSMState)
+	}
+}
+
+func TestCheckinButtonNeedsACaptain(t *testing.T) {
+	svc, repo := newTelegramSvc()
+	repo.addPlayer(1, nil, false, models.StateIdle)
+
+	resp, _ := act(t, svc, 1, "checkin", "")
+	if !strings.Contains(resp, "капитан") {
+		t.Errorf("resp = %q, want captain-only refusal", resp)
+	}
+}

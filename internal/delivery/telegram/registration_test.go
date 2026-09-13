@@ -77,3 +77,13 @@ func TestRegKeyboards(t *testing.T) {
 		t.Error("main_menu must not be treated as a registration keyboard")
 	}
 }
+
+func TestCheckinKeyboard(t *testing.T) {
+	kb, ok := regKeyboard(application.KbRegCheckin)
+	if !ok {
+		t.Fatal("reg_checkin not recognised")
+	}
+	if got := flatten(kb); len(got) != 1 || got[0] != "reg:checkin" {
+		t.Errorf("buttons = %v, want [reg:checkin]", got)
+	}
+}
