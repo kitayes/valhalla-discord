@@ -191,8 +191,9 @@ func (b *Bot) parseTournamentTime(dateStr string) (time.Time, string, error) {
 	if err != nil {
 		return time.Time{}, "", err
 	}
-	summary := fmt.Sprintf("Время турнира: %s (%s)\nНапоминание капитанам: %s\nТех. поражение: %s",
+	summary := fmt.Sprintf("Время турнира: %s (%s)\nРегистрация закроется: %s\nНапоминание капитанам: %s\nТех. поражение: %s",
 		t.Format(tournamentLayout), b.location,
+		t.Add(-application.RegistrationCloseLead).Format("15:04"),
 		t.Add(-checkInReminderLead).Format("15:04"),
 		t.Add(technicalDefeatGrace).Format("15:04"))
 	return t, summary, nil

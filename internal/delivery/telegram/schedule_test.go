@@ -104,7 +104,7 @@ func TestParseTournamentTimeUsesConfiguredZone(t *testing.T) {
 	if got.Location() != almaty || got.Hour() != 18 {
 		t.Errorf("parsed %v, want 18:00 in Asia/Almaty", got)
 	}
-	for _, want := range []string{"20.05.2026 18:00", "Asia/Almaty", "17:30", "18:10"} {
+	for _, want := range []string{"20.05.2026 18:00", "Asia/Almaty", "17:00", "17:30", "18:10"} {
 		if !strings.Contains(summary, want) {
 			t.Errorf("summary %q lacks %q", summary, want)
 		}

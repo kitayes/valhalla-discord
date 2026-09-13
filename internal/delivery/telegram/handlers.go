@@ -115,7 +115,7 @@ func (b *Bot) handleAdminCommand(ctx context.Context, chatID int64, text string)
 	}
 	if text == "/open_reg" {
 		b.service.SetRegistrationOpen(ctx, true)
-		b.sendMessage(chatID, "Регистрация открыта.", "main_menu")
+		b.sendMessage(chatID, "Регистрация открыта принудительно: автозакрытие за час до турнира отключено до /close_reg.", "main_menu")
 		return
 	}
 

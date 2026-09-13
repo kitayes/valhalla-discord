@@ -5,6 +5,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 // drive sends one text message and returns the reply.
@@ -319,5 +320,45 @@ func TestLegacyStatesResetToIdle(t *testing.T) {
 		if p.FSMState != models.StateIdle || !strings.Contains(resp, "заново") {
 			t.Errorf("%s: state=%q resp=%q", st, p.FSMState, resp)
 		}
+	}
+}
+
+// Registration closes itself an hour before the tournament; /open_reg forces
+// it back open until /close_reg.
+func TestRegistrationAutoClosesBeforeTournament(t *testing.T) {
+	svc, repo := newTelegramSvc()
+	repo.addPlayer(1, nil, false, models.StateIdle)
+	start := time.Date(2026, 9, 20, 18, 0, 0, 0, time.UTC)
+	svc.SetTournamentTime(context.Background(), start)
+
+	svc.now = func() time.Time { return start.Add(-2 * time.Hour) }
+	if open, _ := svc.RegistrationStatus(context.Background()); !open {
+		t.Fatal("closed two hours before start")
+	}
+
+	svc.now = func() time.Time { return start.Add(-30 * time.Minute) }
+	open, reason := svc.RegistrationStatus(context.Background())
+	if open || !strings.Contains(reason, "час") {
+		t.Fatalf("30 min before start: open=%v reason=%q", open, reason)
+	}
+	if resp, _ := svc.StartTeamRegistration(context.Background(), 1); !strings.Contains(resp, "час") {
+		t.Errorf("StartTeamRegistration = %q, want the auto-close reason", resp)
+	}
+
+	svc.SetRegistrationOpen(context.Background(), true)
+	if open, _ := svc.RegistrationStatus(context.Background()); !open {
+		t.Error("/open_reg did not override the auto-close")
+	}
+
+	svc.SetRegistrationOpen(context.Background(), false)
+	if open, _ := svc.RegistrationStatus(context.Background()); open {
+		t.Error("/close_reg did not close")
+	}
+}
+
+func TestRegistrationOpenWithoutTournamentTime(t *testing.T) {
+	svc, _ := newTelegramSvc()
+	if open, _ := svc.RegistrationStatus(context.Background()); !open {
+		t.Error("closed with no tournament scheduled")
 	}
 }

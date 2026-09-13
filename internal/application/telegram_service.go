@@ -38,7 +38,7 @@ type TelegramService interface {
 	ToggleCheckIn(ctx context.Context, tgID int64) string
 
 	SetRegistrationOpen(ctx context.Context, isOpen bool)
-	IsRegistrationOpen(ctx context.Context) bool
+	RegistrationStatus(ctx context.Context) (open bool, reason string)
 	GenerateTeamsCSV(ctx context.Context) ([]byte, error)
 	GetBroadcastList(ctx context.Context) ([]int64, error)
 	AdminDeleteTeam(ctx context.Context, teamName string) string
@@ -61,12 +61,15 @@ type TelegramServiceImpl struct {
 	mu             sync.RWMutex
 	tournamentTime time.Time
 	logger         Logger
+	// now is swapped in tests to move the clock around the tournament date.
+	now func() time.Time
 }
 
 func NewTelegramServiceImpl(repo repository.Telegram, logger Logger) *TelegramServiceImpl {
 	return &TelegramServiceImpl{
 		repo:   repo,
 		logger: logger,
+		now:    time.Now,
 	}
 }
 
@@ -114,8 +117,8 @@ func (s *TelegramServiceImpl) HandleUserInput(ctx context.Context, tgID int64, i
 }
 
 func (s *TelegramServiceImpl) StartSoloRegistration(ctx context.Context, tgID int64) (string, string) {
-	if !s.IsRegistrationOpen(ctx) {
-		return "Регистрация закрыта.", KbNone
+	if open, reason := s.RegistrationStatus(ctx); !open {
+		return reason, KbNone
 	}
 	if name := s.currentTeamName(ctx, tgID); name != "" {
 		return fmt.Sprintf("Вы уже в команде '%s'. Соло-регистрация недоступна, пока вы в команде (/delete_team).", name), KbNone
@@ -125,8 +128,8 @@ func (s *TelegramServiceImpl) StartSoloRegistration(ctx context.Context, tgID in
 }
 
 func (s *TelegramServiceImpl) StartTeamRegistration(ctx context.Context, tgID int64) (string, string) {
-	if !s.IsRegistrationOpen(ctx) {
-		return "Регистрация закрыта.", KbNone
+	if open, reason := s.RegistrationStatus(ctx); !open {
+		return reason, KbNone
 	}
 	// A second /reg_team used to create a fresh team and repoint the captain,
 	// leaving the old roster orphaned.
@@ -202,17 +205,43 @@ func (s *TelegramServiceImpl) DeleteTeam(ctx context.Context, tgID int64) string
 	return "Команда удалена."
 }
 
+// RegistrationCloseLead is how long before the tournament registration shuts
+// itself: late sign-ups have no time to check in anyway.
+const RegistrationCloseLead = time.Hour
+
+// Values of the registration_open setting. The migration seeds "true", so a
+// plain "true" means "automatic"; /open_reg writes "forced" to override the
+// pre-tournament auto-close until /close_reg.
+const (
+	registrationAuto   = "true"
+	registrationForced = "forced"
+	registrationClosed = "false"
+)
+
 func (s *TelegramServiceImpl) SetRegistrationOpen(ctx context.Context, isOpen bool) {
-	val := "false"
+	val := registrationClosed
 	if isOpen {
-		val = "true"
+		val = registrationForced
 	}
 	s.logWrite("SetSetting", s.repo.SetSetting(ctx, "registration_open", val))
 }
 
-func (s *TelegramServiceImpl) IsRegistrationOpen(ctx context.Context) bool {
+// RegistrationStatus reports whether sign-ups are accepted and, if not, the
+// sentence to show the user.
+func (s *TelegramServiceImpl) RegistrationStatus(ctx context.Context) (bool, string) {
 	val, _ := s.repo.GetSetting(ctx, "registration_open")
-	return val != "false"
+	switch val {
+	case registrationClosed:
+		return false, "Регистрация закрыта."
+	case registrationForced:
+		return true, ""
+	case registrationAuto, "":
+	}
+	start := s.GetTournamentTime(ctx)
+	if !start.IsZero() && !s.now().Before(start.Add(-RegistrationCloseLead)) {
+		return false, fmt.Sprintf("Регистрация закрыта: до турнира меньше часа (старт %s).", start.Format("15:04"))
+	}
+	return true, ""
 }
 
 func (s *TelegramServiceImpl) AdminDeleteTeam(ctx context.Context, name string) string {
