@@ -105,7 +105,7 @@ func NewService(repos *repository.Repository, ai AIProvider, sheetsClient sheets
 		TelegramService:    NewTelegramServiceImpl(repos.Telegram, logger),
 		Lobby:              lobby,
 		EloService:         NewEloService(logger, matchSvc, repos.LobbyMatch),
-		BettingService:     NewBettingService(logger, repos.Bet),
+		BettingService:     NewBettingService(logger, repos),
 		LicenseService:     repos.License,
 	}
 }

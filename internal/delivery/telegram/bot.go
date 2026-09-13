@@ -4,6 +4,7 @@ import (
 	"blackwatch/internal/application"
 	"context"
 	"fmt"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -34,7 +35,7 @@ type Bot struct {
 	disqualifiedFor time.Time
 }
 
-func NewBot(token string, adminIDs []int64, service application.TelegramService, profileLinkService application.ProfileLinkService, bettingService *application.BettingService, telegramChannelID string, logger application.Logger) (*Bot, error) {
+func NewBot(token string, adminIDs []int64, service application.TelegramService, profileLinkService application.ProfileLinkService, bettingService *application.BettingService, telegramChannelID string, bets BetSettings, logger application.Logger) (*Bot, error) {
 	bot, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create telegram bot: %w", err)
@@ -57,7 +58,7 @@ func NewBot(token string, adminIDs []int64, service application.TelegramService,
 
 	// Initialize betting extension
 	if bettingService != nil && telegramChannelID != "" {
-		b.bettingBot = NewBettingBot(b, bettingService, telegramChannelID, logger)
+		b.bettingBot = NewBettingBot(b, bettingService, telegramChannelID, bets, logger)
 		logger.Info("Telegram betting engine initialized for channel %s", telegramChannelID)
 	}
 
@@ -84,9 +85,9 @@ func (b *Bot) Start(ctx context.Context) {
 			}
 			switch {
 			case update.Message != nil:
-				b.handleUpdate(ctx, update.Message)
+				b.safely("message", func() { b.handleUpdate(ctx, update.Message) })
 			case update.CallbackQuery != nil:
-				b.handleCallbackQuery(ctx, update.CallbackQuery)
+				b.safely("callback", func() { b.handleCallbackQuery(ctx, update.CallbackQuery) })
 			}
 		}
 	}
@@ -100,14 +101,18 @@ func (b *Bot) handleCallbackQuery(parent context.Context, callback *tgbotapi.Cal
 	if callback.From == nil {
 		return
 	}
-	if b.bettingBot == nil {
-		b.apiRespond(callback, "Ставки сейчас недоступны.", true)
-		return
-	}
 
 	ctx, cancel := context.WithTimeout(parent, updateTimeout)
 	defer cancel()
 
+	if strings.HasPrefix(callback.Data, callbackRegPrefix+callbackSep) {
+		b.handleRegCallback(ctx, callback)
+		return
+	}
+	if b.bettingBot == nil {
+		b.apiRespond(callback, "Ставки сейчас недоступны.", true)
+		return
+	}
 	b.bettingBot.HandleCallback(ctx, callback)
 }
 
@@ -146,6 +151,18 @@ func (b *Bot) handleUpdate(parent context.Context, msg *tgbotapi.Message) {
 	b.handleUserCommand(ctx, chatID, text, username)
 }
 
+// safely runs fn and turns a panic into a log line. Handlers here run on the
+// polling goroutine, and the Discord bot shares the process: before this, one
+// bad dereference in a Telegram handler took both bots down.
+func (b *Bot) safely(what string, fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			b.logger.Error("telegram: PANIC recovered in %s: %v\nStack:\n%s", what, r, string(debug.Stack()))
+		}
+	}()
+	fn()
+}
+
 func (b *Bot) Stop() {
 	b.bot.StopReceivingUpdates()
 }
@@ -165,7 +182,7 @@ func (b *Bot) startBackgroundWorker(ctx context.Context) {
 		}
 
 		tickCtx, cancel := context.WithTimeout(ctx, updateTimeout)
-		b.runScheduledChecks(tickCtx)
+		b.safely("scheduled checks", func() { b.runScheduledChecks(tickCtx) })
 		cancel()
 	}
 }

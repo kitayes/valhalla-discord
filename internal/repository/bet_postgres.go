@@ -43,13 +43,17 @@ func (r *BetPostgres) PlaceBet(ctx context.Context, req models.PlaceBetRequest) 
 	// uses. The two used to disagree — this side treated NULL as "open forever",
 	// the sweeper as "expired" — so a row left open by the pre-deadline code took
 	// bets until the next sweep happened to run.
+	// The roster comes back with the window because the bettor must not be
+	// playing in this match — see the membership check below.
 	var bettingOpen bool
 	var status string
+	var teamA, teamB []sql.NullInt64
 	err = tx.QueryRowContext(ctx,
-		`SELECT betting_open AND betting_closes_at IS NOT NULL AND betting_closes_at > NOW(), status
+		`SELECT betting_open AND betting_closes_at IS NOT NULL AND betting_closes_at > NOW(),
+		        status, team_a_ids, team_b_ids
 		   FROM lobby_matches WHERE id = $1 FOR SHARE`,
 		req.MatchID,
-	).Scan(&bettingOpen, &status)
+	).Scan(&bettingOpen, &status, pq.Array(&teamA), pq.Array(&teamB))
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("match %d: %w", req.MatchID, domain.ErrMatchNotFound)
 	}
@@ -60,17 +64,26 @@ func (r *BetPostgres) PlaceBet(ctx context.Context, req models.PlaceBetRequest) 
 		return fmt.Errorf("match %d: %w", req.MatchID, domain.ErrBettingClosed)
 	}
 
-	// Verify player exists and has enough points
-	var currentPoints int
+	// The player id comes back with the balance, so the membership check below
+	// costs no extra query. Reading players after lobby_matches also keeps the
+	// lock order the settlement paths use.
+	var playerID, currentPoints int
 	err = tx.QueryRowContext(ctx,
-		`SELECT points FROM players WHERE tg_id = $1 FOR UPDATE`,
+		`SELECT id, points FROM players WHERE tg_id = $1 FOR UPDATE`,
 		req.TgUserID,
-	).Scan(&currentPoints)
+	).Scan(&playerID, &currentPoints)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("telegram user %d: %w", req.TgUserID, domain.ErrPlayerNotFound)
 	}
 	if err != nil {
 		return fmt.Errorf("failed to get player points: %w", err)
+	}
+
+	// A participant staking on their own match can back the other side and then
+	// throw the game, which is the whole of match fixing in one move. The same
+	// people play and bet here, so nothing but this check stands in the way.
+	if isRosterMember(playerID, teamA, teamB) {
+		return fmt.Errorf("player %d in match %d: %w", playerID, req.MatchID, domain.ErrBettingOnOwnMatch)
 	}
 
 	if currentPoints < req.Amount {
@@ -127,6 +140,44 @@ func (r *BetPostgres) GetBetsByMatch(ctx context.Context, matchID int) ([]models
 		bets = append(bets, b)
 	}
 	return bets, rows.Err()
+}
+
+// BetPool sums the live bets of a match by side.
+//
+// Only unsettled rows are counted, which is the same set PayoutWinners will
+// distribute — a settled match must not keep advertising a market. A side with
+// no bets is absent from the grouping and stays zero, which BetPool.Odds reads
+// as "no coefficient yet".
+func (r *BetPostgres) BetPool(ctx context.Context, matchID int) (models.BetPool, error) {
+	pool := models.BetPool{MatchID: matchID}
+
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT team_chosen, COALESCE(SUM(amount), 0), COUNT(*)
+		   FROM match_bets
+		  WHERE match_id = $1 AND settled_at IS NULL
+		  GROUP BY team_chosen`, matchID)
+	if err != nil {
+		return pool, fmt.Errorf("failed to query bet pool: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // best-effort cleanup
+
+	for rows.Next() {
+		var team string
+		var amount, count int
+		if err := rows.Scan(&team, &amount, &count); err != nil {
+			return models.BetPool{}, fmt.Errorf("failed to scan bet pool: %w", err)
+		}
+		switch team {
+		case domain.TeamA:
+			pool.AmountA, pool.CountA = amount, count
+		case domain.TeamB:
+			pool.AmountB, pool.CountB = amount, count
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return models.BetPool{}, fmt.Errorf("failed to read bet pool: %w", err)
+	}
+	return pool, nil
 }
 
 // PendingSettlements lists matches that are over but still hold live bets.
@@ -212,6 +263,18 @@ func (r *BetPostgres) PayoutWinners(ctx context.Context, matchID int, winningTea
 	}
 
 	return payouts, tx.Commit()
+}
+
+// isRosterMember reports whether the player is drafted into this match.
+func isRosterMember(playerID int, teams ...[]sql.NullInt64) bool {
+	for _, team := range teams {
+		for _, id := range team {
+			if id.Valid && int(id.Int64) == playerID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // creditPlayers adds points to each account in ascending tg_id order.

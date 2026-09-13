@@ -16,6 +16,9 @@ import (
 type BettingRepository interface {
 	PlaceBet(ctx context.Context, req models.PlaceBetRequest) error
 	GetBetsByMatch(ctx context.Context, matchID int) ([]models.Bet, error)
+	BetPool(ctx context.Context, matchID int) (models.BetPool, error)
+	SaveBetPost(ctx context.Context, matchID int, chatID, messageID int64) error
+	GetBetPost(ctx context.Context, matchID int) (chatID, messageID int64, ok bool, err error)
 	PayoutWinners(ctx context.Context, matchID int, winningTeam string) (map[int64]int, error)
 	GetPlayerPoints(ctx context.Context, tgUserID int64) (int, error)
 	RefundAllBets(ctx context.Context, matchID int) (int, error)
@@ -187,6 +190,24 @@ func (s *BettingService) SettlePending(ctx context.Context) (int, error) {
 	}
 
 	return settled, errors.Join(errs...)
+}
+
+// BetPool returns the live money staked on a match, split by side. It is what
+// the coefficients shown to bettors are computed from.
+func (s *BettingService) BetPool(ctx context.Context, matchID int) (models.BetPool, error) {
+	return s.repo.BetPool(ctx, matchID)
+}
+
+// SaveBetPost records where a match's Telegram betting post lives so it can be
+// edited as the pool moves and closed out when the match settles.
+func (s *BettingService) SaveBetPost(ctx context.Context, matchID int, chatID, messageID int64) error {
+	return s.repo.SaveBetPost(ctx, matchID, chatID, messageID)
+}
+
+// BetPost returns the chat and message of a match's betting post. ok is false
+// when the match has no post — Telegram unconfigured, or the send failed.
+func (s *BettingService) BetPost(ctx context.Context, matchID int) (chatID, messageID int64, ok bool, err error) {
+	return s.repo.GetBetPost(ctx, matchID)
 }
 
 // GetPlayerPoints returns the current points balance for a Telegram user.

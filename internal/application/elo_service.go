@@ -144,7 +144,9 @@ func (s *EloService) ProcessMatchResult(ctx context.Context, matchID int, winner
 			}
 
 			newMMR := domain.ClampMMR(mmrs[pid] + team.delta + bonus)
-			if err := s.lobbyMatch.UpdatePlayerMMR(ctx, pid, newMMR); err != nil {
+			// matchID goes with the change so a player can see which match cost
+			// or earned them the points, and so a replay is recognised as one.
+			if err := s.lobbyMatch.UpdatePlayerMMR(ctx, pid, newMMR, matchID); err != nil {
 				s.logger.Error("elo: failed to update MMR for player %d: %v", pid, err)
 				updateErrs = append(updateErrs, fmt.Errorf("player %d: %w", pid, err))
 				continue

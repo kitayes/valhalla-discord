@@ -28,6 +28,18 @@ type LobbyMatch struct {
 	CreatedAt   time.Time        `json:"created_at"`
 }
 
+// MMRChange is one recorded rating change. Delta is stored rather than derived
+// so a later correction to either endpoint cannot rewrite what a past match was
+// worth.
+type MMRChange struct {
+	// MatchID is 0 for a change with no match behind it.
+	MatchID   int       `json:"match_id,omitempty"`
+	Before    int       `json:"mmr_before"`
+	After     int       `json:"mmr_after"`
+	Delta     int       `json:"delta"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // CreateLobbyMatchRequest is the input for creating a new lobby match.
 type CreateLobbyMatchRequest struct {
 	GuildID    string

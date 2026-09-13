@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"blackwatch/internal/domain"
@@ -42,10 +43,18 @@ type Config struct {
 	GuildID           string `env:"GUILD_ID" envDefault:""`
 	RefereeRoleID     string `env:"REFEREE_ROLE_ID" envDefault:""`
 	TelegramChannelID string `env:"TELEGRAM_CHANNEL_ID" envDefault:""`
-	DeepSeekKey       string `env:"DEEPSEEK_KEY" envDefault:""`
-	FAQChannelID      string `env:"FAQ_CHANNEL_ID" envDefault:""`
-	FAQFilePath       string `env:"FAQ_FILE_PATH" envDefault:"assets/faq.md"`
-	WebAdminPort      string `env:"WEB_ADMIN_PORT" envDefault:"8080"`
+	// BetAmounts are the stake buttons drawn under a match's betting post.
+	// Sent to Telegram in ascending order with duplicates dropped; see
+	// StakeOptions.
+	BetAmounts []int `env:"BET_AMOUNTS" envSeparator:"," envDefault:"10,25,50"`
+	// BetMax caps a single stake, the "Макс" button included. It is enforced
+	// server-side on every bet: callback data is client-supplied and a modified
+	// client can send whatever number it likes.
+	BetMax       int    `env:"BET_MAX" envDefault:"100"`
+	DeepSeekKey  string `env:"DEEPSEEK_KEY" envDefault:""`
+	FAQChannelID string `env:"FAQ_CHANNEL_ID" envDefault:""`
+	FAQFilePath  string `env:"FAQ_FILE_PATH" envDefault:"assets/faq.md"`
+	WebAdminPort string `env:"WEB_ADMIN_PORT" envDefault:"8080"`
 	// WebAdminKey has no default on purpose. It used to fall back to a literal
 	// "blackwatch-admin", which meant the dashboard came up with a publicly
 	// known password on every deployment that never set the variable. Empty
@@ -84,6 +93,29 @@ func (c *Config) TierRoleIDs() map[domain.Tier]string {
 		}
 	}
 	return roles
+}
+
+// StakeOptions returns the configured stake buttons in ascending order with
+// duplicates removed.
+//
+// The order is fixed here rather than left to the operator so the keyboard
+// cannot come out as "50 10 25": the buttons sit in one row and a bettor picks
+// by position as much as by reading.
+func (c *Config) StakeOptions() []int {
+	seen := make(map[int]struct{}, len(c.BetAmounts))
+	out := make([]int, 0, len(c.BetAmounts))
+	for _, v := range c.BetAmounts {
+		if v <= 0 {
+			continue
+		}
+		if _, dup := seen[v]; dup {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	sort.Ints(out)
+	return out
 }
 
 // nonEmpty drops blank entries from a comma-separated list. An unset variable
@@ -127,6 +159,22 @@ func (c *Config) Validate() error {
 	}
 	if c.PlayerCacheSize <= 0 {
 		errs = append(errs, fmt.Errorf("PLAYER_CACHE_SIZE must be positive, got %d", c.PlayerCacheSize))
+	}
+
+	// A stake the bettor cannot afford to be offered is worse than no button:
+	// the tap is accepted by Telegram and refused by the database, which reads
+	// as a broken bot. Both bounds are checked here so that never ships.
+	if c.BetMax <= 0 {
+		errs = append(errs, fmt.Errorf("BET_MAX must be positive, got %d", c.BetMax))
+	}
+	stakes := c.StakeOptions()
+	if len(stakes) == 0 {
+		errs = append(errs, errors.New("BET_AMOUNTS must list at least one positive stake"))
+	}
+	for _, v := range stakes {
+		if c.BetMax > 0 && v > c.BetMax {
+			errs = append(errs, fmt.Errorf("BET_AMOUNTS contains %d, which exceeds BET_MAX (%d)", v, c.BetMax))
+		}
 	}
 
 	// Nobody to administer the bot is a configuration error, not a deployment

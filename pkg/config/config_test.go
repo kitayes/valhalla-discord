@@ -16,6 +16,10 @@ func validConfig() *Config {
 		PlayerCacheSize: 1000,
 		AdminUserIDs:    []string{"42"},
 		WebAdminPort:    "8080",
+		// Both carry envDefaults, so a real process always has them; the
+		// literal has to supply them itself.
+		BetAmounts: []int{10, 25, 50},
+		BetMax:     100,
 	}
 }
 
@@ -115,5 +119,47 @@ func assertRejects(t *testing.T, c *Config, want string) {
 	}
 	if !strings.Contains(err.Error(), want) {
 		t.Errorf("Validate() = %q, want it to mention %s", err, want)
+	}
+}
+
+// A stake button the balance cap forbids is worse than no button: Telegram
+// accepts the tap, the database refuses the bet, and the bot looks broken.
+func TestValidateRejectsStakesAboveTheCap(t *testing.T) {
+	c := validConfig()
+	c.BetAmounts = []int{10, 500}
+	c.BetMax = 100
+	assertRejects(t, c, "exceeds BET_MAX")
+}
+
+func TestValidateRejectsUnusableBetSettings(t *testing.T) {
+	t.Run("no positive stake leaves the keyboard empty", func(t *testing.T) {
+		c := validConfig()
+		c.BetAmounts = []int{0, -5}
+		assertRejects(t, c, "BET_AMOUNTS")
+	})
+
+	t.Run("a non-positive cap refuses every bet", func(t *testing.T) {
+		c := validConfig()
+		c.BetMax = 0
+		assertRejects(t, c, "BET_MAX")
+	})
+}
+
+// The buttons sit in one row and get picked by position as much as by reading,
+// so the order is fixed here rather than left to whatever the operator typed.
+func TestStakeOptionsAreSortedAndDeduplicated(t *testing.T) {
+	c := validConfig()
+	c.BetAmounts = []int{50, 10, 25, 10, 0, -3}
+
+	got := c.StakeOptions()
+	want := []int{10, 25, 50}
+
+	if len(got) != len(want) {
+		t.Fatalf("StakeOptions() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("StakeOptions() = %v, want %v", got, want)
+		}
 	}
 }

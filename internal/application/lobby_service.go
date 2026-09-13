@@ -26,7 +26,8 @@ type LobbyMatchRepository interface {
 	AtomicSetWinner(ctx context.Context, matchID int, winner string) (bool, error)
 	GetActiveByGuild(ctx context.Context, guildID string) (*models.LobbyMatch, error)
 	GetPlayerMMRsBatch(ctx context.Context, playerIDs []int) (map[int]int, error)
-	UpdatePlayerMMR(ctx context.Context, playerID, newMMR int) error
+	UpdatePlayerMMR(ctx context.Context, playerID, newMMR, matchID int) error
+	GetMMRHistory(ctx context.Context, playerID, limit int) ([]models.MMRChange, error)
 	SaveThreadID(ctx context.Context, matchID int, threadID string) error
 	GetByThreadID(ctx context.Context, threadID string) (*models.LobbyMatch, error)
 	GetPlayerNamesByMatchID(ctx context.Context, matchID int) ([]string, error)
@@ -540,6 +541,11 @@ func (l *LobbyService) AtomicMatchClosure(ctx context.Context, matchID int, winn
 		l.logger.Info("lobby: match #%d closed — winner: %s", matchID, winner)
 	}
 	return success, nil
+}
+
+// GetMMRHistory returns a player's recent rating changes, newest first.
+func (l *LobbyService) GetMMRHistory(ctx context.Context, playerID, limit int) ([]models.MMRChange, error) {
+	return l.matchRepo.GetMMRHistory(ctx, playerID, limit)
 }
 
 func (l *LobbyService) GetPlayerMMRsBatch(ctx context.Context, playerIDs []int) (map[int]int, error) {

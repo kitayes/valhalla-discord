@@ -43,6 +43,10 @@ var (
 	ErrInsufficientPoints = errors.New("insufficient points")
 	// ErrAlreadyBet reports that the user already backed this match.
 	ErrAlreadyBet = errors.New("a bet was already placed on this match")
+	// ErrBettingOnOwnMatch reports that the bettor is playing in the match they
+	// tried to stake on. Backing the other side is then a way to profit from
+	// losing on purpose.
+	ErrBettingOnOwnMatch = errors.New("cannot bet on a match you are playing in")
 
 	// ErrDiscordNotLinked reports that a player has no Discord account bound.
 	ErrDiscordNotLinked = errors.New("player has no Discord account linked")

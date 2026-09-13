@@ -74,8 +74,7 @@ type Telegram interface {
 
 	GetTeamMembers(ctx context.Context, teamID int) ([]models.TelegramPlayer, error)
 	CreateTeammate(ctx context.Context, p *models.TelegramPlayer) error
-	UpdateLastTeammateData(ctx context.Context, teamID int, column string, value interface{}) error
-	ResetTeamID(ctx context.Context, teamID int) error
+	ReleaseTeamMembers(ctx context.Context, teamID int) error
 	SetCheckIn(ctx context.Context, teamID int, status bool) error
 
 	GetAllCaptains(ctx context.Context) ([]models.TelegramPlayer, error)
@@ -92,8 +91,11 @@ type LobbyMatch interface {
 	GetAllByGuild(ctx context.Context, guildID string, limit int) ([]models.LobbyMatch, error)
 	GetActiveByGuild(ctx context.Context, guildID string) (*models.LobbyMatch, error)
 	GetPlayerMMRsBatch(ctx context.Context, playerIDs []int) (map[int]int, error)
-	UpdatePlayerMMR(ctx context.Context, playerID, newMMR int) error
+	UpdatePlayerMMR(ctx context.Context, playerID, newMMR, matchID int) error
+	GetMMRHistory(ctx context.Context, playerID, limit int) ([]models.MMRChange, error)
 	SaveThreadID(ctx context.Context, matchID int, threadID string) error
+	SaveBetPost(ctx context.Context, matchID int, chatID, messageID int64) error
+	GetBetPost(ctx context.Context, matchID int) (chatID, messageID int64, ok bool, err error)
 	GetByThreadID(ctx context.Context, threadID string) (*models.LobbyMatch, error)
 	GetPlayerNamesByMatchID(ctx context.Context, matchID int) ([]string, error)
 	OpenBetting(ctx context.Context, matchID int, window time.Duration) error
@@ -106,6 +108,7 @@ type LobbyMatch interface {
 type Bet interface {
 	PlaceBet(ctx context.Context, req models.PlaceBetRequest) error
 	GetBetsByMatch(ctx context.Context, matchID int) ([]models.Bet, error)
+	BetPool(ctx context.Context, matchID int) (models.BetPool, error)
 	PayoutWinners(ctx context.Context, matchID int, winningTeam string) (map[int64]int, error)
 	GetPlayerPoints(ctx context.Context, tgUserID int64) (int, error)
 	RefundAllBets(ctx context.Context, matchID int) (int, error)

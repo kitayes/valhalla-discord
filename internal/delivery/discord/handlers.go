@@ -149,6 +149,11 @@ func (b *Bot) handleProfile(ctx context.Context, s *discordgo.Session, i *discor
 		},
 	}
 
+	// Rating and its recent movement. The profile used to show kills and a
+	// win rate but never the number a ranked ladder is actually about, because
+	// current_mmr was a single overwritten column with no past to read.
+	b.appendMMRFields(ctx, embed, id)
+
 	if lifetime, err := b.services.MatchService.GetLifetimeMedals(ctx, id); err != nil {
 		b.logger.Warn("profile: failed to get lifetime medals for player %d: %v", id, err)
 	} else if lifetime.MVP > p.MVP || lifetime.SVP > p.SVP {
@@ -162,6 +167,56 @@ func (b *Bot) handleProfile(ctx context.Context, s *discordgo.Session, i *discor
 	b.respond(s, i, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{Embeds: []*discordgo.MessageEmbed{embed}},
+	})
+}
+
+// mmrHistoryInProfile is how many recent rating changes the profile shows.
+const mmrHistoryInProfile = 5
+
+// appendMMRFields adds the rating and its recent movement to a profile embed.
+//
+// Neither is fatal to the profile: a player whose rating cannot be read still
+// gets their match statistics, so a failure here is logged and skipped rather
+// than turned into an error page.
+func (b *Bot) appendMMRFields(ctx context.Context, embed *discordgo.MessageEmbed, playerID int) {
+	mmrs, err := b.services.Lobby.GetPlayerMMRsBatch(ctx, []int{playerID})
+	if err != nil {
+		b.logger.Warn("profile: failed to read MMR for player %d: %v", playerID, err)
+		return
+	}
+	mmr, ok := mmrs[playerID]
+	if !ok {
+		return
+	}
+
+	tier := domain.DetermineTier(mmr)
+	embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+		Name:   "Рейтинг",
+		Value:  fmt.Sprintf("**%d** MMR — %s", mmr, domain.FormatTierDisplay(tier)),
+		Inline: false,
+	})
+
+	history, err := b.services.Lobby.GetMMRHistory(ctx, playerID, mmrHistoryInProfile)
+	if err != nil {
+		b.logger.Warn("profile: failed to read MMR history for player %d: %v", playerID, err)
+		return
+	}
+	if len(history) == 0 {
+		return
+	}
+
+	var sb strings.Builder
+	for _, c := range history {
+		sb.WriteString(fmt.Sprintf("`%+d` → %d", c.Delta, c.After))
+		if c.MatchID > 0 {
+			sb.WriteString(fmt.Sprintf(" (матч #%d)", c.MatchID))
+		}
+		sb.WriteString(fmt.Sprintf(" — %s\n", c.CreatedAt.Format("02.01")))
+	}
+	embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+		Name:   fmt.Sprintf("Последние изменения (%d)", len(history)),
+		Value:  sb.String(),
+		Inline: false,
 	})
 }
 

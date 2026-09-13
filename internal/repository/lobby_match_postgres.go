@@ -228,15 +228,61 @@ func (r *LobbyMatchPostgres) GetPlayerMMRsBatch(ctx context.Context, playerIDs [
 }
 
 // UpdatePlayerMMR updates a single player's MMR in the database.
-func (r *LobbyMatchPostgres) UpdatePlayerMMR(ctx context.Context, playerID, newMMR int) error {
+// UpdatePlayerMMR sets a player's rating and records the change.
+//
+// The history row is written by the same statement, not a second one: a rating
+// whose previous value is only in the row being overwritten cannot be recovered
+// afterwards, so a partial write here would lose it for good. The CTEs share one
+// snapshot, which is why prev still reads the old value while upd replaces it.
+//
+// matchID may be 0 for a change with no match behind it — an admin correction or
+// a season reset. Replaying a settlement is a no-op: the partial unique index on
+// (player_id, match_id) turns the second insert into a skip rather than a second
+// "+18" in the player's history.
+func (r *LobbyMatchPostgres) UpdatePlayerMMR(ctx context.Context, playerID, newMMR, matchID int) error {
 	_, err := r.db.ExecContext(ctx,
-		`UPDATE players SET current_mmr = $1 WHERE id = $2`,
-		newMMR, playerID,
+		`WITH prev AS (
+		     SELECT current_mmr FROM players WHERE id = $2 FOR UPDATE
+		 ), upd AS (
+		     UPDATE players SET current_mmr = $1 WHERE id = $2
+		 )
+		 INSERT INTO mmr_history (player_id, match_id, mmr_before, mmr_after, delta)
+		 SELECT $2, $3, prev.current_mmr, $1, $1 - prev.current_mmr FROM prev
+		 ON CONFLICT (player_id, match_id) WHERE match_id IS NOT NULL DO NOTHING`,
+		newMMR, playerID, nullableID(matchID),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update MMR for player %d: %w", playerID, err)
 	}
 	return nil
+}
+
+// GetMMRHistory returns a player's rating changes, newest first.
+func (r *LobbyMatchPostgres) GetMMRHistory(ctx context.Context, playerID, limit int) ([]models.MMRChange, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT match_id, mmr_before, mmr_after, delta, created_at
+		   FROM mmr_history WHERE player_id = $1
+		  ORDER BY created_at DESC, id DESC LIMIT $2`, playerID, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query mmr history: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // best-effort cleanup
+
+	var history []models.MMRChange
+	for rows.Next() {
+		var c models.MMRChange
+		var matchID sql.NullInt64
+		if err := rows.Scan(&matchID, &c.Before, &c.After, &c.Delta, &c.CreatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan mmr change: %w", err)
+		}
+		c.MatchID = int(matchID.Int64)
+		history = append(history, c)
+	}
+	return history, rows.Err()
 }
 
 // SaveThreadID updates the thread_id for an existing lobby match.
@@ -249,6 +295,47 @@ func (r *LobbyMatchPostgres) SaveThreadID(ctx context.Context, matchID int, thre
 		return fmt.Errorf("failed to save thread_id for match %d: %w", matchID, err)
 	}
 	return nil
+}
+
+// SaveBetPost records where the Telegram betting post for a match lives, so it
+// can be edited later — after each bet, and once more when the window closes.
+//
+// Held in the database rather than in memory because a restart during the
+// betting window would otherwise strand the post: bets keep landing, but the
+// numbers on it freeze and its buttons keep inviting taps long after the market
+// is closed.
+func (r *LobbyMatchPostgres) SaveBetPost(ctx context.Context, matchID int, chatID, messageID int64) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE lobby_matches SET tg_bet_chat_id = $1, tg_bet_message_id = $2 WHERE id = $3`,
+		chatID, messageID, matchID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to save bet post for match %d: %w", matchID, err)
+	}
+	return nil
+}
+
+// GetBetPost returns the Telegram chat and message of a match's betting post.
+//
+// A match with no post yet is not an error — Telegram may be unconfigured, or
+// the post may have failed to send — so it comes back as ok=false and the
+// caller simply skips the edit.
+func (r *LobbyMatchPostgres) GetBetPost(ctx context.Context, matchID int) (chatID, messageID int64, ok bool, err error) {
+	var chat, msg sql.NullInt64
+	err = r.db.QueryRowContext(ctx,
+		`SELECT tg_bet_chat_id, tg_bet_message_id FROM lobby_matches WHERE id = $1`,
+		matchID,
+	).Scan(&chat, &msg)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, 0, false, fmt.Errorf("match %d: %w", matchID, domain.ErrMatchNotFound)
+	}
+	if err != nil {
+		return 0, 0, false, fmt.Errorf("failed to read bet post for match %d: %w", matchID, err)
+	}
+	if !chat.Valid || !msg.Valid {
+		return 0, 0, false, nil
+	}
+	return chat.Int64, msg.Int64, true, nil
 }
 
 // GetByThreadID retrieves a lobby match by its Discord thread ID.

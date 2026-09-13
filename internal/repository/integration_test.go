@@ -160,15 +160,20 @@ func TestIntegrationBettingLifecycle(t *testing.T) {
 	lobby := NewLobbyMatchPostgres(db)
 	bets := NewBetPostgres(db)
 
-	winnerID, winnerTG := seedBettor(t, db, matchRepo, 100)
-	loserID, loserTG := seedBettor(t, db, matchRepo, 100)
+	// The bettors are deliberately not on the roster: staking on a match you
+	// are playing in is refused, so a test that seeds one of the players as the
+	// bettor is testing a bet that can no longer be placed.
+	rosterA, _ := seedBettor(t, db, matchRepo, 0)
+	rosterB, _ := seedBettor(t, db, matchRepo, 0)
+	_, winnerTG := seedBettor(t, db, matchRepo, 100)
+	_, loserTG := seedBettor(t, db, matchRepo, 100)
 
 	matchID, err := lobby.Create(ctx, models.CreateLobbyMatchRequest{
 		GuildID:    "itest",
-		CaptainAID: winnerID,
-		CaptainBID: loserID,
-		TeamAIDs:   []int{winnerID},
-		TeamBIDs:   []int{loserID},
+		CaptainAID: rosterA,
+		CaptainBID: rosterB,
+		TeamAIDs:   []int{rosterA},
+		TeamBIDs:   []int{rosterB},
 	})
 	if err != nil {
 		t.Fatalf("Create lobby match: %v", err)
@@ -295,12 +300,15 @@ func TestIntegrationCancelRefundsEveryStake(t *testing.T) {
 	lobby := NewLobbyMatchPostgres(db)
 	bets := NewBetPostgres(db)
 
-	aID, aTG := seedBettor(t, db, matchRepo, 100)
-	bID, bTG := seedBettor(t, db, matchRepo, 100)
+	// Bettors sit outside the roster — see TestIntegrationBettingLifecycle.
+	rosterA, _ := seedBettor(t, db, matchRepo, 0)
+	rosterB, _ := seedBettor(t, db, matchRepo, 0)
+	_, aTG := seedBettor(t, db, matchRepo, 100)
+	_, bTG := seedBettor(t, db, matchRepo, 100)
 
 	matchID, err := lobby.Create(ctx, models.CreateLobbyMatchRequest{
-		GuildID: "itest", CaptainAID: aID, CaptainBID: bID,
-		TeamAIDs: []int{aID}, TeamBIDs: []int{bID},
+		GuildID: "itest", CaptainAID: rosterA, CaptainBID: rosterB,
+		TeamAIDs: []int{rosterA}, TeamBIDs: []int{rosterB},
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -536,7 +544,7 @@ func TestIntegrationLobbyMatchReads(t *testing.T) {
 	})
 
 	t.Run("mmr batch and update", func(t *testing.T) {
-		if err := lobby.UpdatePlayerMMR(ctx, aID, 1234); err != nil {
+		if err := lobby.UpdatePlayerMMR(ctx, aID, 1234, matchID); err != nil {
 			t.Fatalf("UpdatePlayerMMR: %v", err)
 		}
 		mmrs, err := lobby.GetPlayerMMRsBatch(ctx, []int{aID, bID})
@@ -809,4 +817,412 @@ func TestIntegrationRegisterByNickname(t *testing.T) {
 			t.Error("case-insensitive lookup missed the profile")
 		}
 	})
+}
+
+func TestIntegrationBettingOnOwnMatchIsRefused(t *testing.T) {
+	// A participant backing the other side and then throwing the game is the
+	// whole of match fixing in one move, and the same people play and bet here.
+	db := testDB(t)
+	ctx := context.Background()
+	matchRepo := newMatchRepo(t, db)
+	lobby := NewLobbyMatchPostgres(db)
+	bets := NewBetPostgres(db)
+
+	playerID, playerTG := seedBettor(t, db, matchRepo, 100)
+	outsiderID, outsiderTG := seedBettor(t, db, matchRepo, 100)
+
+	matchID, err := lobby.Create(ctx, models.CreateLobbyMatchRequest{
+		GuildID: "itest", CaptainAID: playerID, CaptainBID: playerID,
+		TeamAIDs: []int{playerID}, TeamBIDs: []int{},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM lobby_matches WHERE id = $1`, matchID) })
+
+	if err := lobby.OpenBetting(ctx, matchID, time.Hour); err != nil {
+		t.Fatalf("OpenBetting: %v", err)
+	}
+
+	t.Run("a player in the match is refused", func(t *testing.T) {
+		err := bets.PlaceBet(ctx, models.PlaceBetRequest{
+			MatchID: matchID, TgUserID: playerTG, TeamChosen: domain.TeamB, Amount: 10,
+		})
+		if !errors.Is(err, domain.ErrBettingOnOwnMatch) {
+			t.Errorf("PlaceBet by a participant = %v, want ErrBettingOnOwnMatch", err)
+		}
+		// The refusal must not have moved anything.
+		points, err := bets.GetPlayerPoints(ctx, playerTG)
+		if err != nil {
+			t.Fatalf("GetPlayerPoints: %v", err)
+		}
+		if points != 100 {
+			t.Errorf("a refused bet changed the balance to %d, want 100", points)
+		}
+	})
+
+	t.Run("somebody outside the match may bet", func(t *testing.T) {
+		if err := bets.PlaceBet(ctx, models.PlaceBetRequest{
+			MatchID: matchID, TgUserID: outsiderTG, TeamChosen: domain.TeamA, Amount: 10,
+		}); err != nil {
+			t.Errorf("PlaceBet by a non-participant: %v", err)
+		}
+		_ = outsiderID
+	})
+}
+
+func TestIntegrationMMRHistory(t *testing.T) {
+	// current_mmr is one overwritten column, so before this a rating had no
+	// past: no "+18" in the profile, no graph, and no way to settle a dispute
+	// over a drop.
+	db := testDB(t)
+	ctx := context.Background()
+	matchRepo := newMatchRepo(t, db)
+	lobby := NewLobbyMatchPostgres(db)
+
+	playerID, err := matchRepo.EnsurePlayerExists(ctx, uniqueName(t, "mmr"))
+	if err != nil {
+		t.Fatalf("EnsurePlayerExists: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM players WHERE id = $1`, playerID) })
+
+	matchID, err := lobby.Create(ctx, models.CreateLobbyMatchRequest{
+		GuildID: "itest", CaptainAID: playerID, CaptainBID: playerID,
+		TeamAIDs: []int{playerID}, TeamBIDs: []int{},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM lobby_matches WHERE id = $1`, matchID) })
+
+	t.Run("a change is recorded with both endpoints", func(t *testing.T) {
+		if err := lobby.UpdatePlayerMMR(ctx, playerID, 1018, matchID); err != nil {
+			t.Fatalf("UpdatePlayerMMR: %v", err)
+		}
+		history, err := lobby.GetMMRHistory(ctx, playerID, 10)
+		if err != nil {
+			t.Fatalf("GetMMRHistory: %v", err)
+		}
+		if len(history) != 1 {
+			t.Fatalf("got %d history rows, want 1", len(history))
+		}
+		got := history[0]
+		if got.Before != 1000 || got.After != 1018 || got.Delta != 18 {
+			t.Errorf("change = (%d → %d, %+d), want (1000 → 1018, +18)", got.Before, got.After, got.Delta)
+		}
+		if got.MatchID != matchID {
+			t.Errorf("change is attached to match %d, want %d", got.MatchID, matchID)
+		}
+	})
+
+	t.Run("the rating itself moved", func(t *testing.T) {
+		mmrs, err := lobby.GetPlayerMMRsBatch(ctx, []int{playerID})
+		if err != nil {
+			t.Fatalf("GetPlayerMMRsBatch: %v", err)
+		}
+		if mmrs[playerID] != 1018 {
+			t.Errorf("current_mmr = %d, want 1018", mmrs[playerID])
+		}
+	})
+
+	t.Run("replaying a settlement does not double the history", func(t *testing.T) {
+		if err := lobby.UpdatePlayerMMR(ctx, playerID, 1018, matchID); err != nil {
+			t.Fatalf("UpdatePlayerMMR (replay): %v", err)
+		}
+		history, err := lobby.GetMMRHistory(ctx, playerID, 10)
+		if err != nil {
+			t.Fatalf("GetMMRHistory: %v", err)
+		}
+		if len(history) != 1 {
+			t.Errorf("a replay appended a second row: %d rows", len(history))
+		}
+	})
+
+	t.Run("a change with no match behind it is allowed", func(t *testing.T) {
+		// An admin correction or a season reset moves a rating without a match.
+		if err := lobby.UpdatePlayerMMR(ctx, playerID, 1000, 0); err != nil {
+			t.Fatalf("UpdatePlayerMMR without a match: %v", err)
+		}
+		history, err := lobby.GetMMRHistory(ctx, playerID, 10)
+		if err != nil {
+			t.Fatalf("GetMMRHistory: %v", err)
+		}
+		if len(history) != 2 {
+			t.Fatalf("got %d rows, want 2", len(history))
+		}
+		if history[0].Delta != -18 || history[0].MatchID != 0 {
+			t.Errorf("newest change = (%+d, match %d), want (-18, no match)", history[0].Delta, history[0].MatchID)
+		}
+	})
+}
+
+// The coefficients shown in Telegram are computed from BetPool, and the money
+// is moved by PayoutWinners. This pins the two together: whatever BetPool
+// reports must be the pool settlement actually distributes.
+func TestIntegrationBetPoolTracksTheLiveMarket(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	matchRepo := newMatchRepo(t, db)
+	lobby := NewLobbyMatchPostgres(db)
+	bets := NewBetPostgres(db)
+
+	// Bettors sit outside the roster — see TestIntegrationBettingLifecycle.
+	rosterA, _ := seedBettor(t, db, matchRepo, 0)
+	rosterB, _ := seedBettor(t, db, matchRepo, 0)
+	_, backerA := seedBettor(t, db, matchRepo, 100)
+	_, backerB := seedBettor(t, db, matchRepo, 100)
+
+	matchID, err := lobby.Create(ctx, models.CreateLobbyMatchRequest{
+		GuildID: "itest", CaptainAID: rosterA, CaptainBID: rosterB,
+		TeamAIDs: []int{rosterA}, TeamBIDs: []int{rosterB},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM lobby_matches WHERE id = $1`, matchID) })
+
+	t.Run("an untouched match has no market", func(t *testing.T) {
+		pool, err := bets.BetPool(ctx, matchID)
+		if err != nil {
+			t.Fatalf("BetPool: %v", err)
+		}
+		if pool.Total() != 0 || pool.Odds(domain.TeamA) != 0 {
+			t.Errorf("BetPool on a match with no bets = %+v, want empty", pool)
+		}
+	})
+
+	if err := lobby.OpenBetting(ctx, matchID, time.Hour); err != nil {
+		t.Fatalf("OpenBetting: %v", err)
+	}
+	for _, b := range []struct {
+		tg     int64
+		team   string
+		amount int
+	}{
+		{backerA, domain.TeamA, 40},
+		{backerB, domain.TeamB, 10},
+	} {
+		if err := bets.PlaceBet(ctx, models.PlaceBetRequest{
+			MatchID: matchID, TgUserID: b.tg, TeamChosen: b.team, Amount: b.amount,
+		}); err != nil {
+			t.Fatalf("PlaceBet %d on %s: %v", b.amount, b.team, err)
+		}
+	}
+
+	t.Run("sides are summed and counted separately", func(t *testing.T) {
+		pool, err := bets.BetPool(ctx, matchID)
+		if err != nil {
+			t.Fatalf("BetPool: %v", err)
+		}
+		if pool.AmountA != 40 || pool.CountA != 1 {
+			t.Errorf("Team A = %d over %d bets, want 40 over 1", pool.AmountA, pool.CountA)
+		}
+		if pool.AmountB != 10 || pool.CountB != 1 {
+			t.Errorf("Team B = %d over %d bets, want 10 over 1", pool.AmountB, pool.CountB)
+		}
+		if pool.Total() != 50 {
+			t.Errorf("Total() = %d, want 50", pool.Total())
+		}
+	})
+
+	t.Run("the quoted coefficient is the one that gets paid", func(t *testing.T) {
+		pool, err := bets.BetPool(ctx, matchID)
+		if err != nil {
+			t.Fatalf("BetPool: %v", err)
+		}
+		quoted := int(40 * pool.Odds(domain.TeamA))
+
+		payouts, err := bets.PayoutWinners(ctx, matchID, domain.TeamA)
+		if err != nil {
+			t.Fatalf("PayoutWinners: %v", err)
+		}
+		if payouts[backerA] != quoted {
+			t.Errorf("paid %d but the post advertised %d", payouts[backerA], quoted)
+		}
+	})
+
+	// closePost relies on this: a settled match must stop reporting a market, or
+	// the post would keep quoting odds on money that has already moved.
+	t.Run("settled bets leave the market", func(t *testing.T) {
+		pool, err := bets.BetPool(ctx, matchID)
+		if err != nil {
+			t.Fatalf("BetPool: %v", err)
+		}
+		if pool.Total() != 0 {
+			t.Errorf("BetPool after settlement = %+v, want empty", pool)
+		}
+	})
+}
+
+// The betting post is edited after every bet and closed out at settlement, which
+// can land after a restart — so where it lives has to outlive the process.
+func TestIntegrationBetPostReferenceSurvives(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	matchRepo := newMatchRepo(t, db)
+	lobby := NewLobbyMatchPostgres(db)
+
+	rosterA, _ := seedBettor(t, db, matchRepo, 0)
+	rosterB, _ := seedBettor(t, db, matchRepo, 0)
+
+	matchID, err := lobby.Create(ctx, models.CreateLobbyMatchRequest{
+		GuildID: "itest", CaptainAID: rosterA, CaptainBID: rosterB,
+		TeamAIDs: []int{rosterA}, TeamBIDs: []int{rosterB},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM lobby_matches WHERE id = $1`, matchID) })
+
+	t.Run("a match with no post is not an error", func(t *testing.T) {
+		_, _, ok, err := lobby.GetBetPost(ctx, matchID)
+		if err != nil {
+			t.Fatalf("GetBetPost before publishing: %v", err)
+		}
+		if ok {
+			t.Error("reported a post for a match that has none")
+		}
+	})
+
+	if err := lobby.SaveBetPost(ctx, matchID, -1001234567890, 4242); err != nil {
+		t.Fatalf("SaveBetPost: %v", err)
+	}
+
+	t.Run("the reference round-trips", func(t *testing.T) {
+		chatID, messageID, ok, err := lobby.GetBetPost(ctx, matchID)
+		if err != nil {
+			t.Fatalf("GetBetPost: %v", err)
+		}
+		if !ok {
+			t.Fatal("saved post not reported")
+		}
+		// Channel ids are negative and outside int32 — a narrower column would
+		// silently mangle them.
+		if chatID != -1001234567890 || messageID != 4242 {
+			t.Errorf("GetBetPost = (%d, %d), want (-1001234567890, 4242)", chatID, messageID)
+		}
+	})
+
+	t.Run("an unknown match is refused, not answered with zeros", func(t *testing.T) {
+		_, _, _, err := lobby.GetBetPost(ctx, -1)
+		if !errors.Is(err, domain.ErrMatchNotFound) {
+			t.Errorf("GetBetPost on a missing match = %v, want ErrMatchNotFound", err)
+		}
+	})
+}
+
+// Disbanding a team must leave nothing behind: the captain used to keep
+// is_captain = TRUE (and so kept receiving captain broadcasts), their FSM state
+// was left mid-registration, and the roster rows — which have no telegram_id —
+// were merely detached and then surfaced in the solo-players list.
+func TestIntegrationDisbandTeamCleansUpRoster(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	repo := NewTelegramPostgres(db)
+
+	captainTG := int64(930000000 + os.Getpid()%100000)
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DELETE FROM telegram_players WHERE telegram_id = $1`, captainTG)
+	})
+
+	team, err := repo.CreateTeam(ctx, uniqueName(t, "disband"))
+	if err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DELETE FROM telegram_players WHERE team_id = $1`, team.ID)
+		_, _ = db.Exec(`DELETE FROM telegram_teams WHERE id = $1`, team.ID)
+	})
+
+	if err := repo.CreateOrUpdatePlayer(ctx, &models.TelegramPlayer{TelegramID: &captainTG, TelegramUsername: "cap", FirstName: "Cap"}); err != nil {
+		t.Fatalf("CreateOrUpdatePlayer: %v", err)
+	}
+	for col, val := range map[string]interface{}{"team_id": team.ID, "is_captain": true, "fsm_state": "team_reg_nick_3", "main_role": "Mid"} {
+		if err := repo.UpdatePlayerField(ctx, captainTG, col, val); err != nil {
+			t.Fatalf("UpdatePlayerField(%s): %v", col, err)
+		}
+	}
+	mateNick := uniqueName(t, "mate")
+	for i := 0; i < 2; i++ {
+		if err := repo.CreateTeammate(ctx, &models.TelegramPlayer{TeamID: &team.ID, GameNickname: mateNick, MainRole: "Gold"}); err != nil {
+			t.Fatalf("CreateTeammate: %v", err)
+		}
+	}
+
+	if err := repo.ReleaseTeamMembers(ctx, team.ID); err != nil {
+		t.Fatalf("ReleaseTeamMembers: %v", err)
+	}
+	if err := repo.DeleteTeam(ctx, team.ID); err != nil {
+		t.Fatalf("DeleteTeam: %v", err)
+	}
+
+	cap, err := repo.GetPlayerByTelegramID(ctx, captainTG)
+	if err != nil || cap == nil {
+		t.Fatalf("GetPlayerByTelegramID = (%v, %v)", cap, err)
+	}
+	if cap.TeamID != nil || cap.IsCaptain || cap.FSMState != models.StateIdle {
+		t.Errorf("captain after disband: team=%v captain=%v state=%q, want detached/idle", cap.TeamID, cap.IsCaptain, cap.FSMState)
+	}
+
+	captains, err := repo.GetAllCaptains(ctx)
+	if err != nil {
+		t.Fatalf("GetAllCaptains: %v", err)
+	}
+	for _, c := range captains {
+		if c.TelegramID != nil && *c.TelegramID == captainTG {
+			t.Error("former captain still listed in the broadcast list")
+		}
+	}
+
+	solo, err := repo.GetSoloPlayers(ctx)
+	if err != nil {
+		t.Fatalf("GetSoloPlayers: %v", err)
+	}
+	for _, p := range solo {
+		if p.GameNickname == mateNick {
+			t.Error("orphaned roster row surfaced as a solo player")
+		}
+	}
+
+	var orphans int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM telegram_players WHERE game_nickname = $1`, mateNick).Scan(&orphans); err != nil {
+		t.Fatalf("count orphans: %v", err)
+	}
+	if orphans != 0 {
+		t.Errorf("%d roster rows without a telegram account survived the disband, want 0", orphans)
+	}
+}
+
+// Roster rows are now written in one insert from the parsed line; the old
+// insert stored only the nickname and relied on a chain of updates.
+func TestIntegrationCreateTeammateStoresEveryField(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	repo := NewTelegramPostgres(db)
+
+	team, err := repo.CreateTeam(ctx, uniqueName(t, "full"))
+	if err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DELETE FROM telegram_players WHERE team_id = $1`, team.ID)
+		_, _ = db.Exec(`DELETE FROM telegram_teams WHERE id = $1`, team.ID)
+	})
+
+	want := &models.TelegramPlayer{
+		TeamID: &team.ID, GameNickname: "Mate", GameID: "123456789", ZoneID: "1234",
+		Stars: 25, TelegramUsername: "@mate", IsSubstitute: true,
+	}
+	if err := repo.CreateTeammate(ctx, want); err != nil {
+		t.Fatalf("CreateTeammate: %v", err)
+	}
+	got, err := repo.GetTeamMembers(ctx, team.ID)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("GetTeamMembers = (%d rows, %v)", len(got), err)
+	}
+	g := got[0]
+	if g.GameNickname != want.GameNickname || g.GameID != want.GameID || g.ZoneID != want.ZoneID ||
+		g.Stars != want.Stars || g.TelegramUsername != want.TelegramUsername || !g.IsSubstitute {
+		t.Errorf("stored %+v, want %+v", g, *want)
+	}
 }
