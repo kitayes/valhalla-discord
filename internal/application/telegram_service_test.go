@@ -136,17 +136,6 @@ func (r *fakeTelegramRepo) CreateTeammate(_ context.Context, p *models.TelegramP
 	r.members = append(r.members, p)
 	return nil
 }
-func (r *fakeTelegramRepo) UpdateLastTeammateData(_ context.Context, teamID int, col string, v interface{}) error {
-	for i := len(r.members) - 1; i >= 0; i-- {
-		if *r.members[i].TeamID == teamID {
-			if col == "stars" {
-				r.members[i].Stars = v.(int)
-			}
-			return nil
-		}
-	}
-	return errors.New("no teammate")
-}
 func (r *fakeTelegramRepo) ReleaseTeamMembers(context.Context, int) error { return nil }
 func (r *fakeTelegramRepo) SetCheckIn(_ context.Context, id int, v bool) error {
 	r.teams[id].IsCheckedIn = v

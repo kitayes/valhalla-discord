@@ -226,26 +226,42 @@ func (r *TelegramPostgres) GetTeamMembers(ctx context.Context, teamID int) ([]mo
 	return players, nil
 }
 
+// CreateTeammate inserts a roster row entered by the captain. Such rows have
+// no telegram_id of their own; every other field comes from the parsed line.
 func (r *TelegramPostgres) CreateTeammate(ctx context.Context, p *models.TelegramPlayer) error {
 	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO telegram_players (team_id, game_nickname, is_substitute)
-		VALUES ($1, $2, $3)
-	`, p.TeamID, p.GameNickname, p.IsSubstitute)
+		INSERT INTO telegram_players
+			(team_id, game_nickname, game_id, zone_id, stars, main_role, telegram_username, is_substitute)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`, p.TeamID, p.GameNickname, p.GameID, p.ZoneID, p.Stars, p.MainRole, p.TelegramUsername, p.IsSubstitute)
 	return err
 }
 
-func (r *TelegramPostgres) UpdateLastTeammateData(ctx context.Context, teamID int, column string, value interface{}) error {
-	var playerID int
-	err := r.db.QueryRowContext(ctx, `SELECT id FROM telegram_players WHERE team_id = $1 ORDER BY id DESC LIMIT 1`, teamID).Scan(&playerID)
+// ReleaseTeamMembers detaches everyone from a team before it is deleted.
+//
+// Roster rows entered by the captain have no Telegram account of their own, so
+// once detached they would only ever show up as phantom "solo players" — they
+// are removed. The captain keeps their account row but loses the captain flag
+// (otherwise they stay on the broadcast list) and any half-finished
+// registration state.
+func (r *TelegramPostgres) ReleaseTeamMembers(ctx context.Context, teamID int) error {
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	return r.UpdatePlayerFieldByID(ctx, playerID, column, value)
-}
+	defer tx.Rollback() //nolint:errcheck // no-op after Commit
 
-func (r *TelegramPostgres) ResetTeamID(ctx context.Context, teamID int) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE telegram_players SET team_id = NULL WHERE team_id = $1`, teamID)
-	return err
+	if _, err := tx.ExecContext(ctx, `DELETE FROM telegram_players WHERE team_id = $1 AND telegram_id IS NULL`, teamID); err != nil {
+		return fmt.Errorf("delete roster rows: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE telegram_players
+		SET team_id = NULL, is_captain = FALSE, fsm_state = '', updated_at = NOW()
+		WHERE team_id = $1
+	`, teamID); err != nil {
+		return fmt.Errorf("detach captain: %w", err)
+	}
+	return tx.Commit()
 }
 
 func (r *TelegramPostgres) SetCheckIn(ctx context.Context, teamID int, status bool) error {
