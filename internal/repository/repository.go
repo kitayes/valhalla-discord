@@ -78,6 +78,7 @@ type Telegram interface {
 	// FindByGameID returns every row registered under this in-game id.
 	FindByGameID(ctx context.Context, gameID string) ([]models.TelegramPlayer, error)
 	SetCheckIn(ctx context.Context, teamID int, status bool) error
+	SetTeamStatus(ctx context.Context, teamID int, status string) error
 
 	GetAllCaptains(ctx context.Context) ([]models.TelegramPlayer, error)
 	GetSoloPlayers(ctx context.Context) ([]models.TelegramPlayer, error)

@@ -1259,3 +1259,43 @@ func TestIntegrationFindByGameID(t *testing.T) {
 		t.Errorf("unknown id = (%v, %v), want empty", none, err)
 	}
 }
+
+func TestIntegrationTeamStatusRoundTrip(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	repo := NewTelegramPostgres(db)
+
+	team, err := repo.CreateTeam(ctx, uniqueName(t, "status"))
+	if err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM telegram_teams WHERE id = $1`, team.ID) })
+
+	got, err := repo.GetTeamByID(ctx, team.ID)
+	if err != nil || got.Status != models.TeamStatusActive {
+		t.Fatalf("fresh team status = (%q, %v), want active", got.Status, err)
+	}
+	if err := repo.SetTeamStatus(ctx, team.ID, models.TeamStatusDisqualified); err != nil {
+		t.Fatalf("SetTeamStatus: %v", err)
+	}
+	byName, err := repo.GetTeamByName(ctx, team.Name)
+	if err != nil || byName.Status != models.TeamStatusDisqualified {
+		t.Errorf("GetTeamByName status = (%q, %v)", byName.Status, err)
+	}
+	all, err := repo.GetAllTeams(ctx)
+	if err != nil {
+		t.Fatalf("GetAllTeams: %v", err)
+	}
+	found := false
+	for _, tm := range all {
+		if tm.ID == team.ID {
+			found = true
+			if tm.Status != models.TeamStatusDisqualified {
+				t.Errorf("GetAllTeams status = %q", tm.Status)
+			}
+		}
+	}
+	if !found {
+		t.Error("team missing from GetAllTeams")
+	}
+}

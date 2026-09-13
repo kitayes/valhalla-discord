@@ -508,3 +508,52 @@ func TestDuplicateGameIDIgnoresSoloRows(t *testing.T) {
 		t.Errorf("state=%q, want the line accepted", p.FSMState)
 	}
 }
+
+// The technical-defeat sweep records who is out; a disqualified team cannot
+// check itself back in, only an admin can reinstate it.
+func TestTechnicalDefeatIsRecorded(t *testing.T) {
+	svc, repo := newTelegramSvc()
+	in, out := 10, 11
+	repo.teams[in] = &models.TelegramTeam{ID: in, Name: "In", IsCheckedIn: true}
+	repo.teams[out] = &models.TelegramTeam{ID: out, Name: "Out"}
+	repo.addPlayer(1, &out, true, models.StateIdle)
+
+	dq, err := svc.DisqualifyUnchecked(context.Background())
+	if err != nil || len(dq) != 1 || dq[0].Name != "Out" {
+		t.Fatalf("DisqualifyUnchecked = (%v, %v), want [Out]", dq, err)
+	}
+	if repo.teams[out].Status != models.TeamStatusDisqualified || repo.teams[in].Status == models.TeamStatusDisqualified {
+		t.Fatalf("statuses: out=%q in=%q", repo.teams[out].Status, repo.teams[in].Status)
+	}
+
+	// Running the sweep again does not report the same team twice.
+	if again, _ := svc.DisqualifyUnchecked(context.Background()); len(again) != 0 {
+		t.Errorf("second sweep reported %v", again)
+	}
+
+	if resp := svc.ToggleCheckIn(context.Background(), 1); !strings.Contains(resp, "снята") || repo.teams[out].IsCheckedIn {
+		t.Errorf("/checkin on a disqualified team: resp=%q checked=%v", resp, repo.teams[out].IsCheckedIn)
+	}
+	if resp, _ := act(t, svc, 1, "checkin", ""); !strings.Contains(resp, "снята") || repo.teams[out].IsCheckedIn {
+		t.Errorf("checkin button on a disqualified team: resp=%q", resp)
+	}
+
+	resp := svc.AdminReinstateTeam(context.Background(), "Out")
+	if !strings.Contains(resp, "Out") || repo.teams[out].Status != models.TeamStatusActive || !repo.teams[out].IsCheckedIn {
+		t.Errorf("reinstate: resp=%q status=%q checked=%v", resp, repo.teams[out].Status, repo.teams[out].IsCheckedIn)
+	}
+	if resp := svc.AdminReinstateTeam(context.Background(), "Nope"); !strings.Contains(resp, "не найдена") {
+		t.Errorf("reinstate unknown: %q", resp)
+	}
+}
+
+func TestTeamsListMarksDisqualified(t *testing.T) {
+	svc, repo := newTelegramSvc()
+	repo.teams[10] = &models.TelegramTeam{ID: 10, Name: "Out", Status: models.TeamStatusDisqualified}
+	repo.teams[11] = &models.TelegramTeam{ID: 11, Name: "In", IsCheckedIn: true}
+
+	list := svc.GetTeamsList(context.Background())
+	if !strings.Contains(list, "❌ Out") || !strings.Contains(list, "✅ In") {
+		t.Errorf("list = %q", list)
+	}
+}

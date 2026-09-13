@@ -48,6 +48,8 @@ type TelegramService interface {
 	SetTournamentTime(ctx context.Context, t time.Time)
 	GetTournamentTime(ctx context.Context) time.Time
 	GetUncheckedTeams(ctx context.Context) ([]models.TelegramTeam, error)
+	DisqualifyUnchecked(ctx context.Context) ([]models.TelegramTeam, error)
+	AdminReinstateTeam(ctx context.Context, name string) string
 
 	GetTeamsList(ctx context.Context) string
 	AdminGetTeamDetails(ctx context.Context, name string) string
@@ -181,6 +183,9 @@ func (s *TelegramServiceImpl) ToggleCheckIn(ctx context.Context, tgID int64) str
 	if err != nil || t == nil {
 		return "Команда не найдена."
 	}
+	if t.Status == models.TeamStatusDisqualified {
+		return fmt.Sprintf("Команда '%s' снята с турнира (тех. поражение). Вернуть её могут только организаторы.", t.Name)
+	}
 	checkedIn := !t.IsCheckedIn
 	if err := s.repo.SetCheckIn(ctx, t.ID, checkedIn); err != nil {
 		s.logWrite("SetCheckIn", err)
@@ -280,10 +285,10 @@ func (s *TelegramServiceImpl) GenerateTeamsCSV(ctx context.Context) ([]byte, err
 	}
 	b := &bytes.Buffer{}
 	w := csv.NewWriter(b)
-	_ = w.Write([]string{"Team", "CheckIn", "Nick", "ID", "Zone", "Role"})
+	_ = w.Write([]string{"Team", "Status", "CheckIn", "Nick", "ID", "Zone", "Role"})
 	for _, t := range teams {
 		for _, m := range t.Players {
-			_ = w.Write([]string{t.Name, strconv.FormatBool(t.IsCheckedIn), m.GameNickname, m.GameID, m.ZoneID, m.MainRole})
+			_ = w.Write([]string{t.Name, teamStatusLabel(t.Status), strconv.FormatBool(t.IsCheckedIn), m.GameNickname, m.GameID, m.ZoneID, m.MainRole})
 		}
 	}
 	w.Flush()
@@ -337,11 +342,44 @@ func (s *TelegramServiceImpl) GetUncheckedTeams(ctx context.Context) ([]models.T
 	}
 	var unchecked []models.TelegramTeam
 	for _, t := range allTeams {
-		if !t.IsCheckedIn {
+		if !t.IsCheckedIn && t.Status != models.TeamStatusDisqualified {
 			unchecked = append(unchecked, t)
 		}
 	}
 	return unchecked, nil
+}
+
+// DisqualifyUnchecked marks every active team that missed check-in and
+// returns them for the notifications. Already-disqualified teams are not
+// reported again, so a repeated sweep is quiet.
+func (s *TelegramServiceImpl) DisqualifyUnchecked(ctx context.Context) ([]models.TelegramTeam, error) {
+	teams, err := s.GetUncheckedTeams(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range teams {
+		s.logWrite("SetTeamStatus", s.repo.SetTeamStatus(ctx, t.ID, models.TeamStatusDisqualified))
+	}
+	return teams, nil
+}
+
+// AdminReinstateTeam undoes a technical defeat. The admin has verified the
+// team is present, so it comes back checked in.
+func (s *TelegramServiceImpl) AdminReinstateTeam(ctx context.Context, name string) string {
+	t, err := s.repo.GetTeamByName(ctx, name)
+	if err != nil || t == nil {
+		return fmt.Sprintf("Команда '%s' не найдена.", name)
+	}
+	s.logWrite("SetTeamStatus", s.repo.SetTeamStatus(ctx, t.ID, models.TeamStatusActive))
+	s.logWrite("SetCheckIn", s.repo.SetCheckIn(ctx, t.ID, true))
+	return fmt.Sprintf("Команда '%s' возвращена в турнир и отмечена как прошедшая check-in.", t.Name)
+}
+
+func teamStatusLabel(status string) string {
+	if status == models.TeamStatusDisqualified {
+		return "disqualified"
+	}
+	return "active"
 }
 
 func (s *TelegramServiceImpl) GetTeamsList(ctx context.Context) string {
@@ -357,7 +395,10 @@ func (s *TelegramServiceImpl) GetTeamsList(ctx context.Context) string {
 	sb.WriteString(fmt.Sprintf("Список команд (%d):\n\n", len(teams)))
 	for i, t := range teams {
 		check := "⚪"
-		if t.IsCheckedIn {
+		switch {
+		case t.Status == models.TeamStatusDisqualified:
+			check = "❌"
+		case t.IsCheckedIn:
 			check = "✅"
 		}
 		sb.WriteString(fmt.Sprintf("%d. %s %s\n", i+1, check, t.Name))
@@ -372,7 +413,10 @@ func (s *TelegramServiceImpl) AdminGetTeamDetails(ctx context.Context, name stri
 	}
 
 	status := "Не подтверждена"
-	if team.IsCheckedIn {
+	switch {
+	case team.Status == models.TeamStatusDisqualified:
+		status = "❌ Снята с турнира (тех. поражение) — вернуть: /reinstate " + team.Name
+	case team.IsCheckedIn:
 		status = "Подтверждена"
 	}
 

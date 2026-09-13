@@ -111,7 +111,12 @@ func (r *fakeTelegramRepo) GetTeamByID(_ context.Context, id int) (*models.Teleg
 	}
 	return nil, errors.New("no team")
 }
-func (r *fakeTelegramRepo) GetTeamByName(context.Context, string) (*models.TelegramTeam, error) {
+func (r *fakeTelegramRepo) GetTeamByName(_ context.Context, name string) (*models.TelegramTeam, error) {
+	for _, t := range r.teams {
+		if t.Name == name {
+			return t, nil
+		}
+	}
 	return nil, errors.New("no team")
 }
 func (r *fakeTelegramRepo) DeleteTeam(_ context.Context, id int) error {
@@ -119,7 +124,18 @@ func (r *fakeTelegramRepo) DeleteTeam(_ context.Context, id int) error {
 	return nil
 }
 func (r *fakeTelegramRepo) GetAllTeams(context.Context) ([]models.TelegramTeam, error) {
-	return nil, nil
+	var ids []int
+	for id := range r.teams {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	var out []models.TelegramTeam
+	for _, id := range ids {
+		t := *r.teams[id]
+		t.Players, _ = r.GetTeamMembers(context.Background(), id)
+		out = append(out, t)
+	}
+	return out, nil
 }
 func (r *fakeTelegramRepo) GetTeamMembers(_ context.Context, teamID int) ([]models.TelegramPlayer, error) {
 	var out []models.TelegramPlayer
@@ -137,6 +153,10 @@ func (r *fakeTelegramRepo) CreateTeammate(_ context.Context, p *models.TelegramP
 	return nil
 }
 func (r *fakeTelegramRepo) ReleaseTeamMembers(context.Context, int) error { return nil }
+func (r *fakeTelegramRepo) SetTeamStatus(_ context.Context, id int, st string) error {
+	r.teams[id].Status = st
+	return nil
+}
 func (r *fakeTelegramRepo) FindByGameID(_ context.Context, gameID string) ([]models.TelegramPlayer, error) {
 	var out []models.TelegramPlayer
 	for _, p := range r.allRows() {

@@ -283,7 +283,10 @@ func (s *TelegramServiceImpl) teamCard(ctx context.Context, captain *models.Tele
 	}
 	members := s.roster(ctx, team.ID)
 	status := "⚪ Check-in не пройден"
-	if team.IsCheckedIn {
+	switch {
+	case team.Status == models.TeamStatusDisqualified:
+		status = "❌ Снята с турнира (тех. поражение)"
+	case team.IsCheckedIn:
 		status = "✅ Check-in пройден"
 	}
 	add := ""
@@ -627,6 +630,9 @@ func (s *TelegramServiceImpl) confirmCheckIn(ctx context.Context, p *models.Tele
 	team, err := s.repo.GetTeamByID(ctx, *p.TeamID)
 	if err != nil || team == nil {
 		return "Команда не найдена.", KbNone
+	}
+	if team.Status == models.TeamStatusDisqualified {
+		return fmt.Sprintf("Команда '%s' снята с турнира (тех. поражение). Вернуть её могут только организаторы.", team.Name), KbNone
 	}
 	if !team.IsCheckedIn {
 		if err := s.repo.SetCheckIn(ctx, team.ID, true); err != nil {

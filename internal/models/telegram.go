@@ -19,10 +19,18 @@ const (
 	StateTeamEditRolePrefix = "team_editrole_"
 )
 
+// Team statuses. A disqualified team stays in the database so the list of
+// who is out is a query, not a chat message, and an admin can put it back.
+const (
+	TeamStatusActive       = "active"
+	TeamStatusDisqualified = "disqualified"
+)
+
 type TelegramTeam struct {
 	ID          int              `json:"id"`
 	Name        string           `json:"name"`
 	IsCheckedIn bool             `json:"is_checked_in"`
+	Status      string           `json:"status"`
 	Players     []TelegramPlayer `json:"players"`
 }
 

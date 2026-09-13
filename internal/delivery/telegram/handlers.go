@@ -21,6 +21,7 @@ func (b *Bot) handleAdminCommand(ctx context.Context, chatID int64, text string)
 			"/set_tourney [дата] - Установить время\n" +
 			"/close_reg / /open_reg - Регистрация\n" +
 			"/del_team [Название] - Удалить\n" +
+			"/reinstate [Название] - Вернуть после тех. поражения\n" +
 			"/reset_user [ID] - Сброс FSM"
 		b.sendMessage(chatID, response, "main_menu")
 		return
@@ -122,6 +123,12 @@ func (b *Bot) handleAdminCommand(ctx context.Context, chatID int64, text string)
 	if strings.HasPrefix(text, "/del_team ") {
 		name := strings.TrimPrefix(text, "/del_team ")
 		b.sendMessage(chatID, b.service.AdminDeleteTeam(ctx, name), "main_menu")
+		return
+	}
+
+	if strings.HasPrefix(text, "/reinstate ") {
+		name := strings.TrimPrefix(text, "/reinstate ")
+		b.sendMessage(chatID, b.service.AdminReinstateTeam(ctx, name), "main_menu")
 		return
 	}
 

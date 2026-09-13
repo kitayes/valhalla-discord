@@ -94,7 +94,7 @@ func (r *TelegramPostgres) CreateTeam(ctx context.Context, name string) (*models
 
 func (r *TelegramPostgres) GetTeamByID(ctx context.Context, id int) (*models.TelegramTeam, error) {
 	var t models.TelegramTeam
-	err := r.db.QueryRowContext(ctx, `SELECT id, name, is_checked_in FROM telegram_teams WHERE id = $1`, id).Scan(&t.ID, &t.Name, &t.IsCheckedIn)
+	err := r.db.QueryRowContext(ctx, `SELECT id, name, is_checked_in, status FROM telegram_teams WHERE id = $1`, id).Scan(&t.ID, &t.Name, &t.IsCheckedIn, &t.Status)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +103,7 @@ func (r *TelegramPostgres) GetTeamByID(ctx context.Context, id int) (*models.Tel
 
 func (r *TelegramPostgres) GetTeamByName(ctx context.Context, name string) (*models.TelegramTeam, error) {
 	var t models.TelegramTeam
-	err := r.db.QueryRowContext(ctx, `SELECT id, name, is_checked_in FROM telegram_teams WHERE name = $1`, name).Scan(&t.ID, &t.Name, &t.IsCheckedIn)
+	err := r.db.QueryRowContext(ctx, `SELECT id, name, is_checked_in, status FROM telegram_teams WHERE name = $1`, name).Scan(&t.ID, &t.Name, &t.IsCheckedIn, &t.Status)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +118,7 @@ func (r *TelegramPostgres) DeleteTeam(ctx context.Context, id int) error {
 
 func (r *TelegramPostgres) GetAllTeams(ctx context.Context) ([]models.TelegramTeam, error) {
 	query := `
-		SELECT t.id, t.name, t.is_checked_in,
+		SELECT t.id, t.name, t.is_checked_in, t.status,
 		       p.id, p.telegram_id, p.telegram_username, p.first_name, 
 		       p.game_nickname, p.game_id, p.zone_id, p.stars, p.main_role,
 		       p.is_captain, p.is_substitute, p.fsm_state, p.team_id
@@ -144,7 +144,7 @@ func (r *TelegramPostgres) GetAllTeams(ctx context.Context) ([]models.TelegramTe
 		var pIsCaptain, pIsSubstitute sql.NullBool
 
 		if err := rows.Scan(
-			&t.ID, &t.Name, &t.IsCheckedIn,
+			&t.ID, &t.Name, &t.IsCheckedIn, &t.Status,
 			&pID, &pTelegramID, &pUsername, &pFirstName,
 			&pNickname, &pGameID, &pZoneID, &pStars, &pRole,
 			&pIsCaptain, &pIsSubstitute, &pState, &pTeamID,
@@ -157,6 +157,7 @@ func (r *TelegramPostgres) GetAllTeams(ctx context.Context) ([]models.TelegramTe
 				ID:          t.ID,
 				Name:        t.Name,
 				IsCheckedIn: t.IsCheckedIn,
+				Status:      t.Status,
 				Players:     []models.TelegramPlayer{},
 			}
 			teamsOrder = append(teamsOrder, t.ID)
@@ -266,6 +267,11 @@ func (r *TelegramPostgres) ReleaseTeamMembers(ctx context.Context, teamID int) e
 
 func (r *TelegramPostgres) SetCheckIn(ctx context.Context, teamID int, status bool) error {
 	_, err := r.db.ExecContext(ctx, `UPDATE telegram_teams SET is_checked_in = $2, updated_at = NOW() WHERE id = $1`, teamID, status)
+	return err
+}
+
+func (r *TelegramPostgres) SetTeamStatus(ctx context.Context, teamID int, status string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE telegram_teams SET status = $2, updated_at = NOW() WHERE id = $1`, teamID, status)
 	return err
 }
 

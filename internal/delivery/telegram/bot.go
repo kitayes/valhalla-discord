@@ -152,7 +152,7 @@ func (b *Bot) handleUpdate(parent context.Context, msg *tgbotapi.Message) {
 		text == "/export" || text == "/list_solo" || text == "/export_solo" ||
 		strings.HasPrefix(text, "/broadcast") || strings.HasPrefix(text, "/set_tourney") ||
 		text == "/close_reg" || text == "/open_reg" || strings.HasPrefix(text, "/del_team") ||
-		strings.HasPrefix(text, "/reset_user")) {
+		strings.HasPrefix(text, "/reinstate") || strings.HasPrefix(text, "/reset_user")) {
 
 		b.handleAdminCommand(ctx, chatID, text)
 		return
@@ -283,7 +283,11 @@ func (b *Bot) broadcastCheckInReminder(ctx context.Context) {
 }
 
 func (b *Bot) processTechnicalDefeat(ctx context.Context) {
-	teams, _ := b.service.GetUncheckedTeams(ctx)
+	teams, err := b.service.DisqualifyUnchecked(ctx)
+	if err != nil {
+		b.logger.Error("telegram: technical-defeat sweep failed: %v", err)
+		return
+	}
 	if len(teams) == 0 {
 		return
 	}
