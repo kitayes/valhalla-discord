@@ -2,13 +2,21 @@ package models
 
 const (
 	StateIdle            = ""
-	StateWaitingNickname = "waiting_nickname"
-	StateWaitingGameID   = "waiting_game_id"
-	StateWaitingZoneID   = "waiting_zone_id"
-	StateWaitingStars    = "waiting_stars"
-	StateWaitingRole     = "waiting_role"
 	StateWaitingTeamName = "waiting_team_name"
 	StateWaitingReport   = "waiting_report"
+
+	StateSoloLine    = "solo_line"
+	StateSoloRole    = "solo_role"
+	StateSoloConfirm = "solo_confirm"
+
+	StateTeamConfirm = "team_confirm"
+	// Slot-bearing team states are "<prefix><slot>", e.g. "team_line_3".
+	StateTeamLinePrefix     = "team_line_"
+	StateTeamRolePrefix     = "team_role_"
+	StateTeamFixPrefix      = "team_fix_"
+	StateTeamFixRolePrefix  = "team_fixrole_"
+	StateTeamEditPrefix     = "team_edit_"
+	StateTeamEditRolePrefix = "team_editrole_"
 )
 
 type TelegramTeam struct {

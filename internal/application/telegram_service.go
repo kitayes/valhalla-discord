@@ -13,16 +13,20 @@ import (
 	"time"
 )
 
+const KbNone = "empty"
+
 const (
-	KbNone   = "empty"
-	KbCancel = "cancel"
-	KbRole   = "role"
-	KbSkip   = "skip"
+	// maxTeamNameLen mirrors telegram_teams.name VARCHAR(64).
+	maxTeamNameLen = 64
+	// Roster: slot 1 is the captain, 2–5 the main five, 6–7 optional substitutes.
+	firstSubstituteSlot = 6
+	maxTeamSlots        = 7
 )
 
 type TelegramService interface {
 	RegisterUser(ctx context.Context, tgID int64, username, firstName string) string
 	HandleUserInput(ctx context.Context, tgID int64, input string) (string, string)
+	HandleRegAction(ctx context.Context, tgID int64, action, arg string) (string, string)
 
 	StartSoloRegistration(ctx context.Context, tgID int64) (string, string)
 	StartTeamRegistration(ctx context.Context, tgID int64) (string, string)
@@ -30,7 +34,7 @@ type TelegramService interface {
 	StartReport(ctx context.Context, tgID int64) (string, string)
 
 	DeleteTeam(ctx context.Context, tgID int64) string
-	GetTeamInfo(ctx context.Context, tgID int64) string
+	GetTeamInfo(ctx context.Context, tgID int64) (string, string)
 	ToggleCheckIn(ctx context.Context, tgID int64) string
 
 	SetRegistrationOpen(ctx context.Context, isOpen bool)
@@ -86,230 +90,83 @@ func (s *TelegramServiceImpl) RegisterUser(ctx context.Context, tgID int64, user
 }
 
 func (s *TelegramServiceImpl) HandleUserInput(ctx context.Context, tgID int64, input string) (string, string) {
-	if input == "Отмена" || input == "/cancel" {
-		s.logWrite("UpdatePlayerState", s.repo.UpdatePlayerState(ctx, tgID, models.StateIdle))
-		return "Действие отменено. Возврат в меню.", KbNone
-	}
-
 	player, _ := s.repo.GetPlayerByTelegramID(ctx, tgID)
 	if player == nil {
 		return "Используйте /start для начала.", KbNone
 	}
 
-	if strings.HasPrefix(player.FSMState, "team_reg_") {
-		return s.handleTeamLoop(ctx, player, input)
-	}
-	if strings.HasPrefix(player.FSMState, "edit_player_") {
-		return s.handleEditLoop(ctx, player, input)
-	}
-
-	switch player.FSMState {
-	case models.StateWaitingNickname:
-		s.logWrite("UpdatePlayerField", s.repo.UpdatePlayerField(ctx, tgID, "game_nickname", input))
-		s.logWrite("UpdatePlayerState", s.repo.UpdatePlayerState(ctx, tgID, models.StateWaitingGameID))
-		return "Введите ваш Game ID (цифры):", KbCancel
-
-	case models.StateWaitingGameID:
-		s.logWrite("UpdatePlayerField", s.repo.UpdatePlayerField(ctx, tgID, "game_id", input))
-		s.logWrite("UpdatePlayerState", s.repo.UpdatePlayerState(ctx, tgID, models.StateWaitingZoneID))
-		return "Введите Zone ID (в скобках):", KbCancel
-
-	case models.StateWaitingZoneID:
-		s.logWrite("UpdatePlayerField", s.repo.UpdatePlayerField(ctx, tgID, "zone_id", input))
-		s.logWrite("UpdatePlayerState", s.repo.UpdatePlayerState(ctx, tgID, models.StateWaitingStars))
-		return "Сколько звезд (Rank) в этом сезоне?", KbCancel
-
-	case models.StateWaitingStars:
-		stars, _ := strconv.Atoi(input)
-		s.logWrite("UpdatePlayerField", s.repo.UpdatePlayerField(ctx, tgID, "stars", stars))
-		s.logWrite("UpdatePlayerState", s.repo.UpdatePlayerState(ctx, tgID, models.StateWaitingRole))
-		return "Выберите вашу роль:", KbRole
-
-	case models.StateWaitingRole:
-		s.logWrite("UpdatePlayerField", s.repo.UpdatePlayerField(ctx, tgID, "main_role", input))
-		s.logWrite("UpdatePlayerState", s.repo.UpdatePlayerState(ctx, tgID, models.StateIdle))
-		return "Соло-регистрация завершена!", KbNone
-
-	case models.StateWaitingTeamName:
-		team, err := s.repo.CreateTeam(ctx, input)
-		if err != nil {
-			return "Это имя занято, попробуйте другое:", KbCancel
+	if input == "Отмена" || input == "/cancel" {
+		if isRegistrationState(player.FSMState) {
+			return s.HandleRegAction(ctx, tgID, "cancel", "")
 		}
-		s.logWrite("UpdatePlayerField", s.repo.UpdatePlayerField(ctx, tgID, "team_id", team.ID))
-		s.logWrite("UpdatePlayerField", s.repo.UpdatePlayerField(ctx, tgID, "is_captain", true))
-		s.logWrite("UpdatePlayerState", s.repo.UpdatePlayerState(ctx, tgID, "team_reg_nick_1"))
-		return fmt.Sprintf("Команда '%s' создана!\n\n--- Игрок №1 (Капитан) ---\nВведите ваш Ник:", input), KbCancel
-
-	default:
-		return "Используйте меню для управления.", KbNone
-	}
-}
-
-func (s *TelegramServiceImpl) handleTeamLoop(ctx context.Context, captain *models.TelegramPlayer, input string) (string, string) {
-	parts := strings.Split(captain.FSMState, "_")
-	step := parts[2]
-	slot, _ := strconv.Atoi(parts[3])
-	teamID := *captain.TeamID
-	captainTgID := *captain.TelegramID
-	isCapSlot := slot == 1
-
-	if (input == "Пропустить" || input == "/skip") && slot >= 6 && step == "nick" {
-		if slot < 7 {
-			next := slot + 1
-			s.logWrite("UpdatePlayerState", s.repo.UpdatePlayerState(ctx, captainTgID, fmt.Sprintf("team_reg_nick_%d", next)))
-			return fmt.Sprintf("Игрок №%d пропущен.\n\n--- Игрок №%d (ЗАМЕНА) ---\nВведите Ник:", slot, next), KbSkip
-		} else {
-			s.logWrite("UpdatePlayerState", s.repo.UpdatePlayerState(ctx, captainTgID, models.StateIdle))
-			return "Регистрация завершена! Команда укомплектована.", KbNone
-		}
+		s.setState(ctx, tgID, models.StateIdle)
+		return "Действие отменено. Возврат в меню.", KbNone
 	}
 
-	switch step {
-	case "nick":
-		if isCapSlot {
-			s.logWrite("UpdatePlayerField", s.repo.UpdatePlayerField(ctx, captainTgID, "game_nickname", input))
-		} else {
-			newP := &models.TelegramPlayer{TeamID: &teamID, GameNickname: input, IsSubstitute: slot >= 6}
-			s.logWrite("CreateTeammate", s.repo.CreateTeammate(ctx, newP))
-		}
-		s.logWrite("UpdatePlayerState", s.repo.UpdatePlayerState(ctx, captainTgID, fmt.Sprintf("team_reg_id_%d", slot)))
-		return "Введите Game ID:", KbCancel
-
-	case "id":
-		if isCapSlot {
-			s.logWrite("UpdatePlayerField", s.repo.UpdatePlayerField(ctx, captainTgID, "game_id", input))
-		} else {
-			s.logWrite("UpdateLastTeammateData", s.repo.UpdateLastTeammateData(ctx, teamID, "game_id", input))
-		}
-		s.logWrite("UpdatePlayerState", s.repo.UpdatePlayerState(ctx, captainTgID, fmt.Sprintf("team_reg_zone_%d", slot)))
-		return "Введите Zone ID:", KbCancel
-
-	case "zone":
-		if isCapSlot {
-			s.logWrite("UpdatePlayerField", s.repo.UpdatePlayerField(ctx, captainTgID, "zone_id", input))
-		} else {
-			s.logWrite("UpdateLastTeammateData", s.repo.UpdateLastTeammateData(ctx, teamID, "zone_id", input))
-		}
-		s.logWrite("UpdatePlayerState", s.repo.UpdatePlayerState(ctx, captainTgID, fmt.Sprintf("team_reg_rank_%d", slot)))
-		return "Кол-во звезд (Rank):", KbCancel
-
-	case "rank":
-		stars, _ := strconv.Atoi(input)
-		if isCapSlot {
-			s.logWrite("UpdatePlayerField", s.repo.UpdatePlayerField(ctx, captainTgID, "stars", stars))
-		} else {
-			s.logWrite("UpdateLastTeammateData", s.repo.UpdateLastTeammateData(ctx, teamID, "stars", stars))
-		}
-		s.logWrite("UpdatePlayerState", s.repo.UpdatePlayerState(ctx, captainTgID, fmt.Sprintf("team_reg_role_%d", slot)))
-		return "Выберите роль:", KbRole
-
-	case "role":
-		if isCapSlot {
-			s.logWrite("UpdatePlayerField", s.repo.UpdatePlayerField(ctx, captainTgID, "main_role", input))
-		} else {
-			s.logWrite("UpdateLastTeammateData", s.repo.UpdateLastTeammateData(ctx, teamID, "main_role", input))
-		}
-		s.logWrite("UpdatePlayerState", s.repo.UpdatePlayerState(ctx, captainTgID, fmt.Sprintf("team_reg_contact_%d", slot)))
-		return "Telegram контакт (например @user или '-'):", KbCancel
-
-	case "contact":
-		if isCapSlot {
-			s.logWrite("UpdatePlayerField", s.repo.UpdatePlayerField(ctx, captainTgID, "telegram_username", input))
-		} else {
-			s.logWrite("UpdateLastTeammateData", s.repo.UpdateLastTeammateData(ctx, teamID, "telegram_username", input))
-		}
-
-		if slot < 7 {
-			next := slot + 1
-			s.logWrite("UpdatePlayerState", s.repo.UpdatePlayerState(ctx, captainTgID, fmt.Sprintf("team_reg_nick_%d", next)))
-			msg := fmt.Sprintf("Игрок %d готов.\n\n--- Игрок №%d ---\nВведите Ник:", slot, next)
-			if next >= 6 {
-				return msg, KbSkip
-			}
-			return msg, KbCancel
-		}
-
-		s.logWrite("UpdatePlayerState", s.repo.UpdatePlayerState(ctx, captainTgID, models.StateIdle))
-		return "Регистрация всей команды завершена!", KbNone
+	if isLegacyState(player.FSMState) {
+		s.setState(ctx, tgID, models.StateIdle)
+		return msgLegacyReset, KbNone
 	}
-
-	return "Ошибка.", KbNone
-}
-
-func (s *TelegramServiceImpl) handleEditLoop(ctx context.Context, captain *models.TelegramPlayer, input string) (string, string) {
-	parts := strings.Split(captain.FSMState, "_")
-	step := parts[2]
-	slot, _ := strconv.Atoi(parts[3])
-	members, _ := s.repo.GetTeamMembers(ctx, *captain.TeamID)
-	captainTgID := *captain.TelegramID
-
-	if slot > len(members) {
-		s.logWrite("UpdatePlayerState", s.repo.UpdatePlayerState(ctx, captainTgID, models.StateIdle))
-		return "Игрок не найден.", KbNone
+	if isRegistrationState(player.FSMState) {
+		return s.handleRegistrationText(ctx, player, input)
 	}
-	targetID := members[slot-1].ID
-
-	switch step {
-	case "nick":
-		s.logWrite("UpdatePlayerFieldByID", s.repo.UpdatePlayerFieldByID(ctx, targetID, "game_nickname", input))
-		s.logWrite("UpdatePlayerState", s.repo.UpdatePlayerState(ctx, captainTgID, fmt.Sprintf("edit_player_id_%d", slot)))
-		return "Ник изменен. Введите Game ID:", KbCancel
-	case "id":
-		s.logWrite("UpdatePlayerFieldByID", s.repo.UpdatePlayerFieldByID(ctx, targetID, "game_id", input))
-		s.logWrite("UpdatePlayerState", s.repo.UpdatePlayerState(ctx, captainTgID, fmt.Sprintf("edit_player_role_%d", slot)))
-		return "ID изменен. Выберите роль:", KbRole
-	case "role":
-		s.logWrite("UpdatePlayerFieldByID", s.repo.UpdatePlayerFieldByID(ctx, targetID, "main_role", input))
-		s.logWrite("UpdatePlayerState", s.repo.UpdatePlayerState(ctx, captainTgID, models.StateIdle))
-		return "Данные обновлены!", KbNone
-	}
-	return "Ошибка.", KbNone
+	return "Используйте меню для управления.", KbNone
 }
 
 func (s *TelegramServiceImpl) StartSoloRegistration(ctx context.Context, tgID int64) (string, string) {
 	if !s.IsRegistrationOpen(ctx) {
 		return "Регистрация закрыта.", KbNone
 	}
-	s.logWrite("UpdatePlayerState", s.repo.UpdatePlayerState(ctx, tgID, models.StateWaitingNickname))
-	return "Начинаем соло-регистрацию. Введите Ник:", KbCancel
+	if name := s.currentTeamName(ctx, tgID); name != "" {
+		return fmt.Sprintf("Вы уже в команде '%s'. Соло-регистрация недоступна, пока вы в команде (/delete_team).", name), KbNone
+	}
+	s.setState(ctx, tgID, models.StateSoloLine)
+	return soloLinePrompt, KbRegCancel
 }
 
 func (s *TelegramServiceImpl) StartTeamRegistration(ctx context.Context, tgID int64) (string, string) {
 	if !s.IsRegistrationOpen(ctx) {
 		return "Регистрация закрыта.", KbNone
 	}
-	s.logWrite("UpdatePlayerState", s.repo.UpdatePlayerState(ctx, tgID, models.StateWaitingTeamName))
-	return "Введите Название команды:", KbCancel
+	// A second /reg_team used to create a fresh team and repoint the captain,
+	// leaving the old roster orphaned.
+	if name := s.currentTeamName(ctx, tgID); name != "" {
+		return fmt.Sprintf("Вы уже в команде '%s'. Чтобы зарегистрировать новую, сначала удалите её: /delete_team", name), KbNone
+	}
+	s.setState(ctx, tgID, models.StateWaitingTeamName)
+	return "Введите Название команды:", KbRegCancel
 }
 
 func (s *TelegramServiceImpl) StartEditPlayer(ctx context.Context, tgID int64, slot int) (string, string) {
-	s.logWrite("UpdatePlayerState", s.repo.UpdatePlayerState(ctx, tgID, fmt.Sprintf("edit_player_nick_%d", slot)))
-	return fmt.Sprintf("Редактируем игрока %d. Введите новый Ник:", slot), KbCancel
+	p, _ := s.repo.GetPlayerByTelegramID(ctx, tgID)
+	if p == nil || p.TeamID == nil {
+		return "Вы не в команде.", KbNone
+	}
+	if !p.IsCaptain {
+		return "Только капитан может редактировать состав.", KbNone
+	}
+	if p.FSMState != models.StateIdle {
+		return "Сначала завершите текущее действие или нажмите Отмена.", KbNone
+	}
+	members := s.roster(ctx, *p.TeamID)
+	if slot < 1 || slot > len(members) {
+		return fmt.Sprintf("Игрок №%d не найден. В команде %d игрок(ов), см. /my_team", slot, len(members)), KbNone
+	}
+	// /edit_player N is the typed form of the ✏️ N button on the /my_team card.
+	return s.HandleRegAction(ctx, tgID, "fix", strconv.Itoa(slot))
 }
 
 func (s *TelegramServiceImpl) StartReport(ctx context.Context, tgID int64) (string, string) {
-	s.logWrite("UpdatePlayerState", s.repo.UpdatePlayerState(ctx, tgID, models.StateWaitingReport))
-	return "Отправьте скриншот результата матча:", KbCancel
+	s.setState(ctx, tgID, models.StateWaitingReport)
+	return "Отправьте скриншот результата матча:", KbRegCancel
 }
 
-func (s *TelegramServiceImpl) GetTeamInfo(ctx context.Context, tgID int64) string {
+func (s *TelegramServiceImpl) GetTeamInfo(ctx context.Context, tgID int64) (string, string) {
 	p, _ := s.repo.GetPlayerByTelegramID(ctx, tgID)
 	if p == nil || p.TeamID == nil {
-		return "Вы не в команде."
+		return "Вы не в команде.", KbNone
 	}
-	team, _ := s.repo.GetTeamByID(ctx, *p.TeamID)
-	members, _ := s.repo.GetTeamMembers(ctx, *p.TeamID)
-
-	status := "Не подтверждена"
-	if team.IsCheckedIn {
-		status = "Подтверждена"
-	}
-
-	res := fmt.Sprintf("Команда: %s\nСтатус: %s\n\n", team.Name, status)
-	for i, m := range members {
-		res += fmt.Sprintf("%d. %s (%s)\n   ID: %s (%s)\n\n", i+1, m.GameNickname, m.MainRole, m.GameID, m.ZoneID)
-	}
-	return res
+	return s.teamCard(ctx, p)
 }
 
 func (s *TelegramServiceImpl) ToggleCheckIn(ctx context.Context, tgID int64) string {
@@ -317,9 +174,21 @@ func (s *TelegramServiceImpl) ToggleCheckIn(ctx context.Context, tgID int64) str
 	if p == nil || p.TeamID == nil || !p.IsCaptain {
 		return "Только капитан может делать Check-in."
 	}
-	t, _ := s.repo.GetTeamByID(ctx, *p.TeamID)
-	s.logWrite("SetCheckIn", s.repo.SetCheckIn(ctx, t.ID, !t.IsCheckedIn))
-	return "Статус Check-in изменен."
+	t, err := s.repo.GetTeamByID(ctx, *p.TeamID)
+	if err != nil || t == nil {
+		return "Команда не найдена."
+	}
+	checkedIn := !t.IsCheckedIn
+	if err := s.repo.SetCheckIn(ctx, t.ID, checkedIn); err != nil {
+		s.logWrite("SetCheckIn", err)
+		return "Не удалось изменить статус. Попробуйте ещё раз."
+	}
+	// It is a toggle, so the reply must say which way it went: a captain who
+	// tapped twice used to un-check silently and collect a technical defeat.
+	if checkedIn {
+		return fmt.Sprintf("✅ Check-in подтверждён. Команда '%s' участвует в турнире.", t.Name)
+	}
+	return fmt.Sprintf("⚪ Check-in снят. Команда '%s' НЕ подтверждена — нажмите /checkin ещё раз, чтобы подтвердить.", t.Name)
 }
 
 func (s *TelegramServiceImpl) DeleteTeam(ctx context.Context, tgID int64) string {
@@ -328,7 +197,7 @@ func (s *TelegramServiceImpl) DeleteTeam(ctx context.Context, tgID int64) string
 		return "Только капитан может удалить команду."
 	}
 	id := *p.TeamID
-	s.logWrite("ResetTeamID", s.repo.ResetTeamID(ctx, id))
+	s.logWrite("ReleaseTeamMembers", s.repo.ReleaseTeamMembers(ctx, id))
 	s.logWrite("DeleteTeam", s.repo.DeleteTeam(ctx, id))
 	return "Команда удалена."
 }
@@ -351,7 +220,7 @@ func (s *TelegramServiceImpl) AdminDeleteTeam(ctx context.Context, name string) 
 	if err != nil {
 		return "Не найдена."
 	}
-	s.logWrite("ResetTeamID", s.repo.ResetTeamID(ctx, t.ID))
+	s.logWrite("ReleaseTeamMembers", s.repo.ReleaseTeamMembers(ctx, t.ID))
 	s.logWrite("DeleteTeam", s.repo.DeleteTeam(ctx, t.ID))
 	return "Удалена."
 }
@@ -530,4 +399,27 @@ func (s *TelegramServiceImpl) GetSoloPlayersList(ctx context.Context) string {
 		sb.WriteString(fmt.Sprintf("%d. %s (@%s) — %s\n", i+1, p.GameNickname, p.TelegramUsername, p.MainRole))
 	}
 	return sb.String()
+}
+
+// currentTeamName returns the name of the team the user belongs to, or "".
+func (s *TelegramServiceImpl) currentTeamName(ctx context.Context, tgID int64) string {
+	p, _ := s.repo.GetPlayerByTelegramID(ctx, tgID)
+	if p == nil || p.TeamID == nil {
+		return ""
+	}
+	t, err := s.repo.GetTeamByID(ctx, *p.TeamID)
+	if err != nil || t == nil {
+		return ""
+	}
+	return t.Name
+}
+
+// parseStars accepts a non-negative integer star count. Anything else used to
+// be stored as 0 without a word to the user.
+func parseStars(input string) (int, bool) {
+	n, err := strconv.Atoi(strings.TrimSpace(input))
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return n, true
 }
