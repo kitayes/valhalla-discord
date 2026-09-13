@@ -112,7 +112,7 @@ func fixRows(n int) [][]tgbotapi.InlineKeyboardButton {
 // action, and replies with a fresh message.
 func (b *Bot) handleRegCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 	action, arg, ok := parseRegCallback(cb.Data)
-	if !ok || cb.Message == nil {
+	if !ok || cb.Message == nil || !servesChat(cb.Message.Chat) {
 		b.apiRespond(cb, "Эта кнопка больше не действует.", true)
 		return
 	}

@@ -120,6 +120,9 @@ func (b *Bot) handleUpdate(parent context.Context, msg *tgbotapi.Message) {
 	ctx, cancel := context.WithTimeout(parent, updateTimeout)
 	defer cancel()
 
+	if !servesChat(msg.Chat) {
+		return
+	}
 	chatID := msg.Chat.ID
 	text := msg.Text
 	user := msg.From
@@ -161,6 +164,13 @@ func (b *Bot) safely(what string, fn func()) {
 		}
 	}()
 	fn()
+}
+
+// servesChat reports whether the bot talks in this chat at all. Players are
+// keyed by chat id, so a group would be registered as a player and answered
+// in front of everyone; the bot only works one-to-one.
+func servesChat(chat *tgbotapi.Chat) bool {
+	return chat != nil && chat.IsPrivate()
 }
 
 func (b *Bot) Stop() {
