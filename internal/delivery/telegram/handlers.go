@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -41,18 +40,13 @@ func (b *Bot) handleAdminCommand(ctx context.Context, chatID int64, text string)
 	}
 
 	if strings.HasPrefix(text, "/set_tourney ") {
-		layout := "02.01.2006 15:04"
-		dateStr := strings.TrimPrefix(text, "/set_tourney ")
-		t, err := time.ParseInLocation(layout, dateStr, time.Local)
+		t, summary, err := b.parseTournamentTime(strings.TrimPrefix(text, "/set_tourney "))
 		if err != nil {
-			b.sendMessage(chatID, "Ошибка! Формат: /set_tourney 20.05.2024 18:00", "main_menu")
-		} else {
-			b.service.SetTournamentTime(ctx, t)
-			b.sendMessage(chatID, fmt.Sprintf("Время турнира установлено: %s\nНапоминание в: %s\nТех. поражение в: %s",
-				t.Format(layout),
-				t.Add(-30*time.Minute).Format("15:04"),
-				t.Add(10*time.Minute).Format("15:04")), "main_menu")
+			b.sendMessage(chatID, "Ошибка! Формат: /set_tourney 20.05.2026 18:00", "main_menu")
+			return
 		}
+		b.service.SetTournamentTime(ctx, t)
+		b.sendMessage(chatID, summary, "main_menu")
 		return
 	}
 

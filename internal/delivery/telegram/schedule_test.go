@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -84,5 +85,32 @@ func TestStagesFireIndependently(t *testing.T) {
 	defeat := tournament.Add(technicalDefeatGrace)
 	if !b.shouldFire(tournament, defeat, defeat, &b.disqualifiedFor) {
 		t.Error("technical defeat sweep did not fire after the reminder")
+	}
+}
+
+// /set_tourney reads the date in the configured tournament zone and says which
+// zone it used, so an admin in Almaty and a server in UTC agree on 18:00.
+func TestParseTournamentTimeUsesConfiguredZone(t *testing.T) {
+	almaty, err := time.LoadLocation("Asia/Almaty")
+	if err != nil {
+		t.Skip("tzdata not available")
+	}
+	b := &Bot{location: almaty}
+
+	got, summary, err := b.parseTournamentTime("20.05.2026 18:00")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got.Location() != almaty || got.Hour() != 18 {
+		t.Errorf("parsed %v, want 18:00 in Asia/Almaty", got)
+	}
+	for _, want := range []string{"20.05.2026 18:00", "Asia/Almaty", "17:30", "18:10"} {
+		if !strings.Contains(summary, want) {
+			t.Errorf("summary %q lacks %q", summary, want)
+		}
+	}
+
+	if _, _, err := b.parseTournamentTime("завтра"); err == nil {
+		t.Error("garbage date was accepted")
 	}
 }

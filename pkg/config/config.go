@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"blackwatch/internal/domain"
 	"blackwatch/internal/repository"
@@ -43,6 +44,10 @@ type Config struct {
 	GuildID           string `env:"GUILD_ID" envDefault:""`
 	RefereeRoleID     string `env:"REFEREE_ROLE_ID" envDefault:""`
 	TelegramChannelID string `env:"TELEGRAM_CHANNEL_ID" envDefault:""`
+	// TournamentTZ is the IANA zone /set_tourney reads its date in and the
+	// check-in schedule is printed in ("Asia/Almaty"). Empty means the
+	// server's local zone, which on a UTC host is five hours off for everyone.
+	TournamentTZ string `env:"TOURNAMENT_TZ" envDefault:""`
 	// BetAmounts are the stake buttons drawn under a match's betting post.
 	// Sent to Telegram in ascending order with duplicates dropped; see
 	// StakeOptions.
@@ -199,8 +204,20 @@ func (c *Config) Validate() error {
 	if c.TelegramChannelID != "" && c.TelegramToken == "" {
 		errs = append(errs, errors.New("TELEGRAM_CHANNEL_ID is set but TELEGRAM_TOKEN is empty"))
 	}
+	if _, err := c.TournamentLocation(); err != nil {
+		errs = append(errs, fmt.Errorf("TOURNAMENT_TZ: %w", err))
+	}
 
 	return errors.Join(errs...)
+}
+
+// TournamentLocation resolves TOURNAMENT_TZ; empty falls back to the server's
+// local zone.
+func (c *Config) TournamentLocation() (*time.Location, error) {
+	if c.TournamentTZ == "" {
+		return time.Local, nil
+	}
+	return time.LoadLocation(c.TournamentTZ)
 }
 
 func ReadEnvConfig(cfg *Config) error {

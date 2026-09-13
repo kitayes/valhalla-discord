@@ -28,6 +28,9 @@ type Bot struct {
 	bettingBot         *BettingBot
 	logger             application.Logger
 	adminIDs           map[int64]struct{}
+	// location is the zone /set_tourney dates are read in and schedule times
+	// are printed in.
+	location *time.Location
 
 	// Tournament time each scheduled stage last fired for. Only touched by the
 	// single background worker goroutine.
@@ -35,7 +38,7 @@ type Bot struct {
 	disqualifiedFor time.Time
 }
 
-func NewBot(token string, adminIDs []int64, service application.TelegramService, profileLinkService application.ProfileLinkService, bettingService *application.BettingService, telegramChannelID string, bets BetSettings, logger application.Logger) (*Bot, error) {
+func NewBot(token string, adminIDs []int64, service application.TelegramService, profileLinkService application.ProfileLinkService, bettingService *application.BettingService, telegramChannelID string, bets BetSettings, location *time.Location, logger application.Logger) (*Bot, error) {
 	bot, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create telegram bot: %w", err)
@@ -48,12 +51,16 @@ func NewBot(token string, adminIDs []int64, service application.TelegramService,
 
 	logger.Info("Telegram bot authorized on account %s", bot.Self.UserName)
 
+	if location == nil {
+		location = time.Local
+	}
 	b := &Bot{
 		bot:                bot,
 		service:            service,
 		profileLinkService: profileLinkService,
 		logger:             logger,
 		adminIDs:           admins,
+		location:           location,
 	}
 
 	// Initialize betting extension
@@ -173,6 +180,24 @@ func servesChat(chat *tgbotapi.Chat) bool {
 	return chat != nil && chat.IsPrivate()
 }
 
+// tournamentLayout is how admins type the date: "20.05.2026 18:00".
+const tournamentLayout = "02.01.2006 15:04"
+
+// parseTournamentTime reads a /set_tourney date in the configured zone and
+// builds the confirmation line, zone included, so a mismatch between the
+// admin's clock and the server's is visible right there.
+func (b *Bot) parseTournamentTime(dateStr string) (time.Time, string, error) {
+	t, err := time.ParseInLocation(tournamentLayout, strings.TrimSpace(dateStr), b.location)
+	if err != nil {
+		return time.Time{}, "", err
+	}
+	summary := fmt.Sprintf("Время турнира: %s (%s)\nНапоминание капитанам: %s\nТех. поражение: %s",
+		t.Format(tournamentLayout), b.location,
+		t.Add(-checkInReminderLead).Format("15:04"),
+		t.Add(technicalDefeatGrace).Format("15:04"))
+	return t, summary, nil
+}
+
 func (b *Bot) Stop() {
 	b.bot.StopReceivingUpdates()
 }
@@ -249,7 +274,7 @@ func (b *Bot) broadcastCheckInReminder(ctx context.Context) {
 		for _, p := range team.Players {
 			if p.IsCaptain && p.TelegramID != nil {
 				msg := fmt.Sprintf("ВНИМАНИЕ, Капитан!\nВаша команда '%s' не прошла Check-in.\n\nУ вас есть время до %s, чтобы нажать /checkin, иначе — ТЕХНИЧЕСКОЕ ПОРАЖЕНИЕ.",
-					team.Name, tTime.Add(10*time.Minute).Format("15:04"))
+					team.Name, tTime.In(b.location).Add(technicalDefeatGrace).Format("15:04"))
 				b.sendMessage(*p.TelegramID, msg, "empty")
 			}
 		}

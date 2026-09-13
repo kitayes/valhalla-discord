@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // validConfig is the smallest configuration Validate accepts. Each test starts
@@ -161,5 +162,33 @@ func TestStakeOptionsAreSortedAndDeduplicated(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("StakeOptions() = %v, want %v", got, want)
 		}
+	}
+}
+
+// /set_tourney parses "18:00" in the tournament zone. Without one, a server in
+// UTC schedules the check-in reminder five hours off and nobody notices until
+// the tournament evening.
+func TestTournamentLocation(t *testing.T) {
+	c := validConfig()
+	c.TournamentTZ = "Asia/Almaty"
+	loc, err := c.TournamentLocation()
+	if err != nil || loc.String() != "Asia/Almaty" {
+		t.Fatalf("TournamentLocation() = (%v, %v), want Asia/Almaty", loc, err)
+	}
+	if err := c.Validate(); err != nil {
+		t.Errorf("Validate rejected a valid zone: %v", err)
+	}
+
+	c.TournamentTZ = ""
+	if loc, err := c.TournamentLocation(); err != nil || loc != time.Local {
+		t.Errorf("empty TOURNAMENT_TZ = (%v, %v), want time.Local", loc, err)
+	}
+
+	c.TournamentTZ = "Mars/Olympus"
+	if _, err := c.TournamentLocation(); err == nil {
+		t.Error("an unknown zone was accepted")
+	}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "TOURNAMENT_TZ") {
+		t.Errorf("Validate did not name TOURNAMENT_TZ: %v", err)
 	}
 }
