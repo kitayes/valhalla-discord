@@ -93,6 +93,12 @@ func regKeyboard(kbType string) (tgbotapi.InlineKeyboardMarkup, bool) {
 			tgbotapi.NewInlineKeyboardRow(regBtn("🗑 Да, удалить", "delete_yes"), regBtn("↩️ Нет", "delete_no")),
 		), true
 
+	case application.KbRegPrefill:
+		return tgbotapi.NewInlineKeyboardMarkup(
+			tgbotapi.NewInlineKeyboardRow(regBtn("✅ Взять", "prefill"), regBtn("✏️ Ввести заново", "retype")),
+			cancel,
+		), true
+
 	case application.KbRegSoloConfirm:
 		return tgbotapi.NewInlineKeyboardMarkup(
 			tgbotapi.NewInlineKeyboardRow(regBtn("✅ Подтвердить", "confirm"), regBtn("✏️ Исправить", "fix")),

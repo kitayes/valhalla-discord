@@ -3,6 +3,7 @@ package application
 import (
 	"blackwatch/internal/models"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -555,5 +556,84 @@ func TestTeamsListMarksDisqualified(t *testing.T) {
 	list := svc.GetTeamsList(context.Background())
 	if !strings.Contains(list, "❌ Out") || !strings.Contains(list, "✅ In") {
 		t.Errorf("list = %q", list)
+	}
+}
+
+type fakeProfiles struct{ byTG map[int64]*models.ProfileLink }
+
+func (f fakeProfiles) GetLinkByTelegramID(_ context.Context, tg int64) (*models.ProfileLink, error) {
+	if l, ok := f.byTG[tg]; ok {
+		return l, nil
+	}
+	return nil, errors.New("no link")
+}
+
+// A captain the bot already knows (previous tournament, or a linked Discord
+// profile) is offered their data instead of typing the line again. Typing a
+// line anyway still works.
+func TestPrefillOffersKnownCaptainData(t *testing.T) {
+	svc, repo := newTelegramSvc()
+	p := repo.addPlayer(1, nil, false, models.StateIdle)
+	p.GameNickname, p.GameID, p.ZoneID, p.Stars = "Cap", "123456789", "1234", 30
+
+	svc.StartTeamRegistration(context.Background(), 1)
+	resp, kb := drive(t, svc, 1, "Alpha")
+	if kb != KbRegPrefill || !strings.Contains(resp, "Cap") || p.FSMState != "team_line_1" {
+		t.Fatalf("after name: kb=%q resp=%q state=%q", kb, resp, p.FSMState)
+	}
+
+	resp, kb = act(t, svc, 1, "prefill", "")
+	if p.FSMState != "team_role_1" || kb != KbRegRoles || p.GameID != "123456789" || !strings.Contains(resp, "Cap") {
+		t.Fatalf("prefill: state=%q kb=%q id=%q resp=%q", p.FSMState, kb, p.GameID, resp)
+	}
+}
+
+func TestPrefillRetypeAndTypedLine(t *testing.T) {
+	svc, repo := newTelegramSvc()
+	p := repo.addPlayer(1, nil, false, models.StateIdle)
+	p.GameNickname, p.GameID, p.ZoneID = "Old", "111111111", "1111"
+
+	svc.StartTeamRegistration(context.Background(), 1)
+	drive(t, svc, 1, "Alpha")
+
+	_, kb := act(t, svc, 1, "retype", "")
+	if kb != KbRegCancel || p.FSMState != "team_line_1" {
+		t.Fatalf("retype: kb=%q state=%q", kb, p.FSMState)
+	}
+	drive(t, svc, 1, "New 222222222 2222 5")
+	if p.GameNickname != "New" || p.FSMState != "team_role_1" {
+		t.Errorf("typed line after offer: nick=%q state=%q", p.GameNickname, p.FSMState)
+	}
+}
+
+func TestPrefillFromDiscordProfileForSolo(t *testing.T) {
+	svc, repo := newTelegramSvc()
+	tg := int64(1)
+	repo.addPlayer(tg, nil, false, models.StateIdle)
+	svc.WithProfileLookup(fakeProfiles{byTG: map[int64]*models.ProfileLink{
+		tg: {GameNickname: "Linked", GameID: "555555555", ZoneID: "5555", Stars: 12},
+	}})
+
+	resp, kb := svc.StartSoloRegistration(context.Background(), tg)
+	if kb != KbRegPrefill || !strings.Contains(resp, "Linked") {
+		t.Fatalf("solo start: kb=%q resp=%q", kb, resp)
+	}
+	act(t, svc, tg, "prefill", "")
+	p := repo.players[tg]
+	if p.FSMState != models.StateSoloRole || p.GameID != "555555555" {
+		t.Errorf("after prefill: state=%q id=%q", p.FSMState, p.GameID)
+	}
+}
+
+func TestNoPrefillWhenNothingIsKnown(t *testing.T) {
+	svc, repo := newTelegramSvc()
+	repo.addPlayer(1, nil, false, models.StateIdle)
+
+	if _, kb := svc.StartSoloRegistration(context.Background(), 1); kb != KbRegCancel {
+		t.Errorf("solo start kb=%q, want plain line prompt", kb)
+	}
+	svc.StartTeamRegistration(context.Background(), 1)
+	if _, kb := drive(t, svc, 1, "Alpha"); kb != KbRegCancel {
+		t.Errorf("after name kb=%q, want plain line prompt", kb)
 	}
 }

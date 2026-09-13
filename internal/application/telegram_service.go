@@ -65,6 +65,21 @@ type TelegramServiceImpl struct {
 	logger         Logger
 	// now is swapped in tests to move the clock around the tournament date.
 	now func() time.Time
+	// profiles is optional: with it, a captain linked to a Discord profile is
+	// offered that profile's in-game data instead of typing it again.
+	profiles ProfileLookup
+}
+
+// ProfileLookup is the slice of the profile-link repository registration
+// needs: who is this Telegram account, in game?
+type ProfileLookup interface {
+	GetLinkByTelegramID(ctx context.Context, telegramID int64) (*models.ProfileLink, error)
+}
+
+// WithProfileLookup enables prefilling from linked Discord profiles.
+func (s *TelegramServiceImpl) WithProfileLookup(p ProfileLookup) *TelegramServiceImpl {
+	s.profiles = p
+	return s
 }
 
 func NewTelegramServiceImpl(repo repository.Telegram, logger Logger) *TelegramServiceImpl {
@@ -126,6 +141,9 @@ func (s *TelegramServiceImpl) StartSoloRegistration(ctx context.Context, tgID in
 		return fmt.Sprintf("Вы уже в команде '%s'. Соло-регистрация недоступна, пока вы в команде (/delete_team).", name), KbNone
 	}
 	s.setState(ctx, tgID, models.StateSoloLine)
+	if known, ok := s.knownProfile(ctx, tgID); ok {
+		return prefillPrompt(known), KbRegPrefill
+	}
 	return soloLinePrompt, KbRegCancel
 }
 

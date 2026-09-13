@@ -55,6 +55,7 @@ func TestRegKeyboards(t *testing.T) {
 		{application.KbRegCard + ":7:", []string{"reg:fix:1", "reg:fix:2", "reg:fix:3", "reg:fix:4", "reg:fix:5", "reg:fix:6", "reg:fix:7", "reg:delete"}},
 		{application.KbRegSoloConfirm, []string{"reg:confirm", "reg:fix"}},
 		{application.KbRegDeleteConfirm, []string{"reg:delete_yes", "reg:delete_no"}},
+		{application.KbRegPrefill, []string{"reg:prefill", "reg:retype", "reg:cancel"}},
 	}
 	for _, tc := range cases {
 		kb, ok := regKeyboard(tc.kbType)

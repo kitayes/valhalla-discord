@@ -19,6 +19,7 @@ const (
 	KbRegSoloConfirm   = "reg_solo_confirm"   // ✅, ✏️
 	KbRegCheckin       = "reg_checkin"        // ✅ Подтвердить участие (in the reminder)
 	KbRegDeleteConfirm = "reg_delete_confirm" // 🗑 Да, удалить / ↩️ Нет
+	KbRegPrefill       = "reg_prefill"        // ✅ Взять / ✏️ Ввести заново / ❌ Отмена
 )
 
 const playerLineFormat = "Формат: Ник GameID ZoneID Звёзды"
@@ -329,6 +330,9 @@ func (s *TelegramServiceImpl) handleRegistrationText(ctx context.Context, p *mod
 		s.logWrite("UpdatePlayerField", s.repo.UpdatePlayerField(ctx, tg, "team_id", team.ID))
 		s.logWrite("UpdatePlayerField", s.repo.UpdatePlayerField(ctx, tg, "is_captain", true))
 		s.setState(ctx, tg, models.StateTeamLinePrefix+"1")
+		if known, ok := s.knownProfile(ctx, tg); ok {
+			return fmt.Sprintf("Команда '%s' создана.\n%s", name, prefillPrompt(known)), KbRegPrefill
+		}
 		msg, kb := linePrompt(1, true)
 		return fmt.Sprintf("Команда '%s' создана.\n%s", name, msg), kb
 
@@ -421,6 +425,8 @@ func (s *TelegramServiceImpl) HandleRegAction(ctx context.Context, tgID int64, a
 		return s.handleDelete(ctx, p, action)
 	case "redo":
 		return s.redoLine(ctx, p)
+	case "prefill", "retype":
+		return s.handlePrefill(ctx, p, action)
 	}
 
 	// Solo.
@@ -492,6 +498,61 @@ func (s *TelegramServiceImpl) HandleRegAction(ctx context.Context, tgID int64, a
 		return s.afterSlot(ctx, p, slot, fmt.Sprintf("✅ Игрок %d: %s\n", slot, s.slotSummary(ctx, p, slot)))
 	}
 	return msgStaleButton, KbNone
+}
+
+// knownProfile returns in-game data the bot already has for this account:
+// its own row from an earlier registration, else the linked Discord profile.
+func (s *TelegramServiceImpl) knownProfile(ctx context.Context, tgID int64) (playerLine, bool) {
+	if p, _ := s.repo.GetPlayerByTelegramID(ctx, tgID); p != nil && p.GameNickname != "" && p.GameID != "" && p.ZoneID != "" {
+		return playerLine{Nick: p.GameNickname, GameID: p.GameID, ZoneID: p.ZoneID, Stars: p.Stars}, true
+	}
+	if s.profiles == nil {
+		return playerLine{}, false
+	}
+	link, err := s.profiles.GetLinkByTelegramID(ctx, tgID)
+	if err != nil || link == nil || link.GameNickname == "" || link.GameID == "" || link.ZoneID == "" {
+		return playerLine{}, false
+	}
+	return playerLine{Nick: link.GameNickname, GameID: link.GameID, ZoneID: link.ZoneID, Stars: link.Stars}, true
+}
+
+func prefillPrompt(line playerLine) string {
+	return fmt.Sprintf("Взять ваши данные из профиля?\n%s · %s (%s) · %d⭐", line.Nick, line.GameID, line.ZoneID, line.Stars)
+}
+
+// handlePrefill answers the offer made by knownProfile. Only the first slot
+// and solo registration make it; anywhere else the button is stale.
+func (s *TelegramServiceImpl) handlePrefill(ctx context.Context, p *models.TelegramPlayer, action string) (string, string) {
+	tgID := *p.TelegramID
+	isSolo := p.FSMState == models.StateSoloLine
+	isCaptain := p.FSMState == models.StateTeamLinePrefix+"1" && p.TeamID != nil
+	if !isSolo && !isCaptain {
+		return msgStaleButton, KbNone
+	}
+	if action == "retype" {
+		if isSolo {
+			return soloLinePrompt, KbRegCancel
+		}
+		return linePrompt(1, true)
+	}
+	line, ok := s.knownProfile(ctx, tgID)
+	if !ok {
+		return msgStaleButton, KbNone
+	}
+	if problem := s.duplicateGameID(ctx, line.GameID, p.ID); problem != "" {
+		return problem, KbRegCancel
+	}
+	if isSolo {
+		s.logWrite("UpdatePlayerField", s.repo.UpdatePlayerField(ctx, tgID, "game_nickname", line.Nick))
+		s.logWrite("UpdatePlayerField", s.repo.UpdatePlayerField(ctx, tgID, "game_id", line.GameID))
+		s.logWrite("UpdatePlayerField", s.repo.UpdatePlayerField(ctx, tgID, "zone_id", line.ZoneID))
+		s.logWrite("UpdatePlayerField", s.repo.UpdatePlayerField(ctx, tgID, "stars", line.Stars))
+		s.setState(ctx, tgID, models.StateSoloRole)
+		return rolePrompt(line), KbRegRoles
+	}
+	s.saveLine(ctx, p, 1, line)
+	s.setState(ctx, tgID, models.StateTeamRolePrefix+"1")
+	return rolePrompt(line), KbRegRoles
 }
 
 // redoLine is the "fix the line" button on the role step: back to the line
