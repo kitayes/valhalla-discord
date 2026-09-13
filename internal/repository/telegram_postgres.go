@@ -337,3 +337,29 @@ func (r *TelegramPostgres) SetSetting(ctx context.Context, key, value string) er
 	`, key, value)
 	return err
 }
+
+func (r *TelegramPostgres) FindByGameID(ctx context.Context, gameID string) ([]models.TelegramPlayer, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, telegram_id, telegram_username, first_name, game_nickname, game_id, zone_id,
+			   stars, main_role, is_captain, is_substitute, fsm_state, team_id
+		FROM telegram_players WHERE game_id = $1 ORDER BY id
+	`, gameID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck // best-effort cleanup
+
+	var players []models.TelegramPlayer
+	for rows.Next() {
+		var p models.TelegramPlayer
+		if err := rows.Scan(&p.ID, &p.TelegramID, &p.TelegramUsername, &p.FirstName, &p.GameNickname, &p.GameID, &p.ZoneID,
+			&p.Stars, &p.MainRole, &p.IsCaptain, &p.IsSubstitute, &p.FSMState, &p.TeamID); err != nil {
+			return nil, fmt.Errorf("scan error: %w", err)
+		}
+		players = append(players, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read players: %w", err)
+	}
+	return players, nil
+}

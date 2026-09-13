@@ -75,6 +75,8 @@ type Telegram interface {
 	GetTeamMembers(ctx context.Context, teamID int) ([]models.TelegramPlayer, error)
 	CreateTeammate(ctx context.Context, p *models.TelegramPlayer) error
 	ReleaseTeamMembers(ctx context.Context, teamID int) error
+	// FindByGameID returns every row registered under this in-game id.
+	FindByGameID(ctx context.Context, gameID string) ([]models.TelegramPlayer, error)
 	SetCheckIn(ctx context.Context, teamID int, status bool) error
 
 	GetAllCaptains(ctx context.Context) ([]models.TelegramPlayer, error)

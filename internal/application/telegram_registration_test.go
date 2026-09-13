@@ -3,6 +3,7 @@ package application
 import (
 	"blackwatch/internal/models"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -48,7 +49,7 @@ func TestTeamRegistrationHappyPath(t *testing.T) {
 	}
 
 	for slot := 2; slot <= 5; slot++ {
-		drive(t, svc, 1, "P 222222222 2222 10 @p")
+		drive(t, svc, 1, fmt.Sprintf("P 22222222%d 2222 10 @p", slot))
 		act(t, svc, 1, "role", "Gold")
 	}
 	if p.FSMState != "team_line_6" || len(repo.members) != 4 {
@@ -464,5 +465,46 @@ func TestRedoKeepsFixAndEditFlows(t *testing.T) {
 	act(t, svc, 1, "redo", "")
 	if p.FSMState != models.StateSoloLine {
 		t.Errorf("solo redo → %q, want solo_line", p.FSMState)
+	}
+}
+
+// One person cannot be on two rosters. The same id re-entered for the same
+// slot (a fix) is not a duplicate.
+func TestDuplicateGameIDIsRefused(t *testing.T) {
+	svc, repo := newTelegramSvc()
+	other, mine := 10, 11
+	repo.teams[other] = &models.TelegramTeam{ID: other, Name: "Bravo"}
+	repo.teams[mine] = &models.TelegramTeam{ID: mine, Name: "Alpha"}
+	_ = repo.CreateTeammate(context.Background(), &models.TelegramPlayer{TeamID: &other, GameNickname: "Taken", GameID: "123456789"})
+	p := repo.addPlayer(1, &mine, true, "team_line_2")
+
+	resp, _ := drive(t, svc, 1, "Vasya 123456789 1234 25")
+	if p.FSMState != "team_line_2" || !strings.Contains(resp, "Bravo") {
+		t.Fatalf("state=%q resp=%q, want refusal naming Bravo", p.FSMState, resp)
+	}
+
+	drive(t, svc, 1, "Vasya 987654321 1234 25")
+	act(t, svc, 1, "role", "Gold")
+	// Fixing slot 2 with its own id again is fine.
+	p.FSMState = "team_fix_2"
+	drive(t, svc, 1, "Vasya 987654321 1234 26")
+	if p.FSMState != "team_fixrole_2" {
+		t.Errorf("re-entering own id: state=%q", p.FSMState)
+	}
+}
+
+// A solo registration with the same id is not a conflict — people sign up
+// solo first and join a team later.
+func TestDuplicateGameIDIgnoresSoloRows(t *testing.T) {
+	svc, repo := newTelegramSvc()
+	mine := 11
+	repo.teams[mine] = &models.TelegramTeam{ID: mine, Name: "Alpha"}
+	solo := repo.addPlayer(2, nil, false, models.StateIdle)
+	solo.GameID = "123456789"
+	p := repo.addPlayer(1, &mine, true, "team_line_2")
+
+	drive(t, svc, 1, "Vasya 123456789 1234 25")
+	if p.FSMState != "team_role_2" {
+		t.Errorf("state=%q, want the line accepted", p.FSMState)
 	}
 }

@@ -1226,3 +1226,36 @@ func TestIntegrationCreateTeammateStoresEveryField(t *testing.T) {
 		t.Errorf("stored %+v, want %+v", g, *want)
 	}
 }
+
+func TestIntegrationFindByGameID(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	repo := NewTelegramPostgres(db)
+
+	team, err := repo.CreateTeam(ctx, uniqueName(t, "dup"))
+	if err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DELETE FROM telegram_players WHERE team_id = $1`, team.ID)
+		_, _ = db.Exec(`DELETE FROM telegram_teams WHERE id = $1`, team.ID)
+	})
+	gameID := uniqueName(t, "9")[:12]
+	if err := repo.CreateTeammate(ctx, &models.TelegramPlayer{TeamID: &team.ID, GameNickname: "A", GameID: gameID}); err != nil {
+		t.Fatalf("CreateTeammate: %v", err)
+	}
+	if err := repo.CreateTeammate(ctx, &models.TelegramPlayer{TeamID: &team.ID, GameNickname: "B", GameID: gameID + "x"}); err != nil {
+		t.Fatalf("CreateTeammate: %v", err)
+	}
+
+	got, err := repo.FindByGameID(ctx, gameID)
+	if err != nil {
+		t.Fatalf("FindByGameID: %v", err)
+	}
+	if len(got) != 1 || got[0].GameNickname != "A" || got[0].TeamID == nil || *got[0].TeamID != team.ID {
+		t.Errorf("FindByGameID = %+v, want exactly the row A in team %d", got, team.ID)
+	}
+	if none, err := repo.FindByGameID(ctx, "no-such-id"); err != nil || len(none) != 0 {
+		t.Errorf("unknown id = (%v, %v), want empty", none, err)
+	}
+}

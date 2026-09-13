@@ -137,6 +137,15 @@ func (r *fakeTelegramRepo) CreateTeammate(_ context.Context, p *models.TelegramP
 	return nil
 }
 func (r *fakeTelegramRepo) ReleaseTeamMembers(context.Context, int) error { return nil }
+func (r *fakeTelegramRepo) FindByGameID(_ context.Context, gameID string) ([]models.TelegramPlayer, error) {
+	var out []models.TelegramPlayer
+	for _, p := range r.allRows() {
+		if p.GameID == gameID {
+			out = append(out, *p)
+		}
+	}
+	return out, nil
+}
 func (r *fakeTelegramRepo) SetCheckIn(_ context.Context, id int, v bool) error {
 	r.teams[id].IsCheckedIn = v
 	return nil

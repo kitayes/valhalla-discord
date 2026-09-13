@@ -149,6 +149,42 @@ func (s *TelegramServiceImpl) roster(ctx context.Context, teamID int) []models.T
 	return members
 }
 
+// slotRowID is the id of the row slot N currently maps to, or 0 for a slot
+// that has no row yet.
+func (s *TelegramServiceImpl) slotRowID(ctx context.Context, captain *models.TelegramPlayer, slot int) int {
+	if slot == 1 {
+		return captain.ID
+	}
+	members := s.roster(ctx, *captain.TeamID)
+	if slot <= len(members) {
+		return members[slot-1].ID
+	}
+	return 0
+}
+
+// duplicateGameID refuses an in-game id that is already on another team's
+// roster. Solo rows are not a conflict: people sign up solo first and join
+// a team later. excludeID is the row being (re)written, so fixing a slot
+// with its own id passes.
+func (s *TelegramServiceImpl) duplicateGameID(ctx context.Context, gameID string, excludeID int) string {
+	rows, err := s.repo.FindByGameID(ctx, gameID)
+	if err != nil {
+		s.logger.Error("telegram: FindByGameID failed: %v", err)
+		return ""
+	}
+	for _, r := range rows {
+		if r.ID == excludeID || r.TeamID == nil {
+			continue
+		}
+		team, err := s.repo.GetTeamByID(ctx, *r.TeamID)
+		if err != nil || team == nil {
+			continue
+		}
+		return fmt.Sprintf("GameID %s уже заявлен в команде '%s' (%s). Один игрок — одна команда.", gameID, team.Name, r.GameNickname)
+	}
+	return ""
+}
+
 // saveLine writes a parsed line into slot N: the captain's own row for slot
 // 1, an existing roster row when the slot is taken, a new row otherwise.
 func (s *TelegramServiceImpl) saveLine(ctx context.Context, captain *models.TelegramPlayer, slot int, line playerLine) {
@@ -295,6 +331,9 @@ func (s *TelegramServiceImpl) handleRegistrationText(ctx context.Context, p *mod
 
 	case models.StateSoloLine:
 		line, problem := parsePlayerLine(input)
+		if problem == "" {
+			problem = s.duplicateGameID(ctx, line.GameID, p.ID)
+		}
 		if problem != "" {
 			return problem + "\n" + playerLineFormat, KbRegCancel
 		}
@@ -334,6 +373,9 @@ func (s *TelegramServiceImpl) handleRegistrationText(ctx context.Context, p *mod
 	switch prefix {
 	case models.StateTeamLinePrefix, models.StateTeamFixPrefix, models.StateTeamEditPrefix:
 		line, problem := parsePlayerLine(input)
+		if problem == "" {
+			problem = s.duplicateGameID(ctx, line.GameID, s.slotRowID(ctx, p, slot))
+		}
 		if problem != "" {
 			_, kb := linePrompt(slot, prefix == models.StateTeamLinePrefix)
 			return problem + "\n" + playerLineFormat, kb
