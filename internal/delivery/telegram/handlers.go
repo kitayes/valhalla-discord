@@ -185,8 +185,7 @@ func (b *Bot) handleUserCommand(ctx context.Context, chatID int64, text string, 
 	case "/reg_team":
 		response, kbType = b.service.StartTeamRegistration(ctx, chatID)
 	case "/my_team":
-		response = b.service.GetTeamInfo(ctx, chatID)
-		kbType = "empty"
+		response, kbType = b.service.GetTeamInfo(ctx, chatID)
 	case "/checkin":
 		response = b.service.ToggleCheckIn(ctx, chatID)
 		kbType = "empty"

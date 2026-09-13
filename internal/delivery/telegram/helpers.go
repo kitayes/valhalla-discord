@@ -38,41 +38,15 @@ func (b *Bot) trySendMessage(chatID int64, text string, kbType string) error {
 	}
 	msg := tgbotapi.NewMessage(chatID, text)
 
+	// Registration controls are inline buttons under the message; the reply
+	// keyboard at the bottom is reserved for the main menu.
+	if kb, ok := regKeyboard(kbType); ok {
+		msg.ReplyMarkup = kb
+		_, err := b.bot.Send(msg)
+		return err
+	}
+
 	switch kbType {
-	case "skip":
-		msg.ReplyMarkup = tgbotapi.NewReplyKeyboard(
-			tgbotapi.NewKeyboardButtonRow(
-				tgbotapi.NewKeyboardButton("Пропустить"),
-			),
-			tgbotapi.NewKeyboardButtonRow(
-				tgbotapi.NewKeyboardButton("Отмена"),
-			),
-		)
-	case "role":
-		msg.ReplyMarkup = tgbotapi.NewReplyKeyboard(
-			tgbotapi.NewKeyboardButtonRow(
-				tgbotapi.NewKeyboardButton("Gold"),
-				tgbotapi.NewKeyboardButton("Exp"),
-				tgbotapi.NewKeyboardButton("Mid"),
-			),
-			tgbotapi.NewKeyboardButtonRow(
-				tgbotapi.NewKeyboardButton("Roam"),
-				tgbotapi.NewKeyboardButton("Jungle"),
-			),
-			tgbotapi.NewKeyboardButtonRow(
-				tgbotapi.NewKeyboardButton("Замена"),
-				tgbotapi.NewKeyboardButton("Любая"),
-			),
-			tgbotapi.NewKeyboardButtonRow(
-				tgbotapi.NewKeyboardButton("Отмена"),
-			),
-		)
-	case "cancel":
-		msg.ReplyMarkup = tgbotapi.NewReplyKeyboard(
-			tgbotapi.NewKeyboardButtonRow(
-				tgbotapi.NewKeyboardButton("Отмена"),
-			),
-		)
 	case "main_menu":
 		rows := [][]tgbotapi.KeyboardButton{
 			tgbotapi.NewKeyboardButtonRow(
