@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,6 +50,14 @@ type Config struct {
 	// check-in schedule is printed in ("Asia/Almaty"). Empty means the
 	// server's local zone, which on a UTC host is five hours off for everyone.
 	TournamentTZ string `env:"TOURNAMENT_TZ" envDefault:""`
+	// ChallongeAPIKey turns the tournament bracket on. Empty means no bracket:
+	// /report keeps its free-form opponent picker and nothing calls Challonge.
+	ChallongeAPIKey string `env:"CHALLONGE_API_KEY" envDefault:""`
+	// ChallongeSubdomain is the Challonge community the tournaments are created
+	// under; empty creates them on the key owner's account.
+	ChallongeSubdomain string `env:"CHALLONGE_SUBDOMAIN" envDefault:""`
+	// BracketWalkoverScore is reported for a technical defeat, "<winner>-<loser>".
+	BracketWalkoverScore string `env:"BRACKET_WALKOVER_SCORE" envDefault:"1-0"`
 	// BetAmounts are the stake buttons drawn under a match's betting post.
 	// Sent to Telegram in ascending order with duplicates dropped; see
 	// StakeOptions.
@@ -209,6 +218,10 @@ func (c *Config) Validate() error {
 		errs = append(errs, fmt.Errorf("TOURNAMENT_TZ: %w", err))
 	}
 
+	if _, _, err := ParseWalkoverScore(c.BracketWalkoverScore); err != nil {
+		errs = append(errs, fmt.Errorf("BRACKET_WALKOVER_SCORE: %w", err))
+	}
+
 	return errors.Join(errs...)
 }
 
@@ -226,4 +239,23 @@ func ReadEnvConfig(cfg *Config) error {
 		return err
 	}
 	return cfg.Validate()
+}
+
+// BracketEnabled reports whether the Challonge bracket is configured.
+func (c *Config) BracketEnabled() bool {
+	return c.ChallongeAPIKey != ""
+}
+
+// ParseWalkoverScore reads "W-L" into two non-negative ints with W > L.
+func ParseWalkoverScore(s string) (win, lose int, err error) {
+	parts := strings.Split(strings.TrimSpace(s), "-")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("want W-L, got %q", s)
+	}
+	win, err1 := strconv.Atoi(parts[0])
+	lose, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil || win < 0 || lose < 0 || win <= lose {
+		return 0, 0, fmt.Errorf("want W-L with W > L, got %q", s)
+	}
+	return win, lose, nil
 }

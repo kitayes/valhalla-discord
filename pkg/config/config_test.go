@@ -19,8 +19,9 @@ func validConfig() *Config {
 		WebAdminPort:    "8080",
 		// Both carry envDefaults, so a real process always has them; the
 		// literal has to supply them itself.
-		BetAmounts: []int{10, 25, 50},
-		BetMax:     100,
+		BetAmounts:           []int{10, 25, 50},
+		BetMax:               100,
+		BracketWalkoverScore: "1-0",
 	}
 }
 
@@ -190,5 +191,21 @@ func TestTournamentLocation(t *testing.T) {
 	}
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "TOURNAMENT_TZ") {
 		t.Errorf("Validate did not name TOURNAMENT_TZ: %v", err)
+	}
+}
+
+func TestBracketWalkoverScoreMustBeTwoNumbers(t *testing.T) {
+	c := &Config{ChallongeAPIKey: "k", BracketWalkoverScore: "abc"}
+	err := c.Validate()
+	if err == nil || !strings.Contains(err.Error(), "BRACKET_WALKOVER_SCORE") {
+		t.Fatalf("Validate() = %v, want BRACKET_WALKOVER_SCORE error", err)
+	}
+	c.BracketWalkoverScore = "1-0"
+	if got := c.BracketEnabled(); !got {
+		t.Error("BracketEnabled() = false with API key set")
+	}
+	c.ChallongeAPIKey = ""
+	if c.BracketEnabled() {
+		t.Error("BracketEnabled() = true with empty key")
 	}
 }
