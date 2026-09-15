@@ -109,6 +109,10 @@ type BracketBuilt struct {
 	URL    string
 	Round1 []models.BracketMatch // round-1 matches with both teams
 	Byes   []models.TelegramTeam // teams that skip round 1
+	// Later holds matches beyond round 1 that are already ready to play — two
+	// byes meeting in round 2. Sync marked them notified, so the announcer
+	// must ping their captains itself.
+	Later []models.BracketMatch
 }
 
 func (s *BracketService) tournamentID(ctx context.Context) int64 {
@@ -243,12 +247,14 @@ func (s *BracketService) build(ctx context.Context, forTournament time.Time) (*B
 		return nil, err
 	}
 	inRound1 := map[int]bool{}
-	var round1 []models.BracketMatch
+	var round1, later []models.BracketMatch
 	for _, m := range ready {
 		if m.Round == 1 {
 			inRound1[*m.Team1ID] = true
 			inRound1[*m.Team2ID] = true
 			round1 = append(round1, m)
+		} else {
+			later = append(later, m)
 		}
 	}
 	var byes []models.TelegramTeam
@@ -257,7 +263,7 @@ func (s *BracketService) build(ctx context.Context, forTournament time.Time) (*B
 			byes = append(byes, st.Team)
 		}
 	}
-	return &BracketBuilt{URL: tr.URL, Round1: round1, Byes: byes}, nil
+	return &BracketBuilt{URL: tr.URL, Round1: round1, Byes: byes, Later: later}, nil
 }
 
 // Sync pulls the bracket from Challonge, rewrites the cache and returns the

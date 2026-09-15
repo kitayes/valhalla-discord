@@ -355,6 +355,11 @@ func TestBuildCreatesTournamentAndCachesMatches(t *testing.T) {
 	if len(byes) != 2 || !byes["T1"] || !byes["T2"] {
 		t.Errorf("byes = %v, want T1 and T2", byes)
 	}
+	// The two byes (T1, T2) meet immediately in round 2; Sync already marked
+	// it notified, so the announcer must ping it separately from Round1.
+	if len(built.Later) != 1 || built.Later[0].Round != 2 || !built.Later[0].Has(1) || !built.Later[0].Has(2) {
+		t.Errorf("Later = %+v, want one round-2 match with T1 (id 1) and T2 (id 2)", built.Later)
+	}
 	cached, _ := repo.GetBracketMatches(ctx)
 	if len(cached) != 7 {
 		t.Errorf("cached %d matches, want 7", len(cached))
