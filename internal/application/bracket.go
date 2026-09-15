@@ -351,3 +351,358 @@ func (s *BracketService) logWrite(op string, err error) {
 		s.logger.Error("bracket: %s failed: %v", op, err)
 	}
 }
+
+// OpenMatchFor is the team's current playable match, nil when it has none
+// (eliminated, waiting for an opponent, or the bracket is not built).
+func (s *BracketService) OpenMatchFor(ctx context.Context, teamID int) (*models.BracketMatch, error) {
+	ms, err := s.repo.GetBracketMatches(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return openMatchIn(ms, teamID), nil
+}
+
+func openMatchIn(ms []models.BracketMatch, teamID int) *models.BracketMatch {
+	for i := range ms {
+		if ms[i].Ready() && ms[i].Has(teamID) {
+			m := ms[i]
+			return &m
+		}
+	}
+	return nil
+}
+
+func findMatch(ms []models.BracketMatch, id int) *models.BracketMatch {
+	for i := range ms {
+		if ms[i].ID == id {
+			m := ms[i]
+			return &m
+		}
+	}
+	return nil
+}
+
+// participantIDs resolves both sides of a match to Challonge participant ids.
+func (s *BracketService) participantIDs(ctx context.Context, winnerTeamID, loserTeamID int) (int64, int64, error) {
+	w, err := s.repo.GetTeamByID(ctx, winnerTeamID)
+	if err != nil || w == nil || w.ChallongeParticipantID == nil {
+		return 0, 0, fmt.Errorf("bracket: team %d has no Challonge participant", winnerTeamID)
+	}
+	l, err := s.repo.GetTeamByID(ctx, loserTeamID)
+	if err != nil || l == nil || l.ChallongeParticipantID == nil {
+		return 0, 0, fmt.Errorf("bracket: team %d has no Challonge participant", loserTeamID)
+	}
+	return *w.ChallongeParticipantID, *l.ChallongeParticipantID, nil
+}
+
+// report is the PUT for one match; the caller holds mu and syncs afterwards.
+func (s *BracketService) report(ctx context.Context, tID int64, m *models.BracketMatch, winnerTeamID, winnerScore, loserScore int) error {
+	if !m.Ready() {
+		return ErrMatchNotOpen
+	}
+	if !m.Has(winnerTeamID) {
+		return ErrNotInMatch
+	}
+	loserID := *m.Opponent(winnerTeamID)
+	wPID, lPID, err := s.participantIDs(ctx, winnerTeamID, loserID)
+	if err != nil {
+		return err
+	}
+	return s.provider.ReportMatch(ctx, tID, m.ChallongeMatchID, wPID, lPID, winnerScore, loserScore)
+}
+
+// ReportResult records a played match and returns the matches that became
+// ready because of it.
+func (s *BracketService) ReportResult(ctx context.Context, matchID, winnerTeamID, winnerScore, loserScore int) ([]models.BracketMatch, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tID := s.tournamentID(ctx)
+	if tID == 0 {
+		return nil, ErrBracketNotBuilt
+	}
+	ms, err := s.repo.GetBracketMatches(ctx)
+	if err != nil {
+		return nil, err
+	}
+	m := findMatch(ms, matchID)
+	if m == nil {
+		return nil, ErrMatchNotFound
+	}
+	if err := s.report(ctx, tID, m, winnerTeamID, winnerScore, loserScore); err != nil {
+		return nil, err
+	}
+	return s.sync(ctx, tID)
+}
+
+// ForfeitDisqualified hands every open match of a disqualified team to its
+// opponent. A pass reports every such match, then syncs once; a double
+// no-show opens the next match for the "winner", so passes repeat until
+// nothing changes. Idempotent: a team with no open match costs no request.
+func (s *BracketService) ForfeitDisqualified(ctx context.Context) ([]models.BracketMatch, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tID := s.tournamentID(ctx)
+	if tID == 0 {
+		return nil, nil
+	}
+	teams, err := s.repo.GetAllTeams(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []models.BracketMatch
+	const maxPasses = 8 // deeper than any bracket this bot runs
+	for pass := 0; pass < maxPasses; pass++ {
+		ms, err := s.repo.GetBracketMatches(ctx)
+		if err != nil {
+			return nil, err
+		}
+		reported := 0
+		done := map[int]bool{} // match ids reported this pass
+		for _, t := range teams {
+			if t.Status != models.TeamStatusDisqualified {
+				continue
+			}
+			m := openMatchIn(ms, t.ID)
+			if m == nil || done[m.ID] {
+				continue
+			}
+			opp := *m.Opponent(t.ID)
+			if err := s.report(ctx, tID, m, opp, s.walkoverWin, s.walkoverLose); err != nil {
+				return out, err
+			}
+			done[m.ID] = true
+			reported++
+		}
+		if reported == 0 {
+			break
+		}
+		ready, err := s.sync(ctx, tID)
+		if err != nil {
+			return s.stillReady(ctx, out), err
+		}
+		out = append(out, ready...)
+	}
+	return s.stillReady(ctx, out), nil
+}
+
+// stillReady drops matches that a later pass of the cascade closed again
+// (a double no-show opens the next match and walks it over in one sweep),
+// so nobody is pinged about a match that no longer exists to be played.
+func (s *BracketService) stillReady(ctx context.Context, ms []models.BracketMatch) []models.BracketMatch {
+	if len(ms) == 0 {
+		return nil
+	}
+	cur, err := s.repo.GetBracketMatches(ctx)
+	if err != nil {
+		return ms
+	}
+	var out []models.BracketMatch
+	for _, m := range ms {
+		if c := findMatch(cur, m.ID); c != nil && c.Ready() {
+			out = append(out, *c)
+		}
+	}
+	return out
+}
+
+// BracketChange is what an admin override did to the bracket. Reset holds
+// matches as they were before: played or ready, now cleared by Challonge's
+// branch reset. Ready holds matches that became playable.
+type BracketChange struct {
+	Reset []models.BracketMatch
+	Ready []models.BracketMatch
+}
+
+// SetWinner forces the outcome of a match. A finished match is reopened
+// first; Challonge then resets everything downstream, and the diff of the
+// cache before and after says whom to tell.
+func (s *BracketService) SetWinner(ctx context.Context, playOrder int, teamName string, winnerScore, loserScore int) (*BracketChange, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tID := s.tournamentID(ctx)
+	if tID == 0 {
+		return nil, ErrBracketNotBuilt
+	}
+	team, err := s.repo.GetTeamByName(ctx, teamName)
+	if err != nil || team == nil {
+		return nil, fmt.Errorf("команда '%s' не найдена", teamName)
+	}
+	before, err := s.repo.GetBracketMatches(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var m *models.BracketMatch
+	for i := range before {
+		if before[i].PlayOrder == playOrder {
+			m = &before[i]
+		}
+	}
+	if m == nil {
+		return nil, ErrMatchNotFound
+	}
+	if m.Team1ID == nil || m.Team2ID == nil {
+		return nil, ErrMatchNotOpen
+	}
+	if !m.Has(team.ID) {
+		return nil, ErrNotInMatch
+	}
+	return s.override(ctx, tID, before, m, team.ID, winnerScore, loserScore)
+}
+
+func (s *BracketService) override(ctx context.Context, tID int64, before []models.BracketMatch, m *models.BracketMatch, winnerTeamID, winnerScore, loserScore int) (*BracketChange, error) {
+	if m.State == models.BracketComplete {
+		if err := s.provider.ReopenMatch(ctx, tID, m.ChallongeMatchID); err != nil {
+			return nil, err
+		}
+		m.State = models.BracketOpen
+		m.WinnerID = nil
+	}
+	if err := s.report(ctx, tID, m, winnerTeamID, winnerScore, loserScore); err != nil {
+		return nil, err
+	}
+	ready, err := s.sync(ctx, tID)
+	if err != nil {
+		return nil, err
+	}
+	after, err := s.repo.GetBracketMatches(ctx)
+	if err != nil {
+		return nil, err
+	}
+	afterByID := make(map[int]models.BracketMatch, len(after))
+	for _, a := range after {
+		afterByID[a.ID] = a
+	}
+	ch := &BracketChange{Ready: ready}
+	for _, b := range before {
+		if b.ID == m.ID {
+			continue
+		}
+		wasLive := b.State == models.BracketComplete || b.Ready()
+		if !wasLive {
+			continue
+		}
+		a, ok := afterByID[b.ID]
+		stillSame := ok && a.State == b.State && samePairIDs(a, b)
+		if !stillSame {
+			ch.Reset = append(ch.Reset, b)
+		}
+	}
+	return ch, nil
+}
+
+func samePairIDs(a, b models.BracketMatch) bool {
+	eq := func(x, y *int) bool { return (x == nil && y == nil) || (x != nil && y != nil && *x == *y) }
+	return eq(a.Team1ID, b.Team1ID) && eq(a.Team2ID, b.Team2ID)
+}
+
+// Reinstate undoes a technical defeat: the team's lost match is reopened and
+// handed back to it. Nil change when the team has no lost match.
+func (s *BracketService) Reinstate(ctx context.Context, teamName string) (*BracketChange, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tID := s.tournamentID(ctx)
+	if tID == 0 {
+		return nil, nil
+	}
+	team, err := s.repo.GetTeamByName(ctx, teamName)
+	if err != nil || team == nil {
+		return nil, fmt.Errorf("команда '%s' не найдена", teamName)
+	}
+	teamID := team.ID
+	before, err := s.repo.GetBracketMatches(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var lost *models.BracketMatch
+	for i := range before {
+		b := &before[i]
+		if b.State == models.BracketComplete && b.Has(teamID) && b.WinnerID != nil && *b.WinnerID != teamID {
+			lost = b // ordered by round: the last one is the elimination
+		}
+	}
+	if lost == nil {
+		return nil, nil
+	}
+	if err := s.provider.ReopenMatch(ctx, tID, lost.ChallongeMatchID); err != nil {
+		return nil, err
+	}
+	ready, err := s.sync(ctx, tID)
+	if err != nil {
+		return nil, err
+	}
+	ch := &BracketChange{Ready: ready}
+	after, err := s.repo.GetBracketMatches(ctx)
+	if err != nil {
+		return nil, err
+	}
+	afterByID := make(map[int]models.BracketMatch, len(after))
+	for _, a := range after {
+		afterByID[a.ID] = a
+	}
+	// The reopened match keeps its pair, so both_notified survived the sync
+	// and it is not in ready; the captains still need to hear it is back on.
+	if a, ok := afterByID[lost.ID]; ok && a.Ready() {
+		already := false
+		for _, r := range ready {
+			already = already || r.ID == a.ID
+		}
+		if !already {
+			ch.Ready = append(ch.Ready, a)
+		}
+	}
+	for _, b := range before {
+		if b.ID == lost.ID || !(b.State == models.BracketComplete || b.Ready()) {
+			continue
+		}
+		if a, ok := afterByID[b.ID]; !ok || a.State != b.State || !samePairIDs(a, b) {
+			ch.Reset = append(ch.Reset, b)
+		}
+	}
+	return ch, nil
+}
+
+// FlushPendingReports pushes reports saved while Challonge was unreachable.
+// A report whose match is no longer open (someone else's result got there
+// first, or an admin override) is marked synced and dropped: retrying it
+// forever would burn the quota.
+func (s *BracketService) FlushPendingReports(ctx context.Context) ([]models.BracketMatch, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tID := s.tournamentID(ctx)
+	if tID == 0 {
+		return nil, nil
+	}
+	queued, err := s.repo.GetUnsyncedReports(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []models.BracketMatch
+	for _, rep := range queued {
+		ms, err := s.repo.GetBracketMatches(ctx)
+		if err != nil {
+			return out, err
+		}
+		m := findMatch(ms, *rep.BracketMatchID)
+		if m == nil || !m.Ready() || !m.Has(rep.WinnerTeamID) {
+			s.logger.Warn("bracket: dropping queued report %d: match no longer open", rep.ID)
+			s.logWrite("SetReportSynced", s.repo.SetReportSynced(ctx, rep.ID))
+			continue
+		}
+		w, l, _, ok := parseScore(rep.Score)
+		if !ok {
+			s.logger.Warn("bracket: dropping queued report %d: bad score %q", rep.ID, rep.Score)
+			s.logWrite("SetReportSynced", s.repo.SetReportSynced(ctx, rep.ID))
+			continue
+		}
+		if err := s.report(ctx, tID, m, rep.WinnerTeamID, w, l); err != nil {
+			return out, err // Challonge still down: keep the queue, try next tick
+		}
+		s.logWrite("SetReportSynced", s.repo.SetReportSynced(ctx, rep.ID))
+		ready, err := s.sync(ctx, tID)
+		if err != nil {
+			return out, err
+		}
+		out = append(out, ready...)
+	}
+	return out, nil
+}

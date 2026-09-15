@@ -505,3 +505,280 @@ func TestSyncWithoutBracket(t *testing.T) {
 		t.Errorf("Sync without bracket = %v, want ErrBracketNotBuilt", err)
 	}
 }
+
+// buildFour builds a 4-team bracket: T1 (strongest) vs T4, T2 vs T3, final.
+func buildFour(t *testing.T) (*BracketService, *fakeTelegramRepo, *fakeChallonge) {
+	t.Helper()
+	svc, repo, prov := newBracketSvc(t)
+	for i := 1; i <= 4; i++ {
+		addBracketTeam(repo, i, fmt.Sprintf("T%d", i), 50-10*i)
+	}
+	if _, err := svc.Build(context.Background(), tourneyAt); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	return svc, repo, prov
+}
+
+func TestOpenMatchFor(t *testing.T) {
+	svc, _, _ := buildFour(t)
+	ctx := context.Background()
+	m, err := svc.OpenMatchFor(ctx, 1)
+	if err != nil || m == nil || !m.Has(1) || !m.Has(4) || m.Round != 1 {
+		t.Fatalf("OpenMatchFor(1) = %+v, %v; want round-1 match T1 vs T4", m, err)
+	}
+	if opp := m.Opponent(1); opp == nil || *opp != 4 {
+		t.Errorf("Opponent(1) = %v, want 4", opp)
+	}
+	m, err = svc.OpenMatchFor(ctx, 99)
+	if err != nil || m != nil {
+		t.Errorf("OpenMatchFor(unknown) = %+v, %v; want nil, nil", m, err)
+	}
+}
+
+func TestReportResultAdvancesAndPingsFinalOnce(t *testing.T) {
+	svc, _, prov := buildFour(t)
+	ctx := context.Background()
+	m1, _ := svc.OpenMatchFor(ctx, 1)
+	m2, _ := svc.OpenMatchFor(ctx, 2)
+
+	before := prov.count("ListMatches")
+	ready, err := svc.ReportResult(ctx, m1.ID, 1, 2, 0)
+	if err != nil || len(ready) != 0 {
+		t.Fatalf("first result: ready=%v err=%v; the final is not ready yet", ready, err)
+	}
+	if prov.count("ListMatches") != before+1 || prov.count("ReportMatch") != 1 {
+		t.Errorf("budget: ListMatches +%d, ReportMatch %d; want +1, 1", prov.count("ListMatches")-before, prov.count("ReportMatch"))
+	}
+	ready, err = svc.ReportResult(ctx, m2.ID, 3, 2, 1) // upset: T3 beats T2
+	if err != nil || len(ready) != 1 || ready[0].Round != 2 || !ready[0].Has(1) || !ready[0].Has(3) {
+		t.Fatalf("second result: ready=%+v err=%v; want final T1 vs T3", ready, err)
+	}
+	if ready[0].Team1Name == "" || ready[0].Team2Name == "" {
+		t.Errorf("ready match has no team names: %+v", ready[0])
+	}
+	// Reporting a finished match is refused without a request.
+	calls := len(prov.calls)
+	if _, err := svc.ReportResult(ctx, m1.ID, 1, 2, 0); !errors.Is(err, ErrMatchNotOpen) {
+		t.Errorf("re-report = %v, want ErrMatchNotOpen", err)
+	}
+	if _, err := svc.ReportResult(ctx, ready[0].ID, 2, 2, 0); !errors.Is(err, ErrNotInMatch) {
+		t.Errorf("stranger reports = %v, want ErrNotInMatch", err)
+	}
+	if len(prov.calls) != calls {
+		t.Error("refused reports still hit Challonge")
+	}
+}
+
+func TestForfeitDisqualifiedGivesOpponentTheWin(t *testing.T) {
+	svc, repo, prov := buildFour(t)
+	ctx := context.Background()
+	repo.teams[4].Status = models.TeamStatusDisqualified
+
+	ready, err := svc.ForfeitDisqualified(ctx)
+	if err != nil || len(ready) != 0 {
+		t.Fatalf("ForfeitDisqualified = %v, %v", ready, err)
+	}
+	m, _ := svc.OpenMatchFor(ctx, 1)
+	if m != nil {
+		t.Errorf("T1 still has an open match: %+v", m)
+	}
+	ms, _ := svc.Matches(ctx)
+	for _, x := range ms {
+		if x.Round == 1 && x.Has(4) {
+			if x.State != models.BracketComplete || x.WinnerID == nil || *x.WinnerID != 1 || x.ScoresCSV != "1 - 0" {
+				t.Errorf("forfeited match = %+v, want T1 wins 1 - 0", x)
+			}
+		}
+	}
+	// A second sweep is quiet and costs nothing.
+	calls := len(prov.calls)
+	if _, err := svc.ForfeitDisqualified(ctx); err != nil || len(prov.calls) != calls {
+		t.Errorf("repeat sweep: err=%v, calls=%d->%d", err, calls, len(prov.calls))
+	}
+}
+
+// Both sides of a match missing: the win passes through the empty team to
+// the next live opponent, and the final becomes ready for the survivor.
+func TestForfeitBothSidesCascades(t *testing.T) {
+	svc, repo, _ := buildFour(t)
+	ctx := context.Background()
+	repo.teams[2].Status = models.TeamStatusDisqualified
+	repo.teams[3].Status = models.TeamStatusDisqualified
+	// T1 beats T4 on the other side, so the final has a live team waiting.
+	m1, _ := svc.OpenMatchFor(ctx, 1)
+	if _, err := svc.ReportResult(ctx, m1.ID, 1, 2, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	ready, err := svc.ForfeitDisqualified(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// After the cascade the final is T1 vs (forfeited T2 or T3) and completes
+	// by walkover too, so nothing is "ready" — T1 has won the tournament.
+	if len(ready) != 0 {
+		t.Errorf("ready = %+v, want none: the final was walked over", ready)
+	}
+	ms, _ := svc.Matches(ctx)
+	var final *models.BracketMatch
+	for i := range ms {
+		if ms[i].Round == 2 {
+			final = &ms[i]
+		}
+	}
+	if final == nil || final.State != models.BracketComplete || final.WinnerID == nil || *final.WinnerID != 1 {
+		t.Errorf("final = %+v, want T1 the winner by walkover", final)
+	}
+}
+
+func TestForfeitWaitsForPendingMatch(t *testing.T) {
+	svc, repo, prov := buildFour(t)
+	ctx := context.Background()
+	// T1 wins round 1 and is then disqualified while the other semi is unplayed:
+	// its final is pending (no opponent), so nothing can be reported yet.
+	m1, _ := svc.OpenMatchFor(ctx, 1)
+	if _, err := svc.ReportResult(ctx, m1.ID, 1, 2, 0); err != nil {
+		t.Fatal(err)
+	}
+	repo.teams[1].Status = models.TeamStatusDisqualified
+	calls := prov.count("ReportMatch")
+	if _, err := svc.ForfeitDisqualified(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if prov.count("ReportMatch") != calls {
+		t.Error("forfeit reported on a pending match")
+	}
+	// The other semi finishes; the next sweep hands the final to T3.
+	m2, _ := svc.OpenMatchFor(ctx, 2)
+	if _, err := svc.ReportResult(ctx, m2.ID, 3, 2, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ForfeitDisqualified(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ms, _ := svc.Matches(ctx)
+	for _, x := range ms {
+		if x.Round == 2 && (x.State != models.BracketComplete || x.WinnerID == nil || *x.WinnerID != 3) {
+			t.Errorf("final = %+v, want T3 by walkover", x)
+		}
+	}
+}
+
+func TestSetWinnerResetsBranchAndReportsIt(t *testing.T) {
+	svc, _, prov := buildFour(t)
+	ctx := context.Background()
+	m1, _ := svc.OpenMatchFor(ctx, 1)
+	m2, _ := svc.OpenMatchFor(ctx, 2)
+	if _, err := svc.ReportResult(ctx, m1.ID, 1, 2, 0); err != nil {
+		t.Fatal(err)
+	}
+	ready, err := svc.ReportResult(ctx, m2.ID, 2, 2, 0)
+	if err != nil || len(ready) != 1 {
+		t.Fatalf("final not ready: %v %v", ready, err)
+	}
+	final := ready[0]
+	if _, err := svc.ReportResult(ctx, final.ID, 1, 2, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	// Admin: T4 actually won match #1.
+	ch, err := svc.SetWinner(ctx, m1.PlayOrder, "T4", 2, 1)
+	if err != nil {
+		t.Fatalf("SetWinner: %v", err)
+	}
+	if prov.count("ReopenMatch") != 1 {
+		t.Errorf("ReopenMatch called %d times, want 1", prov.count("ReopenMatch"))
+	}
+	// The final (played T1 vs T2) is reset and comes back ready as T4 vs T2.
+	if len(ch.Reset) != 1 || ch.Reset[0].ID != final.ID || !ch.Reset[0].Has(1) || !ch.Reset[0].Has(2) {
+		t.Errorf("Reset = %+v, want the old final T1 vs T2", ch.Reset)
+	}
+	if len(ch.Ready) != 1 || ch.Ready[0].ID != final.ID || !ch.Ready[0].Has(4) || !ch.Ready[0].Has(2) {
+		t.Errorf("Ready = %+v, want the new final T4 vs T2", ch.Ready)
+	}
+	ms, _ := svc.Matches(ctx)
+	for _, x := range ms {
+		if x.ID == m1.ID && (x.WinnerID == nil || *x.WinnerID != 4 || x.ScoresCSV != "2 - 1") {
+			t.Errorf("match #1 after SetWinner = %+v", x)
+		}
+	}
+	// Errors: unknown match, stranger, pending match.
+	if _, err := svc.SetWinner(ctx, 999, "T4", 1, 0); !errors.Is(err, ErrMatchNotFound) {
+		t.Errorf("unknown play order = %v", err)
+	}
+	if _, err := svc.SetWinner(ctx, m1.PlayOrder, "T2", 1, 0); !errors.Is(err, ErrNotInMatch) {
+		t.Errorf("stranger = %v", err)
+	}
+}
+
+func TestSetWinnerOnOpenMatchNeedsNoReopen(t *testing.T) {
+	svc, _, prov := buildFour(t)
+	ctx := context.Background()
+	m1, _ := svc.OpenMatchFor(ctx, 1)
+	ch, err := svc.SetWinner(ctx, m1.PlayOrder, "T4", 1, 0)
+	if err != nil || len(ch.Reset) != 0 || prov.count("ReopenMatch") != 0 {
+		t.Errorf("SetWinner on open match: ch=%+v err=%v reopens=%d", ch, err, prov.count("ReopenMatch"))
+	}
+}
+
+func TestReinstateReturnsTeamToItsMatch(t *testing.T) {
+	svc, repo, _ := buildFour(t)
+	ctx := context.Background()
+	repo.teams[4].Status = models.TeamStatusDisqualified
+	if _, err := svc.ForfeitDisqualified(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repo.teams[4].Status = models.TeamStatusActive // /reinstate did this
+
+	ch, err := svc.Reinstate(ctx, "T4")
+	if err != nil || ch == nil {
+		t.Fatalf("Reinstate = %+v, %v", ch, err)
+	}
+	m, _ := svc.OpenMatchFor(ctx, 4)
+	if m == nil || !m.Has(1) {
+		t.Errorf("T4 has no open match against T1 after reinstate: %+v", m)
+	}
+	if len(ch.Ready) != 1 || ch.Ready[0].ID != m.ID {
+		t.Errorf("Ready = %+v, want the reopened match", ch.Ready)
+	}
+	// Nothing to undo: a team that never lost.
+	ch, err = svc.Reinstate(ctx, "T1")
+	if err != nil || ch != nil {
+		t.Errorf("Reinstate(T1) = %+v, %v; want nil, nil", ch, err)
+	}
+}
+
+func TestFlushPendingReports(t *testing.T) {
+	svc, repo, prov := buildFour(t)
+	ctx := context.Background()
+	m1, _ := svc.OpenMatchFor(ctx, 1)
+	// A report that never reached Challonge (saved while it was down).
+	rep := &models.TelegramMatchReport{ReporterTelegramID: 100, WinnerTeamID: 1, LoserTeamID: 4, Score: "2:1", PhotoFileIDs: []string{"f"}, BracketMatchID: &m1.ID}
+	_ = repo.CreateMatchReport(ctx, rep)
+
+	ready, err := svc.FlushPendingReports(ctx)
+	if err != nil || len(ready) != 0 {
+		t.Fatalf("Flush = %v, %v", ready, err)
+	}
+	if prov.count("ReportMatch") != 1 {
+		t.Errorf("ReportMatch called %d times, want 1", prov.count("ReportMatch"))
+	}
+	if q, _ := repo.GetUnsyncedReports(ctx); len(q) != 0 {
+		t.Errorf("report still queued: %+v", q)
+	}
+	ms, _ := svc.Matches(ctx)
+	for _, x := range ms {
+		if x.ID == m1.ID && x.ScoresCSV != "2 - 1" {
+			t.Errorf("flushed score = %q, want 2 - 1", x.ScoresCSV)
+		}
+	}
+	// A queued report for a match that is no longer open is dropped, not retried forever.
+	rep2 := &models.TelegramMatchReport{ReporterTelegramID: 100, WinnerTeamID: 1, LoserTeamID: 4, Score: "2:0", PhotoFileIDs: []string{"f"}, BracketMatchID: &m1.ID}
+	_ = repo.CreateMatchReport(ctx, rep2)
+	if _, err := svc.FlushPendingReports(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if q, _ := repo.GetUnsyncedReports(ctx); len(q) != 0 {
+		t.Errorf("stale report still queued: %+v", q)
+	}
+}
