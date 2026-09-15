@@ -23,6 +23,8 @@ const (
 )
 
 type Bot struct {
+	matchDesk          *application.MatchDeskService
+	deskWake           chan struct{}
 	bot                *tgbotapi.BotAPI
 	service            application.TelegramService
 	profileLinkService application.ProfileLinkService
@@ -93,6 +95,9 @@ func (b *Bot) Start(ctx context.Context) {
 	updates := b.bot.GetUpdatesChan(u)
 
 	go b.startBackgroundWorker(ctx)
+	if b.matchDesk != nil {
+		go b.startMatchDeskWorker(ctx)
+	}
 
 	for {
 		select {
@@ -124,6 +129,10 @@ func (b *Bot) handleCallbackQuery(parent context.Context, callback *tgbotapi.Cal
 
 	ctx, cancel := context.WithTimeout(parent, updateTimeout)
 	defer cancel()
+	if strings.HasPrefix(callback.Data, "desk:") {
+		b.handleDeskCallback(ctx, callback)
+		return
+	}
 
 	if callback.Data == "admin_ping_debtors" {
 		if !b.isAdmin(callback.From.ID) {
@@ -183,6 +192,9 @@ func (b *Bot) handleUpdate(parent context.Context, msg *tgbotapi.Message) {
 		b.service.RegisterUser(ctx, chatID, user.UserName, user.FirstName)
 	}
 
+	if b.handleDeskCommand(ctx, chatID, text) {
+		return
+	}
 	if b.isAdmin(chatID) && (text == "/admin" ||
 		text == "/list_teams" || text == "/checkin_status" || text == "/checkins" ||
 		strings.HasPrefix(text, "/check_team") ||

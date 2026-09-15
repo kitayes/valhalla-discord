@@ -75,6 +75,7 @@ func (b *Bot) trySendMessage(chatID int64, text string, kbType string) error {
 				tgbotapi.NewKeyboardButton("/checkin"),
 				tgbotapi.NewKeyboardButton("/report"),
 			),
+			tgbotapi.NewKeyboardButtonRow(tgbotapi.NewKeyboardButton("/match"), tgbotapi.NewKeyboardButton("/judge")),
 			tgbotapi.NewKeyboardButtonRow(
 				tgbotapi.NewKeyboardButton("/delete_team"),
 			),
@@ -155,4 +156,3 @@ func (b *Bot) reportOpponentKeyboard(ctx context.Context, chatID int64) tgbotapi
 	))
 	return tgbotapi.NewInlineKeyboardMarkup(rows...)
 }
-

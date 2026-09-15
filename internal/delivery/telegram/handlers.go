@@ -15,6 +15,10 @@ import (
 func (b *Bot) handleAdminCommand(ctx context.Context, chatID int64, text string) {
 	if text == "/start" || strings.HasPrefix(text, "/admin") {
 		response := "Админ-панель:\n\n" +
+			"/attention - Матчи, требующие внимания\n" +
+			"/pause_matches / /resume_matches - Пауза таймеров матчей\n" +
+			"/pause_match <номер> / /resume_match <номер> - Пауза одного матча\n" +
+			"/match_history <номер> - История матча\n" +
 			"/list_teams - Краткий список и кол-во\n" +
 			"/checkin_status - Дашборд Check-in команд\n" +
 			"/ping_debtors [текст] - Пинг должников (в ЛС и чат)\n" +

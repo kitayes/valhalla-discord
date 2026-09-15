@@ -133,6 +133,10 @@ func main() {
 		log.Warn("TELEGRAM_TOKEN not set, telegram bot disabled")
 	}
 
+	if telegramBot != nil && cfg.BracketEnabled() {
+		location, _ := cfg.TournamentLocation()
+		telegramBot.WithMatchDesk(application.NewMatchDeskService(repository.NewTelegramPostgres(db), cfg.TelegramAdminIDs, location))
+	}
 	discordBot := discord.NewBot(&cfg, services, log)
 	if err := discordBot.Init(); err != nil {
 		log.Error("failed to init discord bot: %s", err.Error())
