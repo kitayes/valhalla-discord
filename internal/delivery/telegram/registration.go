@@ -41,7 +41,7 @@ func regBtn(label string, data ...string) tgbotapi.InlineKeyboardButton {
 // with parameters carry them after ":" (see application.KbReg* docs).
 func regKeyboard(kbType string) (tgbotapi.InlineKeyboardMarkup, bool) {
 	kind, params, _ := strings.Cut(kbType, ":")
-	cancel := tgbotapi.NewInlineKeyboardRow(regBtn("❌ Отмена", "cancel"))
+	cancel := tgbotapi.NewInlineKeyboardRow(regBtn("Отмена", "cancel"))
 
 	switch kind {
 	case application.KbRegCancel:
@@ -49,7 +49,7 @@ func regKeyboard(kbType string) (tgbotapi.InlineKeyboardMarkup, bool) {
 
 	case application.KbRegSkip:
 		return tgbotapi.NewInlineKeyboardMarkup(
-			tgbotapi.NewInlineKeyboardRow(regBtn("⏭ Пропустить", "skip")),
+			tgbotapi.NewInlineKeyboardRow(regBtn("Пропустить", "skip")),
 			cancel,
 		), true
 
@@ -57,17 +57,22 @@ func regKeyboard(kbType string) (tgbotapi.InlineKeyboardMarkup, bool) {
 		return tgbotapi.NewInlineKeyboardMarkup(
 			tgbotapi.NewInlineKeyboardRow(regBtn("Gold", "role", "Gold"), regBtn("Exp", "role", "Exp"), regBtn("Mid", "role", "Mid")),
 			tgbotapi.NewInlineKeyboardRow(regBtn("Roam", "role", "Roam"), regBtn("Jungle", "role", "Jungle")),
-			tgbotapi.NewInlineKeyboardRow(regBtn("↩️ Исправить строку", "redo")),
+			tgbotapi.NewInlineKeyboardRow(regBtn("Исправить строку", "redo")),
 			cancel,
 		), true
 
 	case application.KbRegConfirm:
 		n, _ := strconv.Atoi(params)
 		rows := [][]tgbotapi.InlineKeyboardButton{
-			tgbotapi.NewInlineKeyboardRow(regBtn("✅ Подтвердить", "confirm")),
+			tgbotapi.NewInlineKeyboardRow(regBtn("Подтвердить", "confirm")),
 		}
 		rows = append(rows, fixRows(n)...)
-		rows = append(rows, tgbotapi.NewInlineKeyboardRow(regBtn("🗑 Удалить команду", "delete")))
+		var bottomRow []tgbotapi.InlineKeyboardButton
+		if n < 7 {
+			bottomRow = append(bottomRow, regBtn("+ Замена", "sub"))
+		}
+		bottomRow = append(bottomRow, regBtn("Удалить команду", "delete"))
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(bottomRow...))
 		return tgbotapi.NewInlineKeyboardMarkup(rows...), true
 
 	case application.KbRegCard:
@@ -76,43 +81,93 @@ func regKeyboard(kbType string) (tgbotapi.InlineKeyboardMarkup, bool) {
 		rows := fixRows(n)
 		switch add {
 		case "sub":
-			rows = append(rows, tgbotapi.NewInlineKeyboardRow(regBtn("➕ Замена", "sub")))
+			rows = append(rows, tgbotapi.NewInlineKeyboardRow(regBtn("+ Замена", "sub")))
 		case "player":
-			rows = append(rows, tgbotapi.NewInlineKeyboardRow(regBtn("➕ Игрок", "sub")))
+			rows = append(rows, tgbotapi.NewInlineKeyboardRow(regBtn("+ Игрок", "sub")))
 		}
-		rows = append(rows, tgbotapi.NewInlineKeyboardRow(regBtn("🗑 Удалить команду", "delete")))
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(regBtn("Удалить команду", "delete")))
 		return tgbotapi.NewInlineKeyboardMarkup(rows...), true
 
 	case application.KbRegCheckin:
 		return tgbotapi.NewInlineKeyboardMarkup(
-			tgbotapi.NewInlineKeyboardRow(regBtn("✅ Подтвердить участие", "checkin")),
+			tgbotapi.NewInlineKeyboardRow(regBtn("Подтвердить участие", "checkin")),
 		), true
 
 	case application.KbRegDeleteConfirm:
 		return tgbotapi.NewInlineKeyboardMarkup(
-			tgbotapi.NewInlineKeyboardRow(regBtn("🗑 Да, удалить", "delete_yes"), regBtn("↩️ Нет", "delete_no")),
+			tgbotapi.NewInlineKeyboardRow(regBtn("Да, удалить", "delete_yes"), regBtn("Нет", "delete_no")),
 		), true
 
 	case application.KbRegPrefill:
 		return tgbotapi.NewInlineKeyboardMarkup(
-			tgbotapi.NewInlineKeyboardRow(regBtn("✅ Взять", "prefill"), regBtn("✏️ Ввести заново", "retype")),
+			tgbotapi.NewInlineKeyboardRow(regBtn("Взять", "prefill"), regBtn("Ввести заново", "retype")),
 			cancel,
+		), true
+
+	case application.KbRegSubFix:
+		return tgbotapi.NewInlineKeyboardMarkup(
+			tgbotapi.NewInlineKeyboardRow(regBtn("Удалить замену", "del_sub", params)),
+			cancel,
+		), true
+
+	case application.KbRegProfile:
+		btnLabel := "Заполнить в Telegram"
+		if params == "filled" {
+			btnLabel = "Изменить данные"
+		}
+		return tgbotapi.NewInlineKeyboardMarkup(
+			tgbotapi.NewInlineKeyboardRow(regBtn(btnLabel, "prof_edit")),
+			tgbotapi.NewInlineKeyboardRow(regBtn("Привязать Discord", "prof_discord")),
 		), true
 
 	case application.KbRegSoloConfirm:
 		return tgbotapi.NewInlineKeyboardMarkup(
-			tgbotapi.NewInlineKeyboardRow(regBtn("✅ Подтвердить", "confirm"), regBtn("✏️ Исправить", "fix")),
+			tgbotapi.NewInlineKeyboardRow(regBtn("Подтвердить", "confirm"), regBtn("Исправить", "fix")),
 		), true
+
+	case application.KbReportScore:
+		return tgbotapi.NewInlineKeyboardMarkup(
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("2:0", "rep:score:2:0"),
+				tgbotapi.NewInlineKeyboardButtonData("2:1", "rep:score:2:1"),
+			),
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("1:0", "rep:score:1:0"),
+				tgbotapi.NewInlineKeyboardButtonData("3:0", "rep:score:3:0"),
+				tgbotapi.NewInlineKeyboardButtonData("3:1", "rep:score:3:1"),
+				tgbotapi.NewInlineKeyboardButtonData("3:2", "rep:score:3:2"),
+			),
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("❌ Отмена", "rep:cancel"),
+			),
+		), true
+
+	case application.KbReportPhotos:
+		n, _ := strconv.Atoi(params)
+		var rows [][]tgbotapi.InlineKeyboardButton
+		if n > 0 {
+			label := fmt.Sprintf("✅ Отправить отчет (%d)", n)
+			rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData(label, "rep:submit"),
+			))
+			rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("🔄 Сбросить скриншоты", "rep:reset_photos"),
+			))
+		}
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("❌ Отмена", "rep:cancel"),
+		))
+		return tgbotapi.NewInlineKeyboardMarkup(rows...), true
 	}
 	return tgbotapi.InlineKeyboardMarkup{}, false
 }
 
-// fixRows lays out ✏️ 1..n, up to four per row.
+// fixRows lays out 1..n, up to four per row.
 func fixRows(n int) [][]tgbotapi.InlineKeyboardButton {
 	var rows [][]tgbotapi.InlineKeyboardButton
 	var row []tgbotapi.InlineKeyboardButton
 	for i := 1; i <= n; i++ {
-		row = append(row, regBtn(fmt.Sprintf("✏️ %d", i), "fix", strconv.Itoa(i)))
+		row = append(row, regBtn(strconv.Itoa(i), "fix", strconv.Itoa(i)))
 		if len(row) == 4 {
 			rows = append(rows, row)
 			row = nil
@@ -143,4 +198,21 @@ func (b *Bot) handleRegCallback(ctx context.Context, cb *tgbotapi.CallbackQuery)
 	text, kbType := b.service.HandleRegAction(ctx, cb.From.ID, action, arg)
 	b.apiRespond(cb, "", false)
 	b.sendMessage(chatID, text, kbType)
+
+	// Tournament notifications
+	if action == "confirm" && strings.Contains(text, "Команда зарегистрирована") {
+		b.notifyTeamRegistered(ctx, cb.From.ID)
+	}
+	if action == "checkin" && strings.Contains(text, "Check-in") {
+		b.notifyCheckIn(text)
+	}
+	if action == "delete_yes" && strings.Contains(text, "удалена") {
+		b.notifyTeamDeletedFromResponse(text, true)
+	}
+	if action == "del_sub" && strings.Contains(text, "Замена удалена") {
+		b.notifyTournamentChat("ОБНОВЛЕНИЕ СОСТАВА\n\n" + text)
+	}
+	if action == "role" && strings.HasPrefix(kbType, application.KbRegCard) {
+		b.notifyTournamentChat("ОБНОВЛЕНИЕ СОСТАВА\n\n" + text)
+	}
 }

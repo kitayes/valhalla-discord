@@ -32,7 +32,7 @@ func TestTeamRegistrationHappyPath(t *testing.T) {
 	}
 
 	resp, kb := drive(t, svc, 1, "Alpha")
-	if p.FSMState != "team_line_1" || kb != KbRegCancel || !strings.Contains(resp, "1/7") {
+	if p.FSMState != "team_line_1" || kb != KbRegCancel || !strings.Contains(resp, "1/5") {
 		t.Fatalf("after name: state=%q kb=%q resp=%q", p.FSMState, kb, resp)
 	}
 
@@ -45,47 +45,56 @@ func TestTeamRegistrationHappyPath(t *testing.T) {
 	}
 
 	resp, _ = act(t, svc, 1, "role", "Mid")
-	if p.MainRole != "Mid" || p.FSMState != "team_line_2" || !strings.Contains(resp, "2/7") {
+	if p.MainRole != "Mid" || p.FSMState != "team_line_2" || !strings.Contains(resp, "2/5") {
 		t.Fatalf("after captain role: role=%q state=%q resp=%q", p.MainRole, p.FSMState, resp)
 	}
 
-	for slot := 2; slot <= 5; slot++ {
+	for slot := 2; slot <= 4; slot++ {
 		drive(t, svc, 1, fmt.Sprintf("P 22222222%d 2222 10 @p", slot))
 		act(t, svc, 1, "role", "Gold")
 	}
-	if p.FSMState != "team_line_6" || len(repo.members) != 4 {
-		t.Fatalf("after main five: state=%q members=%d", p.FSMState, len(repo.members))
+	// Slot 5 is the last of the main roster
+	drive(t, svc, 1, "P5 222222225 2222 10 @p")
+	resp, kb = act(t, svc, 1, "role", "Gold")
+
+	// Main 5 players complete: should immediately transition to confirmation card without forcing substitutes
+	if p.FSMState != models.StateTeamConfirm || !strings.HasPrefix(kb, KbRegConfirm+":5") || !strings.Contains(resp, "Alpha") || !strings.Contains(resp, "Cap") {
+		t.Fatalf("after main five: state=%q kb=%q resp=%q", p.FSMState, kb, resp)
 	}
-	if m := repo.members[0]; m.GameID != "222222222" || m.Stars != 10 || m.TelegramUsername != "@p" || m.MainRole != "Gold" || m.IsSubstitute {
-		t.Fatalf("teammate row: %+v", m)
+	if len(repo.members) != 4 {
+		t.Fatalf("expected 4 teammates + 1 captain, got %d members", len(repo.members))
 	}
 
-	drive(t, svc, 1, "S 333333333 3333 5")
-	act(t, svc, 1, "role", "Roam")
-	if !repo.members[4].IsSubstitute || p.FSMState != "team_line_7" {
-		t.Fatalf("slot 6: sub=%v state=%q", repo.members[4].IsSubstitute, p.FSMState)
-	}
-
-	resp, kb = act(t, svc, 1, "skip", "")
-	if p.FSMState != models.StateTeamConfirm || !strings.HasPrefix(kb, KbRegConfirm+":6") || !strings.Contains(resp, "Alpha") || !strings.Contains(resp, "Cap") {
-		t.Fatalf("card: state=%q kb=%q resp=%q", p.FSMState, kb, resp)
-	}
-
+	// Captain confirms registration
 	resp, kb = act(t, svc, 1, "confirm", "")
 	if p.FSMState != models.StateIdle || kb != "main_menu" || !strings.Contains(resp, "/checkin") {
 		t.Fatalf("confirm: state=%q kb=%q resp=%q", p.FSMState, kb, resp)
 	}
 }
 
-func TestTeamSkipOnSlotSixGoesToSeven(t *testing.T) {
+func TestAddSubstituteFromConfirmCard(t *testing.T) {
 	svc, repo := newTelegramSvc()
 	team := 10
-	repo.teams[team] = &models.TelegramTeam{ID: team, Name: "A"}
-	p := repo.addPlayer(1, &team, true, "team_line_6")
+	repo.teams[team] = &models.TelegramTeam{ID: team, Name: "Alpha"}
+	p := repo.addPlayer(1, &team, true, models.StateTeamConfirm)
+	for i := 2; i <= 5; i++ {
+		repo.members = append(repo.members, &models.TelegramPlayer{
+			TeamID:   &team,
+			GameID:   fmt.Sprintf("22222222%d", i),
+			MainRole: "Gold",
+		})
+	}
 
-	_, kb := act(t, svc, 1, "skip", "")
-	if p.FSMState != "team_line_7" || kb != KbRegSkip {
-		t.Errorf("state=%q kb=%q, want team_line_7 with skip keyboard", p.FSMState, kb)
+	// Tap "+ Замена" from confirmation card
+	resp, kb := act(t, svc, 1, "sub", "")
+	if p.FSMState != "team_fix_6" || kb != KbRegCancel || !strings.Contains(resp, "Замена 1/2") {
+		t.Fatalf("after sub button: state=%q kb=%q resp=%q", p.FSMState, kb, resp)
+	}
+
+	// Cancel returns back to confirm card
+	resp, kb = act(t, svc, 1, "cancel", "")
+	if p.FSMState != models.StateTeamConfirm || !strings.HasPrefix(kb, KbRegConfirm+":5") {
+		t.Fatalf("after cancel sub: state=%q kb=%q resp=%q", p.FSMState, kb, resp)
 	}
 }
 
@@ -236,7 +245,25 @@ func TestAddSubstituteFromCard(t *testing.T) {
 	}
 }
 
-func TestCancelMidRegistrationKeepsTeam(t *testing.T) {
+func TestCancelOnCaptainSlotDeletesTeam(t *testing.T) {
+	svc, repo := newTelegramSvc()
+	team := 10
+	repo.teams[team] = &models.TelegramTeam{ID: team, Name: "A"}
+	p := repo.addPlayer(1, &team, true, "team_line_1")
+
+	resp, kb := act(t, svc, 1, "cancel", "")
+	if p.FSMState != models.StateIdle || kb != "main_menu" || !strings.Contains(resp, "освобождено") {
+		t.Errorf("state=%q kb=%q resp=%q", p.FSMState, kb, resp)
+	}
+	if _, ok := repo.teams[team]; ok {
+		t.Error("cancel on slot 1 did not delete the team")
+	}
+	if p.TeamID != nil {
+		t.Errorf("captain still attached to team: %v", p.TeamID)
+	}
+}
+
+func TestCancelOnTeammateSlotKeepsTeam(t *testing.T) {
 	svc, repo := newTelegramSvc()
 	team := 10
 	repo.teams[team] = &models.TelegramTeam{ID: team, Name: "A"}
@@ -247,7 +274,10 @@ func TestCancelMidRegistrationKeepsTeam(t *testing.T) {
 		t.Errorf("state=%q kb=%q resp=%q", p.FSMState, kb, resp)
 	}
 	if _, ok := repo.teams[team]; !ok {
-		t.Error("cancel deleted the team")
+		t.Error("cancel on slot 3 deleted the team, want kept")
+	}
+	if p.TeamID == nil {
+		t.Error("captain detached from team, want kept")
 	}
 }
 
@@ -401,6 +431,11 @@ func TestCheckinButtonConfirmsFromAnyState(t *testing.T) {
 	team := 10
 	repo.teams[team] = &models.TelegramTeam{ID: team, Name: "A"}
 	p := repo.addPlayer(1, &team, true, "team_line_3")
+	for i := 2; i <= 5; i++ {
+		repo.members = append(repo.members, &models.TelegramPlayer{
+			ID: i, TeamID: &team, GameNickname: fmt.Sprintf("P%d", i), MainRole: "Mid",
+		})
+	}
 
 	for i := 0; i < 2; i++ {
 		resp, kb := act(t, svc, 1, "checkin", "")
@@ -437,7 +472,7 @@ func TestSuspiciousLineWarnsAndRedoReturnsToLine(t *testing.T) {
 	}
 
 	resp, kb = act(t, svc, 1, "redo", "")
-	if p.FSMState != "team_line_2" || kb != KbRegCancel || !strings.Contains(resp, "2/7") {
+	if p.FSMState != "team_line_2" || kb != KbRegCancel || !strings.Contains(resp, "2/5") {
 		t.Fatalf("redo: state=%q kb=%q resp=%q", p.FSMState, kb, resp)
 	}
 	// The row already written is reused, not duplicated.
@@ -554,7 +589,7 @@ func TestTeamsListMarksDisqualified(t *testing.T) {
 	repo.teams[11] = &models.TelegramTeam{ID: 11, Name: "In", IsCheckedIn: true}
 
 	list := svc.GetTeamsList(context.Background())
-	if !strings.Contains(list, "❌ Out") || !strings.Contains(list, "✅ In") {
+	if !strings.Contains(list, "[ТП] Out") || !strings.Contains(list, "[+] In") {
 		t.Errorf("list = %q", list)
 	}
 }
@@ -566,6 +601,17 @@ func (f fakeProfiles) GetLinkByTelegramID(_ context.Context, tg int64) (*models.
 		return l, nil
 	}
 	return nil, errors.New("no link")
+}
+
+func (f fakeProfiles) UpdateTelegramProfile(_ context.Context, tg int64, nick, gameID, zoneID string, stars int, role string) error {
+	if l, ok := f.byTG[tg]; ok && l != nil {
+		l.GameNickname = nick
+		l.GameID = gameID
+		l.ZoneID = zoneID
+		l.Stars = stars
+		l.MainRole = role
+	}
+	return nil
 }
 
 // A captain the bot already knows (previous tournament, or a linked Discord
@@ -637,3 +683,64 @@ func TestNoPrefillWhenNothingIsKnown(t *testing.T) {
 		t.Errorf("after name kb=%q, want plain line prompt", kb)
 	}
 }
+
+func TestProfileEditFlow(t *testing.T) {
+	svc, repo := newTelegramSvc()
+	tg := int64(42)
+	repo.addPlayer(tg, nil, false, models.StateIdle)
+
+	linked := &models.ProfileLink{DiscordPlayerID: 100}
+	svc.WithProfileLookup(fakeProfiles{byTG: map[int64]*models.ProfileLink{tg: linked}})
+
+	// 1. Start profile edit
+	resp, kb := svc.StartProfileEdit(context.Background(), tg)
+	if kb != KbRegCancel || !strings.Contains(resp, "Отправьте ваши игровые данные") {
+		t.Fatalf("StartProfileEdit: kb=%q resp=%q", kb, resp)
+	}
+	if repo.players[tg].FSMState != models.StateProfileLine {
+		t.Fatalf("state = %q, want %s", repo.players[tg].FSMState, models.StateProfileLine)
+	}
+
+	// 2. Cancel works
+	resp, kb = act(t, svc, tg, "cancel", "")
+	if kb != "main_menu" || repo.players[tg].FSMState != models.StateIdle {
+		t.Fatalf("cancel: kb=%q state=%q", kb, repo.players[tg].FSMState)
+	}
+
+	// 3. Start again, enter line
+	svc.StartProfileEdit(context.Background(), tg)
+	resp, kb = drive(t, svc, tg, "ProPlayer\n12345678 (9999)\n50")
+	if kb != KbRegRoles || !strings.Contains(resp, "ProPlayer") {
+		t.Fatalf("drive line: kb=%q resp=%q", kb, resp)
+	}
+	if repo.players[tg].FSMState != models.StateProfileRole {
+		t.Fatalf("state = %q, want %s", repo.players[tg].FSMState, models.StateProfileRole)
+	}
+
+	// 4. Redo line works
+	resp, kb = act(t, svc, tg, "redo", "")
+	if kb != KbRegCancel || repo.players[tg].FSMState != models.StateProfileLine {
+		t.Fatalf("redo: kb=%q state=%q", kb, repo.players[tg].FSMState)
+	}
+
+	// 5. Enter line again and pick role
+	drive(t, svc, tg, "ProPlayer\n12345678 (9999)\n50")
+	resp, kb = act(t, svc, tg, "role", "Mid")
+	if kb != "main_menu" || !strings.Contains(resp, "Профиль успешно сохранён") {
+		t.Fatalf("pick role: kb=%q resp=%q", kb, resp)
+	}
+	if repo.players[tg].FSMState != models.StateIdle {
+		t.Fatalf("state = %q, want idle", repo.players[tg].FSMState)
+	}
+
+	p := repo.players[tg]
+	if p.GameNickname != "ProPlayer" || p.GameID != "12345678" || p.ZoneID != "9999" || p.Stars != 50 || p.MainRole != "Mid" {
+		t.Fatalf("player in repo = %+v", p)
+	}
+
+	// Check linked profile also updated
+	if linked.GameNickname != "ProPlayer" || linked.MainRole != "Mid" {
+		t.Fatalf("linked profile not updated: %+v", linked)
+	}
+}
+

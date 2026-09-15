@@ -4,6 +4,7 @@ import (
 	"blackwatch/internal/models"
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ type fakeTelegramRepo struct {
 	teams    map[int]*models.TelegramTeam
 	members  []*models.TelegramPlayer // teammates created via CreateTeammate
 	settings map[string]string
+	reports  []models.TelegramMatchReport
 	nextID   int
 }
 
@@ -152,7 +154,32 @@ func (r *fakeTelegramRepo) CreateTeammate(_ context.Context, p *models.TelegramP
 	r.members = append(r.members, p)
 	return nil
 }
-func (r *fakeTelegramRepo) ReleaseTeamMembers(context.Context, int) error { return nil }
+func (r *fakeTelegramRepo) DeleteTeammate(_ context.Context, playerID int) error {
+	for i, m := range r.members {
+		if m.ID == playerID {
+			r.members = append(r.members[:i], r.members[i+1:]...)
+			break
+		}
+	}
+	return nil
+}
+func (r *fakeTelegramRepo) ReleaseTeamMembers(_ context.Context, teamID int) error {
+	var kept []*models.TelegramPlayer
+	for _, m := range r.members {
+		if m.TeamID == nil || *m.TeamID != teamID {
+			kept = append(kept, m)
+		}
+	}
+	r.members = kept
+	for _, p := range r.players {
+		if p.TeamID != nil && *p.TeamID == teamID {
+			p.TeamID = nil
+			p.IsCaptain = false
+			p.FSMState = ""
+		}
+	}
+	return nil
+}
 func (r *fakeTelegramRepo) SetTeamStatus(_ context.Context, id int, st string) error {
 	r.teams[id].Status = st
 	return nil
@@ -182,6 +209,15 @@ func (r *fakeTelegramRepo) GetSetting(_ context.Context, k string) (string, erro
 func (r *fakeTelegramRepo) SetSetting(_ context.Context, k, v string) error {
 	r.settings[k] = v
 	return nil
+}
+func (r *fakeTelegramRepo) CreateMatchReport(_ context.Context, rep *models.TelegramMatchReport) error {
+	rep.ID = r.nextID
+	r.nextID++
+	r.reports = append(r.reports, *rep)
+	return nil
+}
+func (r *fakeTelegramRepo) GetRecentMatchReports(_ context.Context, limit int) ([]models.TelegramMatchReport, error) {
+	return r.reports, nil
 }
 
 func newTelegramSvc() (*TelegramServiceImpl, *fakeTelegramRepo) {
@@ -282,6 +318,11 @@ func TestCheckInReplyStatesResult(t *testing.T) {
 	team := 10
 	repo.teams[team] = &models.TelegramTeam{ID: team, Name: "A"}
 	repo.addPlayer(1, &team, true, models.StateIdle)
+	for i := 2; i <= 5; i++ {
+		repo.members = append(repo.members, &models.TelegramPlayer{
+			ID: i, TeamID: &team, GameNickname: fmt.Sprintf("P%d", i), MainRole: "Mid",
+		})
+	}
 
 	on := svc.ToggleCheckIn(context.Background(), 1)
 	if !strings.Contains(on, "подтверждён") || !strings.Contains(on, "A") {
@@ -290,6 +331,38 @@ func TestCheckInReplyStatesResult(t *testing.T) {
 	off := svc.ToggleCheckIn(context.Background(), 1)
 	if !strings.Contains(off, "снят") {
 		t.Errorf("second /checkin = %q, want notice that check-in was removed", off)
+	}
+}
+
+func TestCheckInRefusedOnIncompleteTeam(t *testing.T) {
+	svc, repo := newTelegramSvc()
+	team := 10
+	repo.teams[team] = &models.TelegramTeam{ID: team, Name: "A"}
+	repo.addPlayer(1, &team, true, models.StateIdle)
+
+	resp := svc.ToggleCheckIn(context.Background(), 1)
+	if !strings.Contains(resp, "невозможен") || !strings.Contains(resp, "1 из 5") {
+		t.Errorf("ToggleCheckIn on incomplete team = %q, want refusal", resp)
+	}
+	if repo.teams[team].IsCheckedIn {
+		t.Errorf("team was checked in despite incomplete roster")
+	}
+
+	resp, kb := svc.HandleRegAction(context.Background(), 1, "checkin", "")
+	if !strings.Contains(resp, "невозможен") || !strings.Contains(resp, "1 из 5") || kb != KbNone {
+		t.Errorf("confirmCheckIn on incomplete team = %q kb = %q, want refusal", resp, kb)
+	}
+
+	// Add players up to 5
+	for i := 2; i <= 5; i++ {
+		repo.members = append(repo.members, &models.TelegramPlayer{
+			ID: i, TeamID: &team, GameNickname: fmt.Sprintf("P%d", i), MainRole: "Mid",
+		})
+	}
+
+	resp = svc.ToggleCheckIn(context.Background(), 1)
+	if !strings.Contains(resp, "подтверждён") {
+		t.Errorf("ToggleCheckIn with 5 players = %q, want success", resp)
 	}
 }
 
@@ -308,3 +381,73 @@ func TestTeamNameLengthIsValidated(t *testing.T) {
 		t.Errorf("state = %q teams = %d, want still waiting and no team created", p.FSMState, len(repo.teams))
 	}
 }
+
+func TestGetCheckInStatus(t *testing.T) {
+	svc, repo := newTelegramSvc()
+
+	// Empty state
+	if got := svc.GetCheckInStatus(context.Background()); got != "Команд пока нет." {
+		t.Errorf("GetCheckInStatus() on empty repo = %q, want %q", got, "Команд пока нет.")
+	}
+
+	// 1. Checked-in team (5 players)
+	t1 := 1
+	repo.teams[t1] = &models.TelegramTeam{ID: t1, Name: "Navi", IsCheckedIn: true}
+	c1 := repo.addPlayer(101, &t1, true, models.StateIdle)
+	c1.GameNickname = "Dendi"
+	c1.TelegramUsername = "dendi_tg"
+	for i := 2; i <= 5; i++ {
+		repo.members = append(repo.members, &models.TelegramPlayer{
+			ID: 100 + i, TeamID: &t1, GameNickname: fmt.Sprintf("NaviP%d", i),
+		})
+	}
+
+	// 2. Pending team (5 players)
+	t2 := 2
+	repo.teams[t2] = &models.TelegramTeam{ID: t2, Name: "VirtusPro", IsCheckedIn: false}
+	c2 := repo.addPlayer(201, &t2, true, models.StateIdle)
+	c2.GameNickname = "Solo"
+	c2.TelegramUsername = "solo_322"
+	for i := 2; i <= 5; i++ {
+		repo.members = append(repo.members, &models.TelegramPlayer{
+			ID: 200 + i, TeamID: &t2, GameNickname: fmt.Sprintf("VPP%d", i),
+		})
+	}
+
+	// 3. Incomplete team (1 player)
+	t3 := 3
+	repo.teams[t3] = &models.TelegramTeam{ID: t3, Name: "SoloSquad", IsCheckedIn: false}
+	c3 := repo.addPlayer(301, &t3, true, models.StateIdle)
+	c3.GameNickname = "Lonely"
+	c3.TelegramUsername = "lonely_guy"
+
+	// 4. Disqualified team
+	t4 := 4
+	repo.teams[t4] = &models.TelegramTeam{ID: t4, Name: "Cheaters", Status: models.TeamStatusDisqualified}
+	repo.addPlayer(401, &t4, true, models.StateIdle)
+
+	dashboard := svc.GetCheckInStatus(context.Background())
+
+	// Assert dashboard contents
+	expectedSnippets := []string{
+		"Дашборд Check-in:",
+		"Готовы к игре: 1 из 2 (50%)",
+		"Ожидают подтверждения: 1",
+		"Не укомплектованы: 1",
+		"Подтвердили участие (1):",
+		"[+] Navi — Кап: Dendi (@dendi_tg) (5 чел.)",
+		"Не подтвердили (1):",
+		"[-] VirtusPro — Кап: Solo (@solo_322) (5 чел.)",
+		"Неполный состав (1):",
+		"[!] SoloSquad — Кап: Lonely (@lonely_guy) (состав: 1/5)",
+		"Дисквалифицированы (1):",
+		"[ТП] Cheaters",
+	}
+
+	for _, snippet := range expectedSnippets {
+		if !strings.Contains(dashboard, snippet) {
+			t.Errorf("GetCheckInStatus() missing snippet %q\nFull output:\n%s", snippet, dashboard)
+		}
+	}
+}
+

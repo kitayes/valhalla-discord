@@ -43,7 +43,8 @@ type Config struct {
 	ClanTagEnabled    bool   `env:"CLAN_TAG_ENABLED" envDefault:"false"`
 	GuildID           string `env:"GUILD_ID" envDefault:""`
 	RefereeRoleID     string `env:"REFEREE_ROLE_ID" envDefault:""`
-	TelegramChannelID string `env:"TELEGRAM_CHANNEL_ID" envDefault:""`
+	TelegramChannelID        string `env:"TELEGRAM_CHANNEL_ID" envDefault:""`
+	TelegramTournamentChatID string `env:"TELEGRAM_TOURNAMENT_CHAT_ID" envDefault:""`
 	// TournamentTZ is the IANA zone /set_tourney reads its date in and the
 	// check-in schedule is printed in ("Asia/Almaty"). Empty means the
 	// server's local zone, which on a UTC host is five hours off for everyone.

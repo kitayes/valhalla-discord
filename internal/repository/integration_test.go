@@ -1299,3 +1299,36 @@ func TestIntegrationTeamStatusRoundTrip(t *testing.T) {
 		t.Error("team missing from GetAllTeams")
 	}
 }
+
+func TestIntegrationNullableTelegramPlayer(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	repo := NewTelegramPostgres(db)
+
+	tgID := int64(999888777)
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DELETE FROM telegram_players WHERE telegram_id = $1`, tgID)
+	})
+
+	// Create fresh player just like /start does - game_nickname, game_id, zone_id, etc. are NULL
+	p := &models.TelegramPlayer{
+		TelegramID:       &tgID,
+		TelegramUsername: "test_null_scan",
+		FirstName:        "TestNull",
+	}
+	if err := repo.CreateOrUpdatePlayer(ctx, p); err != nil {
+		t.Fatalf("CreateOrUpdatePlayer: %v", err)
+	}
+
+	got, err := repo.GetPlayerByTelegramID(ctx, tgID)
+	if err != nil {
+		t.Fatalf("GetPlayerByTelegramID with NULL fields failed: %v", err)
+	}
+	if got == nil {
+		t.Fatal("GetPlayerByTelegramID returned nil player")
+	}
+	if got.GameNickname != "" || got.GameID != "" || got.ZoneID != "" || got.Stars != 0 || got.MainRole != "" {
+		t.Errorf("expected zero values for unset fields, got nick=%q id=%q zone=%q stars=%d role=%q",
+			got.GameNickname, got.GameID, got.ZoneID, got.Stars, got.MainRole)
+	}
+}

@@ -6,6 +6,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
+
+	"github.com/lib/pq"
 )
 
 type TelegramPostgres struct {
@@ -28,11 +31,25 @@ func (r *TelegramPostgres) CreateOrUpdatePlayer(ctx context.Context, p *models.T
 	return err
 }
 
+const telegramPlayerSelectCols = `
+	id, telegram_id,
+	COALESCE(telegram_username, ''),
+	COALESCE(first_name, ''),
+	COALESCE(game_nickname, ''),
+	COALESCE(game_id, ''),
+	COALESCE(zone_id, ''),
+	COALESCE(stars, 0),
+	COALESCE(main_role, ''),
+	COALESCE(is_captain, FALSE),
+	COALESCE(is_substitute, FALSE),
+	COALESCE(fsm_state, ''),
+	team_id
+`
+
 func (r *TelegramPostgres) GetPlayerByTelegramID(ctx context.Context, tgID int64) (*models.TelegramPlayer, error) {
 	var p models.TelegramPlayer
 	err := r.db.QueryRowContext(ctx, `
-		SELECT id, telegram_id, telegram_username, first_name, game_nickname, game_id, zone_id,
-			   stars, main_role, is_captain, is_substitute, fsm_state, team_id
+		SELECT `+telegramPlayerSelectCols+`
 		FROM telegram_players WHERE telegram_id = $1
 	`, tgID).Scan(
 		&p.ID, &p.TelegramID, &p.TelegramUsername, &p.FirstName, &p.GameNickname, &p.GameID, &p.ZoneID,
@@ -94,7 +111,7 @@ func (r *TelegramPostgres) CreateTeam(ctx context.Context, name string) (*models
 
 func (r *TelegramPostgres) GetTeamByID(ctx context.Context, id int) (*models.TelegramTeam, error) {
 	var t models.TelegramTeam
-	err := r.db.QueryRowContext(ctx, `SELECT id, name, is_checked_in, status FROM telegram_teams WHERE id = $1`, id).Scan(&t.ID, &t.Name, &t.IsCheckedIn, &t.Status)
+	err := r.db.QueryRowContext(ctx, `SELECT id, name, COALESCE(is_checked_in, FALSE), COALESCE(status, 'active') FROM telegram_teams WHERE id = $1`, id).Scan(&t.ID, &t.Name, &t.IsCheckedIn, &t.Status)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +120,7 @@ func (r *TelegramPostgres) GetTeamByID(ctx context.Context, id int) (*models.Tel
 
 func (r *TelegramPostgres) GetTeamByName(ctx context.Context, name string) (*models.TelegramTeam, error) {
 	var t models.TelegramTeam
-	err := r.db.QueryRowContext(ctx, `SELECT id, name, is_checked_in, status FROM telegram_teams WHERE name = $1`, name).Scan(&t.ID, &t.Name, &t.IsCheckedIn, &t.Status)
+	err := r.db.QueryRowContext(ctx, `SELECT id, name, COALESCE(is_checked_in, FALSE), COALESCE(status, 'active') FROM telegram_teams WHERE name = $1`, name).Scan(&t.ID, &t.Name, &t.IsCheckedIn, &t.Status)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +135,7 @@ func (r *TelegramPostgres) DeleteTeam(ctx context.Context, id int) error {
 
 func (r *TelegramPostgres) GetAllTeams(ctx context.Context) ([]models.TelegramTeam, error) {
 	query := `
-		SELECT t.id, t.name, t.is_checked_in, t.status,
+		SELECT t.id, t.name, COALESCE(t.is_checked_in, FALSE), COALESCE(t.status, 'active'),
 		       p.id, p.telegram_id, p.telegram_username, p.first_name, 
 		       p.game_nickname, p.game_id, p.zone_id, p.stars, p.main_role,
 		       p.is_captain, p.is_substitute, p.fsm_state, p.team_id
@@ -203,8 +220,7 @@ func (r *TelegramPostgres) GetAllTeams(ctx context.Context) ([]models.TelegramTe
 
 func (r *TelegramPostgres) GetTeamMembers(ctx context.Context, teamID int) ([]models.TelegramPlayer, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, telegram_id, telegram_username, first_name, game_nickname, game_id, zone_id,
-			   stars, main_role, is_captain, is_substitute, fsm_state, team_id
+		SELECT `+telegramPlayerSelectCols+`
 		FROM telegram_players WHERE team_id = $1 ORDER BY id
 	`, teamID)
 	if err != nil {
@@ -235,6 +251,12 @@ func (r *TelegramPostgres) CreateTeammate(ctx context.Context, p *models.Telegra
 			(team_id, game_nickname, game_id, zone_id, stars, main_role, telegram_username, is_substitute)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`, p.TeamID, p.GameNickname, p.GameID, p.ZoneID, p.Stars, p.MainRole, p.TelegramUsername, p.IsSubstitute)
+	return err
+}
+
+// DeleteTeammate deletes a teammate row by ID, ensuring captains cannot be accidentally deleted.
+func (r *TelegramPostgres) DeleteTeammate(ctx context.Context, playerID int) error {
+	_, err := r.db.ExecContext(ctx, "DELETE FROM telegram_players WHERE id = $1 AND is_captain = false", playerID)
 	return err
 }
 
@@ -277,8 +299,7 @@ func (r *TelegramPostgres) SetTeamStatus(ctx context.Context, teamID int, status
 
 func (r *TelegramPostgres) GetAllCaptains(ctx context.Context) ([]models.TelegramPlayer, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, telegram_id, telegram_username, first_name, game_nickname, game_id, zone_id,
-			   stars, main_role, is_captain, is_substitute, fsm_state, team_id
+		SELECT `+telegramPlayerSelectCols+`
 		FROM telegram_players WHERE is_captain = TRUE AND telegram_id IS NOT NULL
 	`)
 	if err != nil {
@@ -303,8 +324,7 @@ func (r *TelegramPostgres) GetAllCaptains(ctx context.Context) ([]models.Telegra
 
 func (r *TelegramPostgres) GetSoloPlayers(ctx context.Context) ([]models.TelegramPlayer, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, telegram_id, telegram_username, first_name, game_nickname, game_id, zone_id,
-			   stars, main_role, is_captain, is_substitute, fsm_state, team_id
+		SELECT `+telegramPlayerSelectCols+`
 		FROM telegram_players WHERE team_id IS NULL AND main_role != ''
 	`)
 	if err != nil {
@@ -346,8 +366,7 @@ func (r *TelegramPostgres) SetSetting(ctx context.Context, key, value string) er
 
 func (r *TelegramPostgres) FindByGameID(ctx context.Context, gameID string) ([]models.TelegramPlayer, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, telegram_id, telegram_username, first_name, game_nickname, game_id, zone_id,
-			   stars, main_role, is_captain, is_substitute, fsm_state, team_id
+		SELECT `+telegramPlayerSelectCols+`
 		FROM telegram_players WHERE game_id = $1 ORDER BY id
 	`, gameID)
 	if err != nil {
@@ -369,3 +388,68 @@ func (r *TelegramPostgres) FindByGameID(ctx context.Context, gameID string) ([]m
 	}
 	return players, nil
 }
+
+func (r *TelegramPostgres) CreateMatchReport(ctx context.Context, report *models.TelegramMatchReport) error {
+	var id int
+	var createdAt time.Time
+	err := r.db.QueryRowContext(ctx, `
+		INSERT INTO telegram_match_reports
+			(reporter_telegram_id, winner_team_id, loser_team_id, score, photo_file_ids)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id, created_at
+	`, report.ReporterTelegramID, report.WinnerTeamID, report.LoserTeamID, report.Score, pq.Array(report.PhotoFileIDs)).Scan(&id, &createdAt)
+	if err != nil {
+		return err
+	}
+	report.ID = id
+	report.CreatedAt = createdAt
+	return nil
+}
+
+func (r *TelegramPostgres) GetRecentMatchReports(ctx context.Context, limit int) ([]models.TelegramMatchReport, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT
+			mr.id,
+			mr.reporter_telegram_id,
+			mr.winner_team_id,
+			COALESCE(wt.name, ''),
+			mr.loser_team_id,
+			COALESCE(lt.name, ''),
+			mr.score,
+			mr.photo_file_ids,
+			mr.created_at
+		FROM telegram_match_reports mr
+		LEFT JOIN telegram_teams wt ON mr.winner_team_id = wt.id
+		LEFT JOIN telegram_teams lt ON mr.loser_team_id = lt.id
+		ORDER BY mr.id DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var reports []models.TelegramMatchReport
+	for rows.Next() {
+		var rep models.TelegramMatchReport
+		if err := rows.Scan(
+			&rep.ID,
+			&rep.ReporterTelegramID,
+			&rep.WinnerTeamID,
+			&rep.WinnerTeamName,
+			&rep.LoserTeamID,
+			&rep.LoserTeamName,
+			&rep.Score,
+			pq.Array(&rep.PhotoFileIDs),
+			&rep.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan match report: %w", err)
+		}
+		reports = append(reports, rep)
+	}
+	return reports, rows.Err()
+}
+

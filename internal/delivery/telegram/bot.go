@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -28,9 +29,15 @@ type Bot struct {
 	bettingBot         *BettingBot
 	logger             application.Logger
 	adminIDs           map[int64]struct{}
+	// tournamentChatID is the Telegram chat/channel where tournament events
+	// (team registrations, check-ins, deletions) are posted. Empty = disabled.
+	tournamentChatID string
 	// location is the zone /set_tourney dates are read in and schedule times
 	// are printed in.
 	location *time.Location
+
+	photoTimers   map[int64]*time.Timer
+	photoTimersMu sync.Mutex
 
 	// Tournament time each scheduled stage last fired for. Only touched by the
 	// single background worker goroutine.
@@ -38,7 +45,7 @@ type Bot struct {
 	disqualifiedFor time.Time
 }
 
-func NewBot(token string, adminIDs []int64, service application.TelegramService, profileLinkService application.ProfileLinkService, bettingService *application.BettingService, telegramChannelID string, bets BetSettings, location *time.Location, logger application.Logger) (*Bot, error) {
+func NewBot(token string, adminIDs []int64, service application.TelegramService, profileLinkService application.ProfileLinkService, bettingService *application.BettingService, telegramChannelID string, tournamentChatID string, bets BetSettings, location *time.Location, logger application.Logger) (*Bot, error) {
 	bot, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create telegram bot: %w", err)
@@ -60,13 +67,19 @@ func NewBot(token string, adminIDs []int64, service application.TelegramService,
 		profileLinkService: profileLinkService,
 		logger:             logger,
 		adminIDs:           admins,
+		tournamentChatID:   tournamentChatID,
 		location:           location,
+		photoTimers:        make(map[int64]*time.Timer),
 	}
 
 	// Initialize betting extension
 	if bettingService != nil && telegramChannelID != "" {
 		b.bettingBot = NewBettingBot(b, bettingService, telegramChannelID, bets, logger)
 		logger.Info("Telegram betting engine initialized for channel %s", telegramChannelID)
+	}
+
+	if tournamentChatID != "" {
+		logger.Info("Tournament notifications configured for chat %s", tournamentChatID)
 	}
 
 	return b, nil
@@ -112,6 +125,21 @@ func (b *Bot) handleCallbackQuery(parent context.Context, callback *tgbotapi.Cal
 	ctx, cancel := context.WithTimeout(parent, updateTimeout)
 	defer cancel()
 
+	if callback.Data == "admin_ping_debtors" {
+		if !b.isAdmin(callback.From.ID) {
+			b.apiRespond(callback, "Только для администраторов.", true)
+			return
+		}
+		b.apiRespond(callback, "Запуск оповещения должников...", false)
+		b.handlePingDebtors(ctx, callback.From.ID, "")
+		return
+	}
+
+	if strings.HasPrefix(callback.Data, "rep:") {
+		b.handleReportCallback(ctx, callback)
+		return
+	}
+
 	if strings.HasPrefix(callback.Data, callbackRegPrefix+callbackSep) {
 		b.handleRegCallback(ctx, callback)
 		return
@@ -128,6 +156,14 @@ func (b *Bot) handleUpdate(parent context.Context, msg *tgbotapi.Message) {
 	defer cancel()
 
 	if !servesChat(msg.Chat) {
+		if msg.Chat != nil {
+			b.logger.Info("telegram: group/channel update: chat_id=%d title=%q text=%q", msg.Chat.ID, msg.Chat.Title, msg.Text)
+			if strings.HasPrefix(msg.Text, "/id") || strings.HasPrefix(msg.Text, "/chatid") {
+				reply := fmt.Sprintf("ID этого чата: %d\nНазвание: %s", msg.Chat.ID, msg.Chat.Title)
+				sendMsg := tgbotapi.NewMessage(msg.Chat.ID, reply)
+				_, _ = b.bot.Send(sendMsg)
+			}
+		}
 		return
 	}
 	chatID := msg.Chat.ID
@@ -148,11 +184,17 @@ func (b *Bot) handleUpdate(parent context.Context, msg *tgbotapi.Message) {
 	}
 
 	if b.isAdmin(chatID) && (text == "/admin" ||
-		text == "/list_teams" || strings.HasPrefix(text, "/check_team") ||
+		text == "/list_teams" || text == "/checkin_status" || text == "/checkins" ||
+		strings.HasPrefix(text, "/check_team") ||
 		text == "/export" || text == "/list_solo" || text == "/export_solo" ||
 		strings.HasPrefix(text, "/broadcast") || strings.HasPrefix(text, "/set_tourney") ||
 		text == "/close_reg" || text == "/open_reg" || strings.HasPrefix(text, "/del_team") ||
-		strings.HasPrefix(text, "/reinstate") || strings.HasPrefix(text, "/reset_user")) {
+		strings.HasPrefix(text, "/reinstate") || strings.HasPrefix(text, "/reset_user") ||
+		text == "/ping_debtors" || strings.HasPrefix(text, "/ping_debtors ") ||
+		text == "/ping" || strings.HasPrefix(text, "/ping ") ||
+		text == "/remind_debtors" || strings.HasPrefix(text, "/remind_debtors ") ||
+		text == "/remind_checkin" || strings.HasPrefix(text, "/remind_checkin ") ||
+		text == "/reports") {
 
 		b.handleAdminCommand(ctx, chatID, text)
 		return
@@ -274,9 +316,15 @@ func (b *Bot) broadcastCheckInReminder(ctx context.Context) {
 	for _, team := range teams {
 		for _, p := range team.Players {
 			if p.IsCaptain && p.TelegramID != nil {
-				msg := fmt.Sprintf("ВНИМАНИЕ, Капитан!\nВаша команда '%s' не прошла Check-in.\n\nНажмите кнопку ниже до %s, иначе — ТЕХНИЧЕСКОЕ ПОРАЖЕНИЕ.",
-					team.Name, tTime.In(b.location).Add(technicalDefeatGrace).Format("15:04"))
-				b.sendMessage(*p.TelegramID, msg, application.KbRegCheckin)
+				if len(team.Players) < application.MainRosterSlots {
+					msg := fmt.Sprintf("ВНИМАНИЕ, Капитан!\nВ вашей команде '%s' не хватает игроков (%d из %d).\n\nСрочно доберите состав через /my_team до %s, иначе — ТЕХНИЧЕСКОЕ ПОРАЖЕНИЕ.",
+						team.Name, len(team.Players), application.MainRosterSlots, tTime.In(b.location).Add(technicalDefeatGrace).Format("15:04"))
+					b.sendMessage(*p.TelegramID, msg, "empty")
+				} else {
+					msg := fmt.Sprintf("ВНИМАНИЕ, Капитан!\nВаша команда '%s' не прошла Check-in.\n\nНажмите кнопку ниже до %s, иначе — ТЕХНИЧЕСКОЕ ПОРАЖЕНИЕ.",
+						team.Name, tTime.In(b.location).Add(technicalDefeatGrace).Format("15:04"))
+					b.sendMessage(*p.TelegramID, msg, application.KbRegCheckin)
+				}
 			}
 		}
 	}
@@ -308,6 +356,7 @@ func (b *Bot) processTechnicalDefeat(ctx context.Context) {
 	for adminID := range b.adminIDs {
 		b.sendMessage(adminID, report.String(), "empty")
 	}
+	b.notifyTechnicalDefeats(report.String())
 }
 
 func (b *Bot) BettingBot() *BettingBot {

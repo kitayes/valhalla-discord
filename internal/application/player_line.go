@@ -15,15 +15,27 @@ type playerLine struct {
 	Contact string
 }
 
-// parsePlayerLine reads a roster line. Separators are spaces and/or commas;
+var knownLabels = map[string]bool{
+	"ник:": true, "nick:": true,
+	"id:": true, "айди:": true, "gameid:": true, "game_id:": true,
+	"zone:": true, "zoneid:": true, "zone_id:": true, "зона:": true,
+	"звёзды:": true, "звезды:": true, "звёзд:": true, "звезд:": true, "stars:": true,
+	"tg:": true, "telegram:": true, "контакт:": true,
+}
+
+// parsePlayerLine reads a roster line. Separators are spaces, newlines and/or commas;
 // the nick is everything before the first numeric token and may contain
-// spaces; the zone may be written as "(1234)"; one optional "@contact" token
+// spaces; the zone may be written as "(1234)" or "12345(6789)"; one optional "@contact" token
 // may appear anywhere.
 //
 // The second value is a user-facing Russian sentence naming what was wrong,
 // or "" on success. It is a string rather than an error on purpose: it is
 // copy for the chat, not a failure to log.
 func parsePlayerLine(s string) (playerLine, string) {
+	// Pre-process s to handle attached parentheses such as "5374343843(6732)" -> "5374343843 (6732)"
+	s = strings.ReplaceAll(s, "(", " (")
+	s = strings.ReplaceAll(s, ")", ") ")
+
 	fields := strings.FieldsFunc(s, func(r rune) bool { return r == ' ' || r == ',' || r == '\t' || r == '\n' })
 
 	var line playerLine
@@ -34,6 +46,9 @@ func parsePlayerLine(s string) (playerLine, string) {
 				return playerLine{}, "Контакт должен быть один"
 			}
 			line.Contact = f
+			continue
+		}
+		if knownLabels[strings.ToLower(f)] {
 			continue
 		}
 		tokens = append(tokens, f)
@@ -97,10 +112,10 @@ func isDigits(s string) bool {
 func plausibilityWarnings(line playerLine) []string {
 	var out []string
 	if n := len(line.GameID); n < 8 || n > 10 {
-		out = append(out, fmt.Sprintf("⚠️ GameID %s: обычно 8–10 цифр", line.GameID))
+		out = append(out, fmt.Sprintf("Внимание: GameID %s: обычно 8–10 цифр", line.GameID))
 	}
 	if n := len(line.ZoneID); n < 4 || n > 5 {
-		out = append(out, fmt.Sprintf("⚠️ Zone ID %s: обычно 4–5 цифр", line.ZoneID))
+		out = append(out, fmt.Sprintf("Внимание: Zone ID %s: обычно 4–5 цифр", line.ZoneID))
 	}
 	return out
 }

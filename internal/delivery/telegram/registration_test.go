@@ -50,12 +50,16 @@ func TestRegKeyboards(t *testing.T) {
 		{application.KbRegCancel, []string{"reg:cancel"}},
 		{application.KbRegSkip, []string{"reg:skip", "reg:cancel"}},
 		{application.KbRegRoles, []string{"reg:role:Gold", "reg:role:Exp", "reg:role:Mid", "reg:role:Roam", "reg:role:Jungle", "reg:redo", "reg:cancel"}},
-		{application.KbRegConfirm + ":3", []string{"reg:confirm", "reg:fix:1", "reg:fix:2", "reg:fix:3", "reg:delete"}},
+		{application.KbRegConfirm + ":3", []string{"reg:confirm", "reg:fix:1", "reg:fix:2", "reg:fix:3", "reg:sub", "reg:delete"}},
+		{application.KbRegConfirm + ":7", []string{"reg:confirm", "reg:fix:1", "reg:fix:2", "reg:fix:3", "reg:fix:4", "reg:fix:5", "reg:fix:6", "reg:fix:7", "reg:delete"}},
 		{application.KbRegCard + ":2:sub", []string{"reg:fix:1", "reg:fix:2", "reg:sub", "reg:delete"}},
 		{application.KbRegCard + ":7:", []string{"reg:fix:1", "reg:fix:2", "reg:fix:3", "reg:fix:4", "reg:fix:5", "reg:fix:6", "reg:fix:7", "reg:delete"}},
 		{application.KbRegSoloConfirm, []string{"reg:confirm", "reg:fix"}},
 		{application.KbRegDeleteConfirm, []string{"reg:delete_yes", "reg:delete_no"}},
 		{application.KbRegPrefill, []string{"reg:prefill", "reg:retype", "reg:cancel"}},
+		{application.KbRegSubFix + ":6", []string{"reg:del_sub:6", "reg:cancel"}},
+		{application.KbRegProfile + ":empty", []string{"reg:prof_edit", "reg:prof_discord"}},
+		{application.KbRegProfile + ":filled", []string{"reg:prof_edit", "reg:prof_discord"}},
 	}
 	for _, tc := range cases {
 		kb, ok := regKeyboard(tc.kbType)

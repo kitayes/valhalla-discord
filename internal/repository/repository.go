@@ -74,6 +74,7 @@ type Telegram interface {
 
 	GetTeamMembers(ctx context.Context, teamID int) ([]models.TelegramPlayer, error)
 	CreateTeammate(ctx context.Context, p *models.TelegramPlayer) error
+	DeleteTeammate(ctx context.Context, playerID int) error
 	ReleaseTeamMembers(ctx context.Context, teamID int) error
 	// FindByGameID returns every row registered under this in-game id.
 	FindByGameID(ctx context.Context, gameID string) ([]models.TelegramPlayer, error)
@@ -85,6 +86,9 @@ type Telegram interface {
 
 	GetSetting(ctx context.Context, key string) (string, error)
 	SetSetting(ctx context.Context, key, value string) error
+
+	CreateMatchReport(ctx context.Context, report *models.TelegramMatchReport) error
+	GetRecentMatchReports(ctx context.Context, limit int) ([]models.TelegramMatchReport, error)
 }
 
 type LobbyMatch interface {

@@ -1,13 +1,21 @@
 package models
 
+import "time"
+
 const (
 	StateIdle            = ""
 	StateWaitingTeamName = "waiting_team_name"
-	StateWaitingReport   = "waiting_report"
+	StateWaitingReport   = "waiting_report" // legacy report state
+	StateReportOpponent  = "report_opponent"
+	StateReportScore     = "report_score"
+	StateReportScreenshots = "report_screenshots"
 
 	StateSoloLine    = "solo_line"
 	StateSoloRole    = "solo_role"
 	StateSoloConfirm = "solo_confirm"
+
+	StateProfileLine = "profile_line"
+	StateProfileRole = "profile_role"
 
 	StateTeamConfirm = "team_confirm"
 	// Slot-bearing team states are "<prefix><slot>", e.g. "team_line_3".
@@ -49,3 +57,16 @@ type TelegramPlayer struct {
 	FSMState         string `json:"fsm_state"`
 	TeamID           *int   `json:"team_id"`
 }
+
+type TelegramMatchReport struct {
+	ID                 int       `json:"id"`
+	ReporterTelegramID int64     `json:"reporter_telegram_id"`
+	WinnerTeamID       int       `json:"winner_team_id"`
+	WinnerTeamName     string    `json:"winner_team_name,omitempty"`
+	LoserTeamID        int       `json:"loser_team_id"`
+	LoserTeamName      string    `json:"loser_team_name,omitempty"`
+	Score              string    `json:"score"`
+	PhotoFileIDs       []string  `json:"photo_file_ids"`
+	CreatedAt          time.Time `json:"created_at"`
+}
+

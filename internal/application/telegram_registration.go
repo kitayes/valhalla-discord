@@ -14,15 +14,17 @@ const (
 	KbRegCancel        = "reg_cancel"
 	KbRegRoles         = "reg_roles"
 	KbRegSkip          = "reg_skip"
-	KbRegConfirm       = "reg_confirm"        // "reg_confirm:<n>": ✏️ 1..n, ✅, 🗑
-	KbRegCard          = "reg_card"           // "reg_card:<n>:<add>": ✏️ 1..n, 🗑, ➕ when add != ""
-	KbRegSoloConfirm   = "reg_solo_confirm"   // ✅, ✏️
-	KbRegCheckin       = "reg_checkin"        // ✅ Подтвердить участие (in the reminder)
-	KbRegDeleteConfirm = "reg_delete_confirm" // 🗑 Да, удалить / ↩️ Нет
-	KbRegPrefill       = "reg_prefill"        // ✅ Взять / ✏️ Ввести заново / ❌ Отмена
+	KbRegConfirm       = "reg_confirm"        // "reg_confirm:<n>": 1..n, confirm, delete
+	KbRegCard          = "reg_card"           // "reg_card:<n>:<add>": 1..n, delete, add when add != ""
+	KbRegSoloConfirm   = "reg_solo_confirm"   // confirm, fix
+	KbRegCheckin       = "reg_checkin"        // confirm participation (in the reminder)
+	KbRegDeleteConfirm = "reg_delete_confirm" // delete confirm / cancel
+	KbRegPrefill       = "reg_prefill"        // take / retype / cancel
+	KbRegSubFix        = "reg_sub_fix"        // delete sub / cancel
+	KbRegProfile       = "reg_profile"        // edit in tg / link discord
 )
 
-const playerLineFormat = "Формат: Ник GameID ZoneID Звёзды"
+const playerLineFormat = "Формат:\nНик\nGameID (ZoneID)\nЗвёзды"
 
 // registrationRoles is the whitelist for reg:role:<x>. Callback data is
 // client-supplied, so anything else is refused.
@@ -39,13 +41,13 @@ func validRole(s string) bool {
 
 const (
 	msgStaleButton = "Эта кнопка больше не действует."
-	msgLegacyReset = "Регистрация обновилась, старый ввод сброшен. Начните заново: /reg_team или /reg_solo"
-	msgPickRole    = "Выберите роль кнопкой 👆"
+	msgLegacyReset = "Регистрация обновилась, старый ввод сброшен. Начните заново: /reg_team"
+	msgPickRole    = "Выберите роль кнопкой:"
 )
 
 // isRegistrationState reports whether the state belongs to the new flow.
 func isRegistrationState(st string) bool {
-	return st == models.StateWaitingTeamName || strings.HasPrefix(st, "team_") || strings.HasPrefix(st, "solo_")
+	return st == models.StateWaitingTeamName || strings.HasPrefix(st, "team_") || strings.HasPrefix(st, "solo_") || strings.HasPrefix(st, "profile_")
 }
 
 // isLegacyState matches states from the pre-inline flow that may still sit
@@ -95,29 +97,37 @@ func (s *TelegramServiceImpl) setState(ctx context.Context, tgID int64, st strin
 func slotLabel(slot int) string {
 	switch {
 	case slot == 1:
-		return fmt.Sprintf("👑 Игрок %d/%d (капитан)", slot, maxTeamSlots)
+		return fmt.Sprintf("Игрок %d/%d (капитан)", slot, mainRosterSlots)
 	case slot >= firstSubstituteSlot:
-		return fmt.Sprintf("🔁 Замена %d/%d", slot, maxTeamSlots)
+		subIndex := slot - firstSubstituteSlot + 1
+		maxSubs := maxTeamSlots - firstSubstituteSlot + 1
+		return fmt.Sprintf("Замена %d/%d", subIndex, maxSubs)
 	default:
-		return fmt.Sprintf("👤 Игрок %d/%d", slot, maxTeamSlots)
+		return fmt.Sprintf("Игрок %d/%d", slot, mainRosterSlots)
 	}
 }
 
 // linePrompt asks for slot N's line. During initial registration substitutes
 // get a skip button; everywhere else the only button is cancel.
 func linePrompt(slot int, initial bool) (string, string) {
-	format := "Отправь одной строкой: Ник GameID ZoneID Звёзды"
+	var sb strings.Builder
+	sb.WriteString(slotLabel(slot))
+	sb.WriteString("\n\nОтправьте данные игрока:\nНик\nGameID (ZoneID)\nЗвёзды")
 	if slot != 1 {
-		format += " [@telegram]"
+		sb.WriteString("\n@telegram (необязательно)")
 	}
-	msg := slotLabel(slot) + "\n" + format + "\nПример: Kitayes 123456789 1234 25"
+	sb.WriteString("\n\nПример:\nKitayes\n5374343843 (6732)\n25")
+	if slot != 1 {
+		sb.WriteString("\n@username")
+	}
+	msg := sb.String()
 	if initial && slot >= firstSubstituteSlot {
 		return msg, KbRegSkip
 	}
 	return msg, KbRegCancel
 }
 
-const soloLinePrompt = "Отправь одной строкой: Ник GameID ZoneID Звёзды\nПример: Kitayes 123456789 1234 25"
+const soloLinePrompt = "Отправьте данные игрока:\nНик\nGameID (ZoneID)\nЗвёзды\n\nПример:\nKitayes\n5374343843 (6732)\n25"
 
 func rolePrompt(line playerLine) string {
 	var sb strings.Builder
@@ -128,7 +138,7 @@ func rolePrompt(line playerLine) string {
 	if sb.Len() > 0 {
 		sb.WriteString("Если ошибка — «Исправить строку».\n\n")
 	}
-	fmt.Fprintf(&sb, "%s · %s (%s) · %d⭐\nРоль?", line.Nick, line.GameID, line.ZoneID, line.Stars)
+	fmt.Fprintf(&sb, "%s · %s (%s) · %d зв.\nРоль?", line.Nick, line.GameID, line.ZoneID, line.Stars)
 	return sb.String()
 }
 
@@ -243,21 +253,25 @@ func (s *TelegramServiceImpl) slotSummary(ctx context.Context, captain *models.T
 // ---- cards -----------------------------------------------------------------
 
 func renderSlot(m models.TelegramPlayer) string {
-	return fmt.Sprintf("%s · %s · %s (%s) · %d⭐", m.GameNickname, m.MainRole, m.GameID, m.ZoneID, m.Stars)
+	role := m.MainRole
+	if role == "" {
+		role = "роль не указана"
+	}
+	return fmt.Sprintf("%s · %s · %s (%s) · %d зв.", m.GameNickname, role, m.GameID, m.ZoneID, m.Stars)
 }
 
 func renderTeamCard(team *models.TelegramTeam, members []models.TelegramPlayer) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Команда '%s'\n", team.Name)
 	for i, m := range members {
-		icon := "👤"
+		prefix := ""
 		switch {
 		case i == 0:
-			icon = "👑"
+			prefix = "[Капитан] "
 		case m.IsSubstitute:
-			icon = "🔁"
+			prefix = "[Замена] "
 		}
-		fmt.Fprintf(&sb, "%d. %s %s", i+1, icon, renderSlot(m))
+		fmt.Fprintf(&sb, "%d. %s%s", i+1, prefix, renderSlot(m))
 		if i != 0 && m.TelegramUsername != "" {
 			fmt.Fprintf(&sb, " · %s", m.TelegramUsername)
 		}
@@ -266,7 +280,7 @@ func renderTeamCard(team *models.TelegramTeam, members []models.TelegramPlayer) 
 	return sb.String()
 }
 
-// confirmCard is the pre-confirmation card: ✅ / ✏️ N / 🗑.
+// confirmCard is the pre-confirmation card: confirm / slot N / delete.
 func (s *TelegramServiceImpl) confirmCard(ctx context.Context, captain *models.TelegramPlayer) (string, string) {
 	team, err := s.repo.GetTeamByID(ctx, *captain.TeamID)
 	if err != nil || team == nil {
@@ -276,19 +290,21 @@ func (s *TelegramServiceImpl) confirmCard(ctx context.Context, captain *models.T
 	return renderTeamCard(team, members) + "\nВсё верно?", fmt.Sprintf("%s:%d", KbRegConfirm, len(members))
 }
 
-// teamCard is the /my_team card: ✏️ N / 🗑 / ➕.
+// teamCard is the /my_team card: slot N / delete / add.
 func (s *TelegramServiceImpl) teamCard(ctx context.Context, captain *models.TelegramPlayer) (string, string) {
 	team, err := s.repo.GetTeamByID(ctx, *captain.TeamID)
 	if err != nil || team == nil {
 		return "Команда не найдена.", KbNone
 	}
 	members := s.roster(ctx, team.ID)
-	status := "⚪ Check-in не пройден"
+	status := "Check-in: не пройден"
 	switch {
 	case team.Status == models.TeamStatusDisqualified:
-		status = "❌ Снята с турнира (тех. поражение)"
+		status = "Статус: Снята с турнира (тех. поражение)"
+	case len(members) < mainRosterSlots:
+		status = fmt.Sprintf("Check-in: недоступен (неполный состав: %d/%d)", len(members), mainRosterSlots)
 	case team.IsCheckedIn:
-		status = "✅ Check-in пройден"
+		status = "Check-in: пройден"
 	}
 	add := ""
 	switch next := len(members) + 1; {
@@ -331,10 +347,10 @@ func (s *TelegramServiceImpl) handleRegistrationText(ctx context.Context, p *mod
 		s.logWrite("UpdatePlayerField", s.repo.UpdatePlayerField(ctx, tg, "is_captain", true))
 		s.setState(ctx, tg, models.StateTeamLinePrefix+"1")
 		if known, ok := s.knownProfile(ctx, tg); ok {
-			return fmt.Sprintf("Команда '%s' создана.\n%s", name, prefillPrompt(known)), KbRegPrefill
+			return fmt.Sprintf("Команда '%s' создана.\n\n%s", name, prefillPrompt(known)), KbRegPrefill
 		}
 		msg, kb := linePrompt(1, true)
-		return fmt.Sprintf("Команда '%s' создана.\n%s", name, msg), kb
+		return fmt.Sprintf("Команда '%s' создана.\n\n%s", name, msg), kb
 
 	case models.StateSoloLine:
 		line, problem := parsePlayerLine(input)
@@ -360,6 +376,24 @@ func (s *TelegramServiceImpl) handleRegistrationText(ctx context.Context, p *mod
 
 	case models.StateSoloConfirm:
 		return renderSoloCard(p), KbRegSoloConfirm
+
+	case models.StateProfileLine:
+		line, problem := parsePlayerLine(input)
+		if problem == "" {
+			problem = s.duplicateGameID(ctx, line.GameID, p.ID)
+		}
+		if problem != "" {
+			return problem + "\n" + playerLineFormat, KbRegCancel
+		}
+		s.saveProfileLine(ctx, tg, line)
+		s.setState(ctx, tg, models.StateProfileRole)
+		return rolePrompt(line), KbRegRoles
+
+	case models.StateProfileRole:
+		if validRole(input) {
+			return s.saveProfileRole(ctx, tg, input)
+		}
+		return msgPickRole, KbRegRoles
 
 	case models.StateTeamConfirm:
 		if p.TeamID == nil {
@@ -421,6 +455,12 @@ func (s *TelegramServiceImpl) HandleRegAction(ctx context.Context, tgID int64, a
 		return s.confirmCheckIn(ctx, p)
 	}
 	switch action {
+	case "prof_edit":
+		return s.StartProfileEdit(ctx, tgID)
+	case "prof_discord":
+		return s.discordLinkHelp(ctx, tgID)
+	case "del_sub":
+		return s.handleDeleteSub(ctx, p, arg)
 	case "delete", "delete_yes", "delete_no":
 		return s.handleDelete(ctx, p, action)
 	case "redo":
@@ -429,8 +469,12 @@ func (s *TelegramServiceImpl) HandleRegAction(ctx context.Context, tgID int64, a
 		return s.handlePrefill(ctx, p, action)
 	}
 
-	// Solo.
 	switch p.FSMState {
+	case models.StateProfileRole:
+		if action != "role" || !validRole(arg) {
+			return msgPickRole, KbRegRoles
+		}
+		return s.saveProfileRole(ctx, tgID, arg)
 	case models.StateSoloRole:
 		if action != "role" || !validRole(arg) {
 			return rolePromptFromRow(p), KbRegRoles
@@ -443,7 +487,7 @@ func (s *TelegramServiceImpl) HandleRegAction(ctx context.Context, tgID int64, a
 		switch action {
 		case "confirm":
 			s.setState(ctx, tgID, models.StateIdle)
-			return "✅ Соло-регистрация завершена!", "main_menu"
+			return "Соло-регистрация завершена!", "main_menu"
 		case "fix":
 			s.setState(ctx, tgID, models.StateSoloLine)
 			return soloLinePrompt, KbRegCancel
@@ -465,7 +509,7 @@ func (s *TelegramServiceImpl) HandleRegAction(ctx context.Context, tgID int64, a
 	case models.StateTeamConfirm:
 		if action == "confirm" {
 			s.setState(ctx, tgID, models.StateIdle)
-			return "✅ Команда зарегистрирована. В день турнира нажми /checkin.", "main_menu"
+			return "Команда зарегистрирована. В день турнира нажми /checkin.", "main_menu"
 		}
 		return s.handleCardAction(ctx, p, action, arg, models.StateTeamFixPrefix)
 	}
@@ -495,7 +539,7 @@ func (s *TelegramServiceImpl) HandleRegAction(ctx context.Context, tgID int64, a
 			s.setState(ctx, tgID, models.StateIdle)
 			return s.teamCard(ctx, p)
 		}
-		return s.afterSlot(ctx, p, slot, fmt.Sprintf("✅ Игрок %d: %s\n", slot, s.slotSummary(ctx, p, slot)))
+		return s.afterSlot(ctx, p, slot, fmt.Sprintf("Игрок %d: %s\n", slot, s.slotSummary(ctx, p, slot)))
 	}
 	return msgStaleButton, KbNone
 }
@@ -517,7 +561,7 @@ func (s *TelegramServiceImpl) knownProfile(ctx context.Context, tgID int64) (pla
 }
 
 func prefillPrompt(line playerLine) string {
-	return fmt.Sprintf("Взять ваши данные из профиля?\n%s · %s (%s) · %d⭐", line.Nick, line.GameID, line.ZoneID, line.Stars)
+	return fmt.Sprintf("Взять ваши данные из профиля?\n%s · %s (%s) · %d зв.", line.Nick, line.GameID, line.ZoneID, line.Stars)
 }
 
 // handlePrefill answers the offer made by knownProfile. Only the first slot
@@ -559,6 +603,9 @@ func (s *TelegramServiceImpl) handlePrefill(ctx context.Context, p *models.Teleg
 // prompt of the same slot. The row already written is simply overwritten.
 func (s *TelegramServiceImpl) redoLine(ctx context.Context, p *models.TelegramPlayer) (string, string) {
 	tgID := *p.TelegramID
+	if p.FSMState == models.StateProfileRole {
+		return s.StartProfileEdit(ctx, tgID)
+	}
 	if p.FSMState == models.StateSoloRole {
 		s.setState(ctx, tgID, models.StateSoloLine)
 		return soloLinePrompt, KbRegCancel
@@ -583,7 +630,7 @@ func (s *TelegramServiceImpl) redoLine(ctx context.Context, p *models.TelegramPl
 	return msg, KbRegCancel
 }
 
-// handleCardAction serves the ✏️ / ➕ / 🗑 buttons of both cards. editPrefix
+// handleCardAction serves the fix / sub / delete buttons of both cards. editPrefix
 // decides where the captain lands after the edit: team_fix_ returns to the
 // confirmation card, team_edit_ back to the menu.
 func (s *TelegramServiceImpl) handleCardAction(ctx context.Context, p *models.TelegramPlayer, action, arg, editPrefix string) (string, string) {
@@ -600,9 +647,12 @@ func (s *TelegramServiceImpl) handleCardAction(ctx context.Context, p *models.Te
 		}
 		s.setState(ctx, tgID, editPrefix+strconv.Itoa(slot))
 		msg, _ := linePrompt(slot, false)
+		if slot >= firstSubstituteSlot {
+			return fmt.Sprintf("Сейчас: %s\n\n%s\n\nИли нажмите кнопку ниже, чтобы удалить замену:", renderSlot(members[slot-1]), msg), fmt.Sprintf("%s:%d", KbRegSubFix, slot)
+		}
 		return fmt.Sprintf("Сейчас: %s\n%s", renderSlot(members[slot-1]), msg), KbRegCancel
 	case "sub":
-		if editPrefix != models.StateTeamEditPrefix {
+		if editPrefix != models.StateTeamEditPrefix && editPrefix != models.StateTeamFixPrefix {
 			return msgStaleButton, KbNone
 		}
 		slot := len(members) + 1
@@ -616,7 +666,30 @@ func (s *TelegramServiceImpl) handleCardAction(ctx context.Context, p *models.Te
 	return msgStaleButton, KbNone
 }
 
-// handleDelete is the 🗑 button and /delete_team: ask first, act on "yes",
+func (s *TelegramServiceImpl) handleDeleteSub(ctx context.Context, captain *models.TelegramPlayer, arg string) (string, string) {
+	tgID := *captain.TelegramID
+	if captain.TeamID == nil || !captain.IsCaptain {
+		return "Только капитан может менять состав.", KbNone
+	}
+	slot, err := strconv.Atoi(arg)
+	if err != nil || slot < firstSubstituteSlot {
+		return msgStaleButton, KbNone
+	}
+	members := s.roster(ctx, *captain.TeamID)
+	if slot <= len(members) {
+		s.logWrite("DeleteTeammate", s.repo.DeleteTeammate(ctx, members[slot-1].ID))
+	}
+	if strings.HasPrefix(captain.FSMState, models.StateTeamFixPrefix) || captain.FSMState == models.StateTeamConfirm {
+		s.setState(ctx, tgID, models.StateTeamConfirm)
+		text, kb := s.confirmCard(ctx, captain)
+		return "Замена удалена.\n\n" + text, kb
+	}
+	s.setState(ctx, tgID, models.StateIdle)
+	text, kb := s.teamCard(ctx, captain)
+	return "Замена удалена.\n\n" + text, kb
+}
+
+// handleDelete is the delete button and /delete_team: ask first, act on "yes",
 // and on "no" put the captain back on whichever card they came from.
 func (s *TelegramServiceImpl) handleDelete(ctx context.Context, p *models.TelegramPlayer, action string) (string, string) {
 	tgID := *p.TelegramID
@@ -650,15 +723,49 @@ func (s *TelegramServiceImpl) handleDelete(ctx context.Context, p *models.Telegr
 // is kept: the captain can finish it from /my_team or delete it there.
 func (s *TelegramServiceImpl) cancelRegistration(ctx context.Context, p *models.TelegramPlayer) (string, string) {
 	tgID := *p.TelegramID
-	// The same button backs /report's "waiting for a screenshot" prompt.
-	if !isRegistrationState(p.FSMState) && p.FSMState != models.StateWaitingReport {
+	currentState := p.FSMState
+	if isReportState(currentState) || currentState == models.StateWaitingReport {
+		return s.CancelReport(ctx, tgID)
+	}
+	if !isRegistrationState(currentState) {
 		return msgStaleButton, KbNone
 	}
+
+	if currentState == models.StateProfileLine || currentState == models.StateProfileRole {
+		s.setState(ctx, tgID, models.StateIdle)
+		return "Редактирование профиля отменено.", "main_menu"
+	}
+
+	// If the user cancelled while picking a role for a newly added teammate,
+	// delete the incomplete teammate row that was created without a role.
+	if p.TeamID != nil {
+		prefix, slot, ok := slotState(currentState)
+		if ok && slot > 1 && strings.Contains(prefix, "role") {
+			members := s.roster(ctx, *p.TeamID)
+			if slot <= len(members) && members[slot-1].MainRole == "" {
+				s.logWrite("DeleteTeammate", s.repo.DeleteTeammate(ctx, members[slot-1].ID))
+			}
+		}
+	}
+
+	if strings.HasPrefix(currentState, models.StateTeamFixPrefix) || strings.HasPrefix(currentState, models.StateTeamFixRolePrefix) {
+		s.setState(ctx, tgID, models.StateTeamConfirm)
+		return s.confirmCard(ctx, p)
+	}
+	if strings.HasPrefix(currentState, models.StateTeamEditPrefix) || strings.HasPrefix(currentState, models.StateTeamEditRolePrefix) {
+		s.setState(ctx, tgID, models.StateIdle)
+		return s.teamCard(ctx, p)
+	}
 	s.setState(ctx, tgID, models.StateIdle)
-	if p.FSMState == models.StateWaitingReport {
+	if currentState == models.StateWaitingReport {
 		return "Действие отменено.", "main_menu"
 	}
 	if p.TeamID != nil {
+		_, slot, ok := slotState(currentState)
+		if ok && slot == 1 {
+			s.DeleteTeam(ctx, tgID)
+			return "Создание команды отменено. Название освобождено.", "main_menu"
+		}
 		if name := s.currentTeamName(ctx, tgID); name != "" {
 			return fmt.Sprintf("Регистрация прервана. Команда '%s' сохранена с введёнными игроками — дополнить или удалить можно через /my_team.", name), "main_menu"
 		}
@@ -667,10 +774,10 @@ func (s *TelegramServiceImpl) cancelRegistration(ctx context.Context, p *models.
 }
 
 // afterSlot moves on from slot N during initial registration: the next line
-// prompt, or the confirmation card after the last slot.
+// prompt, or the confirmation card after the last slot (mainRosterSlots = 5).
 func (s *TelegramServiceImpl) afterSlot(ctx context.Context, p *models.TelegramPlayer, slot int, ack string) (string, string) {
 	tg := *p.TelegramID
-	if slot >= maxTeamSlots {
+	if slot >= mainRosterSlots {
 		s.setState(ctx, tg, models.StateTeamConfirm)
 		text, kb := s.confirmCard(ctx, p)
 		return ack + text, kb
@@ -696,10 +803,51 @@ func (s *TelegramServiceImpl) confirmCheckIn(ctx context.Context, p *models.Tele
 		return fmt.Sprintf("Команда '%s' снята с турнира (тех. поражение). Вернуть её могут только организаторы.", team.Name), KbNone
 	}
 	if !team.IsCheckedIn {
+		members := s.roster(ctx, team.ID)
+		if len(members) < mainRosterSlots {
+			return fmt.Sprintf("Check-in невозможен: в команде %d из %d обязательных игроков. Доукомплектуйте состав через /my_team.", len(members), mainRosterSlots), KbNone
+		}
 		if err := s.repo.SetCheckIn(ctx, team.ID, true); err != nil {
 			s.logWrite("SetCheckIn", err)
 			return "Не удалось подтвердить участие. Попробуйте /checkin.", KbNone
 		}
 	}
-	return fmt.Sprintf("✅ Check-in подтверждён. Команда '%s' участвует в турнире.", team.Name), KbNone
+	return fmt.Sprintf("Check-in подтверждён. Команда '%s' участвует в турнире.", team.Name), KbNone
 }
+
+func (s *TelegramServiceImpl) StartProfileEdit(ctx context.Context, tgID int64) (string, string) {
+	s.setState(ctx, tgID, models.StateProfileLine)
+	prompt := "Отправьте ваши игровые данные:\nНик\nGameID (ZoneID)\nЗвёзды\n\nПример:\nKitayes\n5374343843 (6732)\n25"
+	return prompt, KbRegCancel
+}
+
+func (s *TelegramServiceImpl) saveProfileLine(ctx context.Context, tgID int64, line playerLine) {
+	s.logWrite("UpdatePlayerField", s.repo.UpdatePlayerField(ctx, tgID, "game_nickname", line.Nick))
+	s.logWrite("UpdatePlayerField", s.repo.UpdatePlayerField(ctx, tgID, "game_id", line.GameID))
+	s.logWrite("UpdatePlayerField", s.repo.UpdatePlayerField(ctx, tgID, "zone_id", line.ZoneID))
+	s.logWrite("UpdatePlayerField", s.repo.UpdatePlayerField(ctx, tgID, "stars", line.Stars))
+}
+
+func (s *TelegramServiceImpl) saveProfileRole(ctx context.Context, tgID int64, role string) (string, string) {
+	s.logWrite("UpdatePlayerField", s.repo.UpdatePlayerField(ctx, tgID, "main_role", role))
+	s.setState(ctx, tgID, models.StateIdle)
+	if s.profiles != nil {
+		p, _ := s.repo.GetPlayerByTelegramID(ctx, tgID)
+		if p != nil {
+			_ = s.profiles.UpdateTelegramProfile(ctx, tgID, p.GameNickname, p.GameID, p.ZoneID, p.Stars, role)
+		}
+	}
+	p, _ := s.repo.GetPlayerByTelegramID(ctx, tgID)
+	nick, gameID, zoneID, stars := "", "", "", 0
+	if p != nil {
+		nick, gameID, zoneID, stars = p.GameNickname, p.GameID, p.ZoneID, p.Stars
+	}
+	msg := fmt.Sprintf("Профиль успешно сохранён!\n\nНик: %s\nID: %s (%s)\nЗвёзды: %d | Роль: %s", nick, gameID, zoneID, stars, role)
+	return msg, "main_menu"
+}
+
+func (s *TelegramServiceImpl) discordLinkHelp(_ context.Context, _ int64) (string, string) {
+	msg := "Для привязки Discord профиля:\n\n1. Зайдите в Discord на сервер турнира\n2. Введите команду: /link <ваш ID игрока>\n3. Получите одноразовый код\n4. Отправьте его сюда командой: /link <код>"
+	return msg, "main_menu"
+}
+

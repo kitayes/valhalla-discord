@@ -121,7 +121,7 @@ func main() {
 	if cfg.TelegramToken != "" {
 		// Validated at config load; a failure here is unreachable.
 		tournamentLoc, _ := cfg.TournamentLocation()
-		telegramBot, err = telegram.NewBot(cfg.TelegramToken, cfg.TelegramAdminIDs, services.TelegramService, services.ProfileLinkService, services.BettingService, cfg.TelegramChannelID, telegram.BetSettings{Stakes: cfg.StakeOptions(), Max: cfg.BetMax}, tournamentLoc, log)
+		telegramBot, err = telegram.NewBot(cfg.TelegramToken, cfg.TelegramAdminIDs, services.TelegramService, services.ProfileLinkService, services.BettingService, cfg.TelegramChannelID, cfg.TelegramTournamentChatID, telegram.BetSettings{Stakes: cfg.StakeOptions(), Max: cfg.BetMax}, tournamentLoc, log)
 		if err != nil {
 			log.Error("failed to init telegram bot: %s", err.Error())
 		} else if betting := telegramBot.BettingBot(); betting != nil {

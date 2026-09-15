@@ -14,6 +14,11 @@ func TestParsePlayerLine(t *testing.T) {
 	}{
 		{"plain", "Kitayes 123456789 1234 25", playerLine{Nick: "Kitayes", GameID: "123456789", ZoneID: "1234", Stars: 25}, ""},
 		{"zone in parens", "Kitayes 123456789 (1234) 25", playerLine{Nick: "Kitayes", GameID: "123456789", ZoneID: "1234", Stars: 25}, ""},
+		{"zone attached in parens", "Kitayes 5374343843(6732) 25", playerLine{Nick: "Kitayes", GameID: "5374343843", ZoneID: "6732", Stars: 25}, ""},
+		{"multiline with parens", "Kitayes\n5374343843 (6732)\n25", playerLine{Nick: "Kitayes", GameID: "5374343843", ZoneID: "6732", Stars: 25}, ""},
+		{"multiline attached parens", "Kitayes\n5374343843(6732)\n25", playerLine{Nick: "Kitayes", GameID: "5374343843", ZoneID: "6732", Stars: 25}, ""},
+		{"multiline with contact", "Kitayes\n5374343843 (6732)\n25\n@vasya", playerLine{Nick: "Kitayes", GameID: "5374343843", ZoneID: "6732", Stars: 25, Contact: "@vasya"}, ""},
+		{"with labels", "Ник: Kitayes\nID: 5374343843 (6732)\nЗвёзды: 25", playerLine{Nick: "Kitayes", GameID: "5374343843", ZoneID: "6732", Stars: 25}, ""},
 		{"commas", "Kitayes, 123456789, 1234, 25", playerLine{Nick: "Kitayes", GameID: "123456789", ZoneID: "1234", Stars: 25}, ""},
 		{"two-word nick", "Big Boss 123456789 1234 25", playerLine{Nick: "Big Boss", GameID: "123456789", ZoneID: "1234", Stars: 25}, ""},
 		{"contact at end", "Vasya 123456789 1234 25 @vasya", playerLine{Nick: "Vasya", GameID: "123456789", ZoneID: "1234", Stars: 25, Contact: "@vasya"}, ""},

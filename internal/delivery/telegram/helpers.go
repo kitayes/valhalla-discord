@@ -1,7 +1,9 @@
 package telegram
 
 import (
+	"blackwatch/internal/application"
 	"context"
+	"fmt"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -38,6 +40,12 @@ func (b *Bot) trySendMessage(chatID int64, text string, kbType string) error {
 	}
 	msg := tgbotapi.NewMessage(chatID, text)
 
+	if kbType == application.KbReportOpponent {
+		msg.ReplyMarkup = b.reportOpponentKeyboard(context.Background(), chatID)
+		_, err := b.bot.Send(msg)
+		return err
+	}
+
 	// Registration controls are inline buttons under the message; the reply
 	// keyboard at the bottom is reserved for the main menu.
 	if kb, ok := regKeyboard(kbType); ok {
@@ -47,6 +55,13 @@ func (b *Bot) trySendMessage(chatID int64, text string, kbType string) error {
 	}
 
 	switch kbType {
+	case "checkin_status_admin":
+		rows := [][]tgbotapi.InlineKeyboardButton{
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("📢 Пингануть должников", "admin_ping_debtors"),
+			),
+		}
+		msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(rows...)
 	case "main_menu":
 		rows := [][]tgbotapi.KeyboardButton{
 			tgbotapi.NewKeyboardButtonRow(
@@ -54,7 +69,6 @@ func (b *Bot) trySendMessage(chatID int64, text string, kbType string) error {
 				tgbotapi.NewKeyboardButton("/my_team"),
 			),
 			tgbotapi.NewKeyboardButtonRow(
-				tgbotapi.NewKeyboardButton("/reg_solo"),
 				tgbotapi.NewKeyboardButton("/reg_team"),
 			),
 			tgbotapi.NewKeyboardButtonRow(
@@ -70,9 +84,13 @@ func (b *Bot) trySendMessage(chatID int64, text string, kbType string) error {
 				tgbotapi.NewKeyboardButton("/admin"),
 			))
 		}
-		msg.ReplyMarkup = tgbotapi.NewReplyKeyboard(rows...)
-	default:
+		kb := tgbotapi.NewReplyKeyboard(rows...)
+		kb.ResizeKeyboard = true
+		msg.ReplyMarkup = kb
+	case "remove":
 		msg.ReplyMarkup = tgbotapi.NewRemoveKeyboard(true)
+	default:
+		// Keep the reply keyboard visible at all times
 	}
 
 	_, err := b.bot.Send(msg)
@@ -114,3 +132,27 @@ func valueOrDefault(val, def string) string {
 	}
 	return val
 }
+
+func (b *Bot) reportOpponentKeyboard(ctx context.Context, chatID int64) tgbotapi.InlineKeyboardMarkup {
+	opponents, _ := b.service.GetEligibleOpponents(ctx, chatID)
+	var rows [][]tgbotapi.InlineKeyboardButton
+	var currentRow []tgbotapi.InlineKeyboardButton
+
+	for _, team := range opponents {
+		btn := tgbotapi.NewInlineKeyboardButtonData(team.Name, fmt.Sprintf("rep:opp:%d", team.ID))
+		currentRow = append(currentRow, btn)
+		if len(currentRow) == 2 {
+			rows = append(rows, currentRow)
+			currentRow = nil
+		}
+	}
+	if len(currentRow) > 0 {
+		rows = append(rows, currentRow)
+	}
+
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonData("❌ Отмена", "rep:cancel"),
+	))
+	return tgbotapi.NewInlineKeyboardMarkup(rows...)
+}
+

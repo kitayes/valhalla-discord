@@ -18,7 +18,9 @@ const KbNone = "empty"
 const (
 	// maxTeamNameLen mirrors telegram_teams.name VARCHAR(64).
 	maxTeamNameLen = 64
-	// Roster: slot 1 is the captain, 2–5 the main five, 6–7 optional substitutes.
+	// Roster: slot 1 is captain, 2–5 main roster (5 total required), 6–7 optional substitutes.
+	MainRosterSlots     = 5
+	mainRosterSlots     = MainRosterSlots
 	firstSubstituteSlot = 6
 	maxTeamSlots        = 7
 )
@@ -31,7 +33,19 @@ type TelegramService interface {
 	StartSoloRegistration(ctx context.Context, tgID int64) (string, string)
 	StartTeamRegistration(ctx context.Context, tgID int64) (string, string)
 	StartEditPlayer(ctx context.Context, tgID int64, slot int) (string, string)
+	StartProfileEdit(ctx context.Context, tgID int64) (string, string)
+	GetPlayer(ctx context.Context, tgID int64) (*models.TelegramPlayer, error)
 	StartReport(ctx context.Context, tgID int64) (string, string)
+	SelectReportOpponent(ctx context.Context, tgID int64, opponentTeamID int) (string, string)
+	SelectReportOpponentByName(ctx context.Context, tgID int64, name string) (string, string)
+	SetReportScore(ctx context.Context, tgID int64, scoreStr string) (string, string)
+	AddReportPhoto(ctx context.Context, tgID int64, photoFileID string) (string, string, int)
+	SubmitReport(ctx context.Context, tgID int64) (string, string, *models.TelegramMatchReport)
+	CancelReport(ctx context.Context, tgID int64) (string, string)
+	ResetReportPhotos(ctx context.Context, tgID int64) (string, string)
+	GetRecentMatchReports(ctx context.Context, limit int) (string, error)
+	GetEligibleOpponents(ctx context.Context, tgID int64) ([]models.TelegramTeam, error)
+	GetReportDraft(tgID int64) *MatchReportDraft
 
 	DeleteTeam(ctx context.Context, tgID int64) string
 	GetTeamInfo(ctx context.Context, tgID int64) (string, string)
@@ -53,6 +67,7 @@ type TelegramService interface {
 
 	GetTeamsList(ctx context.Context) string
 	AdminGetTeamDetails(ctx context.Context, name string) string
+	GetCheckInStatus(ctx context.Context) string
 
 	GenerateSoloPlayersCSV(ctx context.Context) ([]byte, error)
 	GetSoloPlayersList(ctx context.Context) string
@@ -68,12 +83,16 @@ type TelegramServiceImpl struct {
 	// profiles is optional: with it, a captain linked to a Discord profile is
 	// offered that profile's in-game data instead of typing it again.
 	profiles ProfileLookup
+
+	reportMu     sync.RWMutex
+	reportDrafts map[int64]*MatchReportDraft
 }
 
 // ProfileLookup is the slice of the profile-link repository registration
 // needs: who is this Telegram account, in game?
 type ProfileLookup interface {
 	GetLinkByTelegramID(ctx context.Context, telegramID int64) (*models.ProfileLink, error)
+	UpdateTelegramProfile(ctx context.Context, telegramID int64, nickname, gameID, zoneID string, stars int, role string) error
 }
 
 // WithProfileLookup enables prefilling from linked Discord profiles.
@@ -84,9 +103,10 @@ func (s *TelegramServiceImpl) WithProfileLookup(p ProfileLookup) *TelegramServic
 
 func NewTelegramServiceImpl(repo repository.Telegram, logger Logger) *TelegramServiceImpl {
 	return &TelegramServiceImpl{
-		repo:   repo,
-		logger: logger,
-		now:    time.Now,
+		repo:         repo,
+		logger:       logger,
+		now:          time.Now,
+		reportDrafts: make(map[int64]*MatchReportDraft),
 	}
 }
 
@@ -110,7 +130,11 @@ func (s *TelegramServiceImpl) RegisterUser(ctx context.Context, tgID int64, user
 }
 
 func (s *TelegramServiceImpl) HandleUserInput(ctx context.Context, tgID int64, input string) (string, string) {
-	player, _ := s.repo.GetPlayerByTelegramID(ctx, tgID)
+	player, err := s.repo.GetPlayerByTelegramID(ctx, tgID)
+	if err != nil {
+		s.logger.Error("telegram: GetPlayerByTelegramID failed for %d: %v", tgID, err)
+		return "Произошла ошибка при загрузке данных. Попробуйте снова или используйте /start.", KbNone
+	}
 	if player == nil {
 		return "Используйте /start для начала.", KbNone
 	}
@@ -118,6 +142,9 @@ func (s *TelegramServiceImpl) HandleUserInput(ctx context.Context, tgID int64, i
 	if input == "Отмена" || input == "/cancel" {
 		if isRegistrationState(player.FSMState) {
 			return s.HandleRegAction(ctx, tgID, "cancel", "")
+		}
+		if isReportState(player.FSMState) {
+			return s.CancelReport(ctx, tgID)
 		}
 		s.setState(ctx, tgID, models.StateIdle)
 		return "Действие отменено. Возврат в меню.", KbNone
@@ -129,6 +156,9 @@ func (s *TelegramServiceImpl) HandleUserInput(ctx context.Context, tgID int64, i
 	}
 	if isRegistrationState(player.FSMState) {
 		return s.handleRegistrationText(ctx, player, input)
+	}
+	if isReportState(player.FSMState) {
+		return s.handleReportText(ctx, player, input)
 	}
 	return "Используйте меню для управления.", KbNone
 }
@@ -157,7 +187,7 @@ func (s *TelegramServiceImpl) StartTeamRegistration(ctx context.Context, tgID in
 		return fmt.Sprintf("Вы уже в команде '%s'. Чтобы зарегистрировать новую, сначала удалите её: /delete_team", name), KbNone
 	}
 	s.setState(ctx, tgID, models.StateWaitingTeamName)
-	return "Введите Название команды:", KbRegCancel
+	return "Введите название команды:", KbRegCancel
 }
 
 func (s *TelegramServiceImpl) StartEditPlayer(ctx context.Context, tgID int64, slot int) (string, string) {
@@ -175,13 +205,12 @@ func (s *TelegramServiceImpl) StartEditPlayer(ctx context.Context, tgID int64, s
 	if slot < 1 || slot > len(members) {
 		return fmt.Sprintf("Игрок №%d не найден. В команде %d игрок(ов), см. /my_team", slot, len(members)), KbNone
 	}
-	// /edit_player N is the typed form of the ✏️ N button on the /my_team card.
+	// /edit_player N is the typed form of the slot N button on the /my_team card.
 	return s.HandleRegAction(ctx, tgID, "fix", strconv.Itoa(slot))
 }
 
-func (s *TelegramServiceImpl) StartReport(ctx context.Context, tgID int64) (string, string) {
-	s.setState(ctx, tgID, models.StateWaitingReport)
-	return "Отправьте скриншот результата матча:", KbRegCancel
+func (s *TelegramServiceImpl) GetPlayer(ctx context.Context, tgID int64) (*models.TelegramPlayer, error) {
+	return s.repo.GetPlayerByTelegramID(ctx, tgID)
 }
 
 func (s *TelegramServiceImpl) GetTeamInfo(ctx context.Context, tgID int64) (string, string) {
@@ -204,6 +233,12 @@ func (s *TelegramServiceImpl) ToggleCheckIn(ctx context.Context, tgID int64) str
 	if t.Status == models.TeamStatusDisqualified {
 		return fmt.Sprintf("Команда '%s' снята с турнира (тех. поражение). Вернуть её могут только организаторы.", t.Name)
 	}
+	if !t.IsCheckedIn {
+		members := s.roster(ctx, t.ID)
+		if len(members) < mainRosterSlots {
+			return fmt.Sprintf("Check-in невозможен: в команде %d из %d обязательных игроков. Доукомплектуйте состав через /my_team.", len(members), mainRosterSlots)
+		}
+	}
 	checkedIn := !t.IsCheckedIn
 	if err := s.repo.SetCheckIn(ctx, t.ID, checkedIn); err != nil {
 		s.logWrite("SetCheckIn", err)
@@ -212,9 +247,9 @@ func (s *TelegramServiceImpl) ToggleCheckIn(ctx context.Context, tgID int64) str
 	// It is a toggle, so the reply must say which way it went: a captain who
 	// tapped twice used to un-check silently and collect a technical defeat.
 	if checkedIn {
-		return fmt.Sprintf("✅ Check-in подтверждён. Команда '%s' участвует в турнире.", t.Name)
+		return fmt.Sprintf("Check-in подтверждён. Команда '%s' участвует в турнире.", t.Name)
 	}
-	return fmt.Sprintf("⚪ Check-in снят. Команда '%s' НЕ подтверждена — нажмите /checkin ещё раз, чтобы подтвердить.", t.Name)
+	return fmt.Sprintf("Check-in снят. Команда '%s' НЕ подтверждена — нажмите /checkin ещё раз, чтобы подтвердить.", t.Name)
 }
 
 func (s *TelegramServiceImpl) DeleteTeam(ctx context.Context, tgID int64) string {
@@ -223,8 +258,16 @@ func (s *TelegramServiceImpl) DeleteTeam(ctx context.Context, tgID int64) string
 		return "Только капитан может удалить команду."
 	}
 	id := *p.TeamID
+	team, _ := s.repo.GetTeamByID(ctx, id)
+	name := ""
+	if team != nil {
+		name = team.Name
+	}
 	s.logWrite("ReleaseTeamMembers", s.repo.ReleaseTeamMembers(ctx, id))
 	s.logWrite("DeleteTeam", s.repo.DeleteTeam(ctx, id))
+	if name != "" {
+		return fmt.Sprintf("Команда '%s' удалена.", name)
+	}
 	return "Команда удалена."
 }
 
@@ -319,17 +362,8 @@ func (s *TelegramServiceImpl) GenerateTeamsCSV(ctx context.Context) ([]byte, err
 }
 
 func (s *TelegramServiceImpl) HandleReport(ctx context.Context, tgID int64, fileID, caption string) string {
-	p, _ := s.repo.GetPlayerByTelegramID(ctx, tgID)
-	if p == nil || p.FSMState != models.StateWaitingReport {
-		return "Используйте /report"
-	}
-	if p.TeamID == nil {
-		s.logWrite("UpdatePlayerState", s.repo.UpdatePlayerState(ctx, tgID, models.StateIdle))
-		return "Вы не в команде."
-	}
-	t, _ := s.repo.GetTeamByID(ctx, *p.TeamID)
-	s.logWrite("UpdatePlayerState", s.repo.UpdatePlayerState(ctx, tgID, models.StateIdle))
-	return fmt.Sprintf("ADMIN_REPORT:%s:Команда: %s\nКапитан: @%s\nИнфо: %s", fileID, t.Name, p.TelegramUsername, caption)
+	msg, _, _ := s.AddReportPhoto(ctx, tgID, fileID)
+	return msg
 }
 
 func (s *TelegramServiceImpl) SetTournamentTime(ctx context.Context, t time.Time) {
@@ -412,12 +446,12 @@ func (s *TelegramServiceImpl) GetTeamsList(ctx context.Context) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Список команд (%d):\n\n", len(teams)))
 	for i, t := range teams {
-		check := "⚪"
+		check := "[ ]"
 		switch {
 		case t.Status == models.TeamStatusDisqualified:
-			check = "❌"
+			check = "[ТП]"
 		case t.IsCheckedIn:
-			check = "✅"
+			check = "[+]"
 		}
 		sb.WriteString(fmt.Sprintf("%d. %s %s\n", i+1, check, t.Name))
 	}
@@ -433,7 +467,7 @@ func (s *TelegramServiceImpl) AdminGetTeamDetails(ctx context.Context, name stri
 	status := "Не подтверждена"
 	switch {
 	case team.Status == models.TeamStatusDisqualified:
-		status = "❌ Снята с турнира (тех. поражение) — вернуть: /reinstate " + team.Name
+		status = "Снята с турнира (тех. поражение) — вернуть: /reinstate " + team.Name
 	case team.IsCheckedIn:
 		status = "Подтверждена"
 	}
@@ -447,6 +481,103 @@ func (s *TelegramServiceImpl) AdminGetTeamDetails(ctx context.Context, name stri
 		res += fmt.Sprintf("%d. %s [%s]\n   ID: %s (%s)\n   TG: %s\n\n", i+1, m.GameNickname, role, m.GameID, m.ZoneID, m.TelegramUsername)
 	}
 	return res
+}
+
+func (s *TelegramServiceImpl) GetCheckInStatus(ctx context.Context) string {
+	teams, err := s.repo.GetAllTeams(ctx)
+	if err != nil {
+		return "Ошибка при получении данных команд."
+	}
+	if len(teams) == 0 {
+		return "Команд пока нет."
+	}
+
+	var checkedIn, pending, incomplete, disqualified []models.TelegramTeam
+
+	for _, t := range teams {
+		switch {
+		case t.Status == models.TeamStatusDisqualified:
+			disqualified = append(disqualified, t)
+		case len(t.Players) < mainRosterSlots:
+			incomplete = append(incomplete, t)
+		case t.IsCheckedIn:
+			checkedIn = append(checkedIn, t)
+		default:
+			pending = append(pending, t)
+		}
+	}
+
+	totalEligible := len(checkedIn) + len(pending)
+	percent := 0.0
+	if totalEligible > 0 {
+		percent = float64(len(checkedIn)) / float64(totalEligible) * 100
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Дашборд Check-in:\n\n")
+	sb.WriteString(fmt.Sprintf("Готовы к игре: %d из %d (%.0f%%)\n", len(checkedIn), totalEligible, percent))
+	if len(pending) > 0 {
+		sb.WriteString(fmt.Sprintf("Ожидают подтверждения: %d\n", len(pending)))
+	}
+	if len(incomplete) > 0 {
+		sb.WriteString(fmt.Sprintf("Не укомплектованы: %d\n", len(incomplete)))
+	}
+
+	formatCaptain := func(t models.TelegramTeam) string {
+		for _, m := range t.Players {
+			if m.IsCaptain {
+				nick := m.GameNickname
+				if nick == "" {
+					nick = m.FirstName
+				}
+				if m.TelegramUsername != "" {
+					return fmt.Sprintf("%s (@%s)", nick, strings.TrimPrefix(m.TelegramUsername, "@"))
+				}
+				if nick != "" {
+					return nick
+				}
+				return "Капитан"
+			}
+		}
+		return "Не назначен"
+	}
+
+	formatPlayers := func(n int) string {
+		if n > mainRosterSlots {
+			return fmt.Sprintf("%d чел. (+%d зам.)", n, n-mainRosterSlots)
+		}
+		return fmt.Sprintf("%d чел.", n)
+	}
+
+	if len(checkedIn) > 0 {
+		sb.WriteString(fmt.Sprintf("\nПодтвердили участие (%d):\n", len(checkedIn)))
+		for i, t := range checkedIn {
+			sb.WriteString(fmt.Sprintf("%d. [+] %s — Кап: %s (%s)\n", i+1, t.Name, formatCaptain(t), formatPlayers(len(t.Players))))
+		}
+	}
+
+	if len(pending) > 0 {
+		sb.WriteString(fmt.Sprintf("\nНе подтвердили (%d):\n", len(pending)))
+		for i, t := range pending {
+			sb.WriteString(fmt.Sprintf("%d. [-] %s — Кап: %s (%s)\n", i+1, t.Name, formatCaptain(t), formatPlayers(len(t.Players))))
+		}
+	}
+
+	if len(incomplete) > 0 {
+		sb.WriteString(fmt.Sprintf("\nНеполный состав (%d):\n", len(incomplete)))
+		for i, t := range incomplete {
+			sb.WriteString(fmt.Sprintf("%d. [!] %s — Кап: %s (состав: %d/%d)\n", i+1, t.Name, formatCaptain(t), len(t.Players), mainRosterSlots))
+		}
+	}
+
+	if len(disqualified) > 0 {
+		sb.WriteString(fmt.Sprintf("\nДисквалифицированы (%d):\n", len(disqualified)))
+		for i, t := range disqualified {
+			sb.WriteString(fmt.Sprintf("%d. [ТП] %s\n", i+1, t.Name))
+		}
+	}
+
+	return sb.String()
 }
 
 func (s *TelegramServiceImpl) GenerateSoloPlayersCSV(ctx context.Context) ([]byte, error) {
