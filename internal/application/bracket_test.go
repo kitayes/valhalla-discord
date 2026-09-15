@@ -443,6 +443,31 @@ func TestBuildFailureLeavesNothingBuilt(t *testing.T) {
 	}
 }
 
+// TestBuildCleansUpWhenIDCannotBeRecorded covers the case where the write
+// that remembers the new tournament's id fails: nothing else can ever find
+// that tournament to delete it, so Build must delete it itself before
+// giving up, and the failed build must not look built.
+func TestBuildCleansUpWhenIDCannotBeRecorded(t *testing.T) {
+	svc, repo, prov := newBracketSvc(t)
+	for i := 1; i <= 4; i++ {
+		addBracketTeam(repo, i, fmt.Sprintf("T%d", i), 10*i)
+	}
+	repo.failSetting = map[string]error{settingChallongeID: errors.New("db down")}
+	ctx := context.Background()
+	if _, err := svc.Build(ctx, tourneyAt); err == nil {
+		t.Fatal("Build succeeded despite settingChallongeID write failing")
+	}
+	if prov.count("DeleteTournament") != 1 {
+		t.Errorf("DeleteTournament called %d times, want 1", prov.count("DeleteTournament"))
+	}
+	if len(prov.tourneys) != 0 {
+		t.Errorf("%d tournaments left in Challonge, want 0", len(prov.tourneys))
+	}
+	if svc.IsBuiltFor(ctx, tourneyAt) {
+		t.Error("IsBuiltFor = true after a build that could not record the tournament id")
+	}
+}
+
 func TestSyncReportsNewlyReadyOnce(t *testing.T) {
 	svc, repo, prov := newBracketSvc(t)
 	for i := 1; i <= 4; i++ {

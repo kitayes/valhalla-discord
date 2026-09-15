@@ -22,6 +22,9 @@ type fakeTelegramRepo struct {
 	nextID       int
 	bracket      []models.BracketMatch
 	participants map[int]int64 // teamID -> challonge participant id
+	// failSetting, when set for a key, makes SetSetting return that error
+	// instead of writing, so tests can exercise write-failure paths.
+	failSetting map[string]error
 }
 
 func newFakeTelegramRepo() *fakeTelegramRepo {
@@ -211,6 +214,9 @@ func (r *fakeTelegramRepo) GetSetting(_ context.Context, k string) (string, erro
 	return r.settings[k], nil
 }
 func (r *fakeTelegramRepo) SetSetting(_ context.Context, k, v string) error {
+	if err := r.failSetting[k]; err != nil {
+		return err
+	}
 	r.settings[k] = v
 	return nil
 }

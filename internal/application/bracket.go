@@ -215,9 +215,20 @@ func (s *BracketService) build(ctx context.Context, forTournament time.Time) (*B
 		return nil, err
 	}
 	// Remember the id before anything else can fail, so a retry deletes it.
-	s.logWrite("SetSetting", s.repo.SetSetting(ctx, settingChallongeID, strconv.FormatInt(tr.ID, 10)))
-	s.logWrite("SetSetting", s.repo.SetSetting(ctx, settingChallongeURL, tr.URL))
-	s.logWrite("SetSetting", s.repo.SetSetting(ctx, settingChallongeFor, forTournament.UTC().Format(time.RFC3339)))
+	// If this write itself fails, nothing will ever find the tournament to
+	// delete it, so we must do it ourselves before giving up.
+	if err := s.repo.SetSetting(ctx, settingChallongeID, strconv.FormatInt(tr.ID, 10)); err != nil {
+		if delErr := s.provider.DeleteTournament(ctx, tr.ID); delErr != nil {
+			s.logger.Warn("bracket: delete orphaned tournament %d: %v", tr.ID, delErr)
+		}
+		return nil, err
+	}
+	if err := s.repo.SetSetting(ctx, settingChallongeURL, tr.URL); err != nil {
+		return nil, err
+	}
+	if err := s.repo.SetSetting(ctx, settingChallongeFor, forTournament.UTC().Format(time.RFC3339)); err != nil {
+		return nil, err
+	}
 
 	ps := make([]challonge.NewParticipant, 0, len(seeded))
 	byName := make(map[string]int, len(seeded))
