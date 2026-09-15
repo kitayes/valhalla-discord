@@ -8,25 +8,29 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeTelegramRepo is an in-memory stand-in for repository.Telegram, just
 // enough to drive the registration state machine.
 type fakeTelegramRepo struct {
-	players  map[int64]*models.TelegramPlayer // by telegram id
-	teams    map[int]*models.TelegramTeam
-	members  []*models.TelegramPlayer // teammates created via CreateTeammate
-	settings map[string]string
-	reports  []models.TelegramMatchReport
-	nextID   int
+	players      map[int64]*models.TelegramPlayer // by telegram id
+	teams        map[int]*models.TelegramTeam
+	members      []*models.TelegramPlayer // teammates created via CreateTeammate
+	settings     map[string]string
+	reports      []models.TelegramMatchReport
+	nextID       int
+	bracket      []models.BracketMatch
+	participants map[int]int64 // teamID -> challonge participant id
 }
 
 func newFakeTelegramRepo() *fakeTelegramRepo {
 	return &fakeTelegramRepo{
-		players:  map[int64]*models.TelegramPlayer{},
-		teams:    map[int]*models.TelegramTeam{},
-		settings: map[string]string{},
-		nextID:   1,
+		players:      map[int64]*models.TelegramPlayer{},
+		teams:        map[int]*models.TelegramTeam{},
+		settings:     map[string]string{},
+		nextID:       1,
+		participants: map[int]int64{},
 	}
 }
 
@@ -218,6 +222,91 @@ func (r *fakeTelegramRepo) CreateMatchReport(_ context.Context, rep *models.Tele
 }
 func (r *fakeTelegramRepo) GetRecentMatchReports(_ context.Context, limit int) ([]models.TelegramMatchReport, error) {
 	return r.reports, nil
+}
+
+func (r *fakeTelegramRepo) ReplaceBracketMatches(_ context.Context, ms []models.BracketMatch) error {
+	prev := map[int64]models.BracketMatch{}
+	for _, m := range r.bracket {
+		prev[m.ChallongeMatchID] = m
+	}
+	r.bracket = nil
+	for i, m := range ms {
+		m.ID = 1000 + i
+		if old, ok := prev[m.ChallongeMatchID]; ok {
+			m.ID = old.ID
+			if samePair(old, m) {
+				m.BothNotified = old.BothNotified
+			}
+		}
+		if m.Team1ID != nil {
+			if t := r.teams[*m.Team1ID]; t != nil {
+				m.Team1Name = t.Name
+			}
+		}
+		if m.Team2ID != nil {
+			if t := r.teams[*m.Team2ID]; t != nil {
+				m.Team2Name = t.Name
+			}
+		}
+		r.bracket = append(r.bracket, m)
+	}
+	return nil
+}
+
+// samePair mirrors the SQL rule: both_notified survives only while the two
+// slots hold the same teams.
+func samePair(a, b models.BracketMatch) bool {
+	eq := func(x, y *int) bool { return (x == nil && y == nil) || (x != nil && y != nil && *x == *y) }
+	return eq(a.Team1ID, b.Team1ID) && eq(a.Team2ID, b.Team2ID)
+}
+
+func (r *fakeTelegramRepo) GetBracketMatches(context.Context) ([]models.BracketMatch, error) {
+	out := make([]models.BracketMatch, len(r.bracket))
+	copy(out, r.bracket)
+	return out, nil
+}
+func (r *fakeTelegramRepo) MarkBracketNotified(_ context.Context, ids []int) error {
+	for _, id := range ids {
+		for i := range r.bracket {
+			if r.bracket[i].ID == id {
+				r.bracket[i].BothNotified = true
+			}
+		}
+	}
+	return nil
+}
+func (r *fakeTelegramRepo) SetTeamParticipantID(_ context.Context, teamID int, pid int64) error {
+	r.participants[teamID] = pid
+	if t := r.teams[teamID]; t != nil {
+		p := pid
+		t.ChallongeParticipantID = &p
+	}
+	return nil
+}
+func (r *fakeTelegramRepo) ClearTeamParticipantIDs(context.Context) error {
+	r.participants = map[int]int64{}
+	for _, t := range r.teams {
+		t.ChallongeParticipantID = nil
+	}
+	return nil
+}
+func (r *fakeTelegramRepo) SetReportSynced(_ context.Context, id int) error {
+	for i := range r.reports {
+		if r.reports[i].ID == id {
+			now := time.Now()
+			r.reports[i].SyncedAt = &now
+		}
+	}
+	return nil
+}
+func (r *fakeTelegramRepo) GetUnsyncedReports(context.Context) ([]models.TelegramMatchReport, error) {
+	var out []models.TelegramMatchReport
+	for _, rep := range r.reports {
+		if rep.BracketMatchID != nil && rep.SyncedAt == nil {
+			out = append(out, rep)
+		}
+	}
+	return out, nil
 }
 
 func newTelegramSvc() (*TelegramServiceImpl, *fakeTelegramRepo) {

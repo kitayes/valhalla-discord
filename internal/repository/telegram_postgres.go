@@ -111,7 +111,8 @@ func (r *TelegramPostgres) CreateTeam(ctx context.Context, name string) (*models
 
 func (r *TelegramPostgres) GetTeamByID(ctx context.Context, id int) (*models.TelegramTeam, error) {
 	var t models.TelegramTeam
-	err := r.db.QueryRowContext(ctx, `SELECT id, name, COALESCE(is_checked_in, FALSE), COALESCE(status, 'active') FROM telegram_teams WHERE id = $1`, id).Scan(&t.ID, &t.Name, &t.IsCheckedIn, &t.Status)
+	err := r.db.QueryRowContext(ctx, `SELECT id, name, COALESCE(is_checked_in, FALSE), COALESCE(status, 'active'), challonge_participant_id FROM telegram_teams WHERE id = $1`, id).
+		Scan(&t.ID, &t.Name, &t.IsCheckedIn, &t.Status, &t.ChallongeParticipantID)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +121,8 @@ func (r *TelegramPostgres) GetTeamByID(ctx context.Context, id int) (*models.Tel
 
 func (r *TelegramPostgres) GetTeamByName(ctx context.Context, name string) (*models.TelegramTeam, error) {
 	var t models.TelegramTeam
-	err := r.db.QueryRowContext(ctx, `SELECT id, name, COALESCE(is_checked_in, FALSE), COALESCE(status, 'active') FROM telegram_teams WHERE name = $1`, name).Scan(&t.ID, &t.Name, &t.IsCheckedIn, &t.Status)
+	err := r.db.QueryRowContext(ctx, `SELECT id, name, COALESCE(is_checked_in, FALSE), COALESCE(status, 'active'), challonge_participant_id FROM telegram_teams WHERE name = $1`, name).
+		Scan(&t.ID, &t.Name, &t.IsCheckedIn, &t.Status, &t.ChallongeParticipantID)
 	if err != nil {
 		return nil, err
 	}
@@ -135,8 +137,8 @@ func (r *TelegramPostgres) DeleteTeam(ctx context.Context, id int) error {
 
 func (r *TelegramPostgres) GetAllTeams(ctx context.Context) ([]models.TelegramTeam, error) {
 	query := `
-		SELECT t.id, t.name, COALESCE(t.is_checked_in, FALSE), COALESCE(t.status, 'active'),
-		       p.id, p.telegram_id, p.telegram_username, p.first_name, 
+		SELECT t.id, t.name, COALESCE(t.is_checked_in, FALSE), COALESCE(t.status, 'active'), t.challonge_participant_id,
+		       p.id, p.telegram_id, p.telegram_username, p.first_name,
 		       p.game_nickname, p.game_id, p.zone_id, p.stars, p.main_role,
 		       p.is_captain, p.is_substitute, p.fsm_state, p.team_id
 		FROM telegram_teams t
@@ -157,11 +159,12 @@ func (r *TelegramPostgres) GetAllTeams(ctx context.Context) ([]models.TelegramTe
 		var pID, pStars sql.NullInt64
 		var pTelegramID sql.NullInt64
 		var pTeamID sql.NullInt64
+		var pParticipant sql.NullInt64
 		var pUsername, pFirstName, pNickname, pGameID, pZoneID, pRole, pState sql.NullString
 		var pIsCaptain, pIsSubstitute sql.NullBool
 
 		if err := rows.Scan(
-			&t.ID, &t.Name, &t.IsCheckedIn, &t.Status,
+			&t.ID, &t.Name, &t.IsCheckedIn, &t.Status, &pParticipant,
 			&pID, &pTelegramID, &pUsername, &pFirstName,
 			&pNickname, &pGameID, &pZoneID, &pStars, &pRole,
 			&pIsCaptain, &pIsSubstitute, &pState, &pTeamID,
@@ -170,13 +173,12 @@ func (r *TelegramPostgres) GetAllTeams(ctx context.Context) ([]models.TelegramTe
 		}
 
 		if _, exists := teamsMap[t.ID]; !exists {
-			teamsMap[t.ID] = &models.TelegramTeam{
-				ID:          t.ID,
-				Name:        t.Name,
-				IsCheckedIn: t.IsCheckedIn,
-				Status:      t.Status,
-				Players:     []models.TelegramPlayer{},
+			team := &models.TelegramTeam{ID: t.ID, Name: t.Name, IsCheckedIn: t.IsCheckedIn, Status: t.Status, Players: []models.TelegramPlayer{}}
+			if pParticipant.Valid {
+				pid := pParticipant.Int64
+				team.ChallongeParticipantID = &pid
 			}
+			teamsMap[t.ID] = team
 			teamsOrder = append(teamsOrder, t.ID)
 		}
 
@@ -394,10 +396,10 @@ func (r *TelegramPostgres) CreateMatchReport(ctx context.Context, report *models
 	var createdAt time.Time
 	err := r.db.QueryRowContext(ctx, `
 		INSERT INTO telegram_match_reports
-			(reporter_telegram_id, winner_team_id, loser_team_id, score, photo_file_ids)
-		VALUES ($1, $2, $3, $4, $5)
+			(reporter_telegram_id, winner_team_id, loser_team_id, score, photo_file_ids, bracket_match_id)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING id, created_at
-	`, report.ReporterTelegramID, report.WinnerTeamID, report.LoserTeamID, report.Score, pq.Array(report.PhotoFileIDs)).Scan(&id, &createdAt)
+	`, report.ReporterTelegramID, report.WinnerTeamID, report.LoserTeamID, report.Score, pq.Array(report.PhotoFileIDs), report.BracketMatchID).Scan(&id, &createdAt)
 	if err != nil {
 		return err
 	}
@@ -451,5 +453,119 @@ func (r *TelegramPostgres) GetRecentMatchReports(ctx context.Context, limit int)
 		reports = append(reports, rep)
 	}
 	return reports, rows.Err()
+}
+
+func (r *TelegramPostgres) SetTeamParticipantID(ctx context.Context, teamID int, pid int64) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE telegram_teams SET challonge_participant_id = $2 WHERE id = $1`, teamID, pid)
+	return err
+}
+
+func (r *TelegramPostgres) ClearTeamParticipantIDs(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE telegram_teams SET challonge_participant_id = NULL`)
+	return err
+}
+
+// ReplaceBracketMatches rewrites the cache. both_notified is the only column
+// Challonge does not own: it survives the rewrite while the two slots hold the
+// same teams and resets when a rollback puts a different pair in the match.
+// Rows are upserted by challonge_match_id (reports point at cache ids) and
+// only the vanished ones are deleted.
+func (r *TelegramPostgres) ReplaceBracketMatches(ctx context.Context, matches []models.BracketMatch) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after Commit
+
+	ids := make([]int64, 0, len(matches))
+	for _, m := range matches {
+		ids = append(ids, m.ChallongeMatchID)
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO telegram_bracket_matches
+				(challonge_match_id, round, play_order, team1_id, team2_id, winner_id, state, scores_csv, both_notified, synced_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, FALSE, NOW())
+			ON CONFLICT (challonge_match_id) DO UPDATE SET
+				round = EXCLUDED.round, play_order = EXCLUDED.play_order,
+				team1_id = EXCLUDED.team1_id, team2_id = EXCLUDED.team2_id, winner_id = EXCLUDED.winner_id,
+				state = EXCLUDED.state, scores_csv = EXCLUDED.scores_csv, synced_at = NOW(),
+				both_notified = CASE
+					WHEN telegram_bracket_matches.team1_id IS NOT DISTINCT FROM EXCLUDED.team1_id
+					 AND telegram_bracket_matches.team2_id IS NOT DISTINCT FROM EXCLUDED.team2_id
+					THEN telegram_bracket_matches.both_notified ELSE FALSE END
+		`, m.ChallongeMatchID, m.Round, m.PlayOrder, m.Team1ID, m.Team2ID, m.WinnerID, m.State, m.ScoresCSV)
+		if err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM telegram_bracket_matches WHERE NOT (challonge_match_id = ANY($1))`, pq.Array(ids)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (r *TelegramPostgres) GetBracketMatches(ctx context.Context) ([]models.BracketMatch, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT m.id, m.challonge_match_id, m.round, m.play_order,
+		       m.team1_id, m.team2_id, m.winner_id,
+		       COALESCE(t1.name, ''), COALESCE(t2.name, ''),
+		       m.state, m.scores_csv, m.both_notified
+		FROM telegram_bracket_matches m
+		LEFT JOIN telegram_teams t1 ON t1.id = m.team1_id
+		LEFT JOIN telegram_teams t2 ON t2.id = m.team2_id
+		ORDER BY m.round, m.play_order
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck // best-effort cleanup
+
+	var out []models.BracketMatch
+	for rows.Next() {
+		var m models.BracketMatch
+		if err := rows.Scan(&m.ID, &m.ChallongeMatchID, &m.Round, &m.PlayOrder,
+			&m.Team1ID, &m.Team2ID, &m.WinnerID, &m.Team1Name, &m.Team2Name,
+			&m.State, &m.ScoresCSV, &m.BothNotified); err != nil {
+			return nil, fmt.Errorf("scan bracket match: %w", err)
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+func (r *TelegramPostgres) MarkBracketNotified(ctx context.Context, ids []int) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := r.db.ExecContext(ctx, `UPDATE telegram_bracket_matches SET both_notified = TRUE WHERE id = ANY($1)`, pq.Array(ids))
+	return err
+}
+
+func (r *TelegramPostgres) SetReportSynced(ctx context.Context, reportID int) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE telegram_match_reports SET synced_at = NOW() WHERE id = $1`, reportID)
+	return err
+}
+
+func (r *TelegramPostgres) GetUnsyncedReports(ctx context.Context) ([]models.TelegramMatchReport, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, reporter_telegram_id, winner_team_id, loser_team_id, score, photo_file_ids, created_at, bracket_match_id
+		FROM telegram_match_reports
+		WHERE bracket_match_id IS NOT NULL AND synced_at IS NULL
+		ORDER BY id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck // best-effort cleanup
+
+	var out []models.TelegramMatchReport
+	for rows.Next() {
+		var rep models.TelegramMatchReport
+		if err := rows.Scan(&rep.ID, &rep.ReporterTelegramID, &rep.WinnerTeamID, &rep.LoserTeamID,
+			&rep.Score, pq.Array(&rep.PhotoFileIDs), &rep.CreatedAt, &rep.BracketMatchID); err != nil {
+			return nil, fmt.Errorf("scan unsynced report: %w", err)
+		}
+		out = append(out, rep)
+	}
+	return out, rows.Err()
 }
 

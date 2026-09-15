@@ -89,6 +89,17 @@ type Telegram interface {
 
 	CreateMatchReport(ctx context.Context, report *models.TelegramMatchReport) error
 	GetRecentMatchReports(ctx context.Context, limit int) ([]models.TelegramMatchReport, error)
+
+	// Bracket cache. ReplaceBracketMatches rewrites the table in one
+	// transaction; both_notified survives for rows whose team pair is unchanged.
+	ReplaceBracketMatches(ctx context.Context, matches []models.BracketMatch) error
+	GetBracketMatches(ctx context.Context) ([]models.BracketMatch, error)
+	MarkBracketNotified(ctx context.Context, ids []int) error
+	SetTeamParticipantID(ctx context.Context, teamID int, participantID int64) error
+	ClearTeamParticipantIDs(ctx context.Context) error
+	// Reports queued for Challonge: bracket_match_id set, synced_at NULL.
+	SetReportSynced(ctx context.Context, reportID int) error
+	GetUnsyncedReports(ctx context.Context) ([]models.TelegramMatchReport, error)
 }
 
 type LobbyMatch interface {

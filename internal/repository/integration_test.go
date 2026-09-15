@@ -1332,3 +1332,118 @@ func TestIntegrationNullableTelegramPlayer(t *testing.T) {
 			got.GameNickname, got.GameID, got.ZoneID, got.Stars, got.MainRole)
 	}
 }
+
+// The bracket cache is rewritten after every Challonge write; both_notified
+// is ours, not Challonge's, and must survive the rewrite.
+func TestIntegrationBracketCacheKeepsNotified(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	repo := NewTelegramPostgres(db)
+
+	a, err := repo.CreateTeam(ctx, uniqueName(t, "brA"))
+	if err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+	b, err := repo.CreateTeam(ctx, uniqueName(t, "brB"))
+	if err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DELETE FROM telegram_bracket_matches WHERE challonge_match_id IN (9001, 9002)`)
+		_, _ = db.Exec(`DELETE FROM telegram_teams WHERE id IN ($1, $2)`, a.ID, b.ID)
+	})
+	if err := repo.SetTeamParticipantID(ctx, a.ID, 501); err != nil {
+		t.Fatalf("SetTeamParticipantID: %v", err)
+	}
+	gotA, _ := repo.GetTeamByID(ctx, a.ID)
+	if gotA.ChallongeParticipantID == nil || *gotA.ChallongeParticipantID != 501 {
+		t.Fatalf("participant id = %v, want 501", gotA.ChallongeParticipantID)
+	}
+
+	first := []models.BracketMatch{
+		{ChallongeMatchID: 9001, Round: 1, PlayOrder: 1, Team1ID: &a.ID, Team2ID: &b.ID, State: models.BracketOpen},
+		{ChallongeMatchID: 9002, Round: 2, PlayOrder: 2, State: models.BracketPending},
+	}
+	if err := repo.ReplaceBracketMatches(ctx, first); err != nil {
+		t.Fatalf("ReplaceBracketMatches: %v", err)
+	}
+	cached, err := repo.GetBracketMatches(ctx)
+	if err != nil {
+		t.Fatalf("GetBracketMatches: %v", err)
+	}
+	var m1 *models.BracketMatch
+	for i := range cached {
+		if cached[i].ChallongeMatchID == 9001 {
+			m1 = &cached[i]
+		}
+	}
+	if m1 == nil || m1.Team1Name != a.Name || m1.Team2Name != b.Name {
+		t.Fatalf("match 9001 = %+v, want names joined", m1)
+	}
+	if err := repo.MarkBracketNotified(ctx, []int{m1.ID}); err != nil {
+		t.Fatalf("MarkBracketNotified: %v", err)
+	}
+
+	second := []models.BracketMatch{
+		{ChallongeMatchID: 9001, Round: 1, PlayOrder: 1, Team1ID: &a.ID, Team2ID: &b.ID, WinnerID: &a.ID, State: models.BracketComplete, ScoresCSV: "2-0"},
+	}
+	if err := repo.ReplaceBracketMatches(ctx, second); err != nil {
+		t.Fatalf("ReplaceBracketMatches#2: %v", err)
+	}
+	cached, _ = repo.GetBracketMatches(ctx)
+	var seen9001, seen9002 bool
+	for _, m := range cached {
+		switch m.ChallongeMatchID {
+		case 9001:
+			seen9001 = true
+			if !m.BothNotified || m.State != models.BracketComplete || m.ID != m1.ID {
+				t.Errorf("9001 after rewrite = %+v, want notified, complete, same id", m)
+			}
+		case 9002:
+			seen9002 = true
+		}
+	}
+	if !seen9001 || seen9002 {
+		t.Errorf("after rewrite seen9001=%v seen9002=%v, want true/false", seen9001, seen9002)
+	}
+
+	// A rollback that puts a different pair into the match must re-arm the ping.
+	third := []models.BracketMatch{
+		{ChallongeMatchID: 9001, Round: 1, PlayOrder: 1, Team1ID: &a.ID, State: models.BracketOpen},
+	}
+	if err := repo.ReplaceBracketMatches(ctx, third); err != nil {
+		t.Fatalf("ReplaceBracketMatches#3: %v", err)
+	}
+	cached, _ = repo.GetBracketMatches(ctx)
+	for _, m := range cached {
+		if m.ChallongeMatchID == 9001 && m.BothNotified {
+			t.Error("both_notified survived a pair change")
+		}
+	}
+
+	// Queued report round trip.
+	rep := &models.TelegramMatchReport{ReporterTelegramID: 1, WinnerTeamID: a.ID, LoserTeamID: b.ID, Score: "2:0", PhotoFileIDs: []string{"f"}, BracketMatchID: &m1.ID}
+	if err := repo.CreateMatchReport(ctx, rep); err != nil {
+		t.Fatalf("CreateMatchReport: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM telegram_match_reports WHERE id = $1`, rep.ID) })
+	queued, _ := repo.GetUnsyncedReports(ctx)
+	found := false
+	for _, q := range queued {
+		if q.ID == rep.ID && q.BracketMatchID != nil && *q.BracketMatchID == m1.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("report %d missing from unsynced queue", rep.ID)
+	}
+	if err := repo.SetReportSynced(ctx, rep.ID); err != nil {
+		t.Fatalf("SetReportSynced: %v", err)
+	}
+	queued, _ = repo.GetUnsyncedReports(ctx)
+	for _, q := range queued {
+		if q.ID == rep.ID {
+			t.Error("report still queued after SetReportSynced")
+		}
+	}
+}
