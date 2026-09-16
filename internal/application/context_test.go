@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,21 +14,32 @@ import (
 // banRepoStub records the context it was called with and can block until the
 // caller's deadline expires.
 type banRepoStub struct {
-	gotCtx  context.Context
-	block   bool
-	banned  bool
-	banErr  error
-	callCnt int
+	mu     sync.Mutex
+	gotCtx context.Context
+	block  bool
+	banned bool
+	banErr error
+}
+
+func (r *banRepoStub) recordContext(ctx context.Context) {
+	r.mu.Lock()
+	r.gotCtx = ctx
+	r.mu.Unlock()
+}
+
+func (r *banRepoStub) context() context.Context {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.gotCtx
 }
 
 func (r *banRepoStub) BanPlayer(ctx context.Context, discordID, reason string, until time.Time) error {
-	r.gotCtx = ctx
+	r.recordContext(ctx)
 	return nil
 }
 
 func (r *banRepoStub) IsBanned(ctx context.Context, discordID string) (bool, error) {
-	r.gotCtx = ctx
-	r.callCnt++
+	r.recordContext(ctx)
 	if r.block {
 		<-ctx.Done()
 		return false, ctx.Err()
@@ -36,12 +48,12 @@ func (r *banRepoStub) IsBanned(ctx context.Context, discordID string) (bool, err
 }
 
 func (r *banRepoStub) GetBanInfo(ctx context.Context, discordID string) (string, time.Time, error) {
-	r.gotCtx = ctx
+	r.recordContext(ctx)
 	return "smurfing", time.Now().Add(time.Hour), nil
 }
 
 func (r *banRepoStub) PurgeExpired(ctx context.Context) (int, error) {
-	r.gotCtx = ctx
+	r.recordContext(ctx)
 	return 0, nil
 }
 
@@ -56,10 +68,11 @@ func TestTryAddPlayerPassesCallerContext(t *testing.T) {
 		t.Fatalf("unexpected rejection: %v", err)
 	}
 
-	if repo.gotCtx == nil {
+	gotCtx := repo.context()
+	if gotCtx == nil {
 		t.Fatal("repository was called without a context")
 	}
-	if got := repo.gotCtx.Value(key); got != "abc123" {
+	if got := gotCtx.Value(key); got != "abc123" {
 		t.Errorf("repository got a detached context (value %v), the caller's context must reach it", got)
 	}
 }
