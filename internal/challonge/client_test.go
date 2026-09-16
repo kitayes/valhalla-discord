@@ -226,6 +226,64 @@ func TestQuotaAndAPIErrors(t *testing.T) {
 	}
 }
 
+func TestGetMatchRetriesTransientFailure(t *testing.T) {
+	attempts := 0
+	c, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		io.WriteString(w, `{"data":{"id":"42","attributes":{"state":"complete","round":1,"suggested_play_order":7,"scores":"2 - 0","winner_id":355},"relationships":{"player1":{"data":{"id":"355"}},"player2":{"data":{"id":"354"}}}}}`)
+	})
+	c.sleep = func(context.Context, time.Duration) error { return nil }
+	m, err := c.GetMatch(context.Background(), 5, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 3 || m.ID != 42 || m.WinnerID != 355 || m.State != "complete" {
+		t.Fatalf("attempts=%d match=%+v", attempts, m)
+	}
+}
+
+func TestWriteDoesNotBlindlyRetry(t *testing.T) {
+	attempts := 0
+	c, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	if err := c.ReportMatch(context.Background(), 5, 42, 355, 354, 2, 0); err == nil {
+		t.Fatal("ReportMatch succeeded")
+	}
+	if attempts != 1 {
+		t.Fatalf("write attempts=%d, want 1", attempts)
+	}
+}
+
+func TestListOpenMatchesFiltersAtServer(t *testing.T) {
+	c, reqs, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"data":[]}`)
+	})
+	if _, err := c.ListOpenMatches(context.Background(), 5); err != nil {
+		t.Fatal(err)
+	}
+	if got := (*reqs)[0].URL.Query().Get("state"); got != "open" {
+		t.Fatalf("state=%q, want open", got)
+	}
+}
+
+func TestQuotaErrorCarriesRetryAfter(t *testing.T) {
+	c, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "120")
+		w.WriteHeader(http.StatusTooManyRequests)
+	})
+	err := c.Start(context.Background(), 5)
+	var quota *QuotaError
+	if !errors.As(err, &quota) || !errors.Is(err, ErrQuotaExceeded) || quota.RetryAfter != 2*time.Minute {
+		t.Fatalf("quota error = %#v", err)
+	}
+}
+
 // TestLive runs the whole lifecycle against the real API — the spike the spec
 // asks for. It fails loudly if a shape guessed from the docs does not match.
 // Needs CHALLONGE_API_KEY; skipped otherwise. Costs 7 requests of the quota.

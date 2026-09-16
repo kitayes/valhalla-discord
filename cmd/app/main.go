@@ -12,6 +12,7 @@ import (
 
 	"blackwatch/internal/ai"
 	"blackwatch/internal/application"
+	"blackwatch/internal/challonge"
 	"blackwatch/internal/delivery/discord"
 	"blackwatch/internal/delivery/telegram"
 	"blackwatch/internal/delivery/web"
@@ -95,6 +96,13 @@ func main() {
 	}
 
 	services := application.NewService(repos, gemini, sheetsClient, cfg.GoogleOwnerEmail, cfg.SpreadsheetID, cfg.HTTPTimeoutSec, log)
+	if cfg.BracketEnabled() {
+		walkoverWin, walkoverLose, _ := config.ParseWalkoverScore(cfg.BracketWalkoverScore)
+		challongeHTTP := &http.Client{Timeout: time.Duration(cfg.HTTPTimeoutSec) * time.Second}
+		provider := challonge.New(cfg.ChallongeAPIKey, cfg.ChallongeSubdomain, challongeHTTP)
+		services.SetBracketService(application.NewBracketService(repos.Telegram, provider, walkoverWin, walkoverLose, log))
+		log.Info("Challonge bracket service initialized")
+	}
 
 	// Initialize DeepSeek FAQ service if API key is configured
 	if cfg.DeepSeekKey != "" {
@@ -121,7 +129,7 @@ func main() {
 	if cfg.TelegramToken != "" {
 		// Validated at config load; a failure here is unreachable.
 		tournamentLoc, _ := cfg.TournamentLocation()
-		telegramBot, err = telegram.NewBot(cfg.TelegramToken, cfg.TelegramAdminIDs, services.TelegramService, services.ProfileLinkService, services.BettingService, cfg.TelegramChannelID, cfg.TelegramTournamentChatID, telegram.BetSettings{Stakes: cfg.StakeOptions(), Max: cfg.BetMax}, tournamentLoc, log)
+		telegramBot, err = telegram.NewBot(cfg.TelegramToken, cfg.TelegramAdminIDs, services.TelegramService, services.ProfileLinkService, services.BettingService, cfg.TelegramChannelID, cfg.TelegramTournamentChatID, telegram.BetSettings{Stakes: cfg.StakeOptions(), Max: cfg.BetMax}, services.Bracket, tournamentLoc, log)
 		if err != nil {
 			log.Error("failed to init telegram bot: %s", err.Error())
 		} else if betting := telegramBot.BettingBot(); betting != nil {

@@ -32,6 +32,8 @@ func (b *Bot) handleAdminCommand(ctx context.Context, chatID int64, text string)
 			"/close_reg / /open_reg - Регистрация\n" +
 			"/del_team [название] - Удалить\n" +
 			"/reinstate [название] - Вернуть после тех. поражения\n" +
+			"/build_bracket - Построить или пересобрать сетку\n" +
+			"/set_winner <№> <команда> [счёт] - Исправить результат\n" +
 			"/reset_user [ID] - Сброс FSM"
 		b.sendMessage(chatID, response, "main_menu")
 		return
@@ -187,6 +189,13 @@ func (b *Bot) handleAdminCommand(ctx context.Context, chatID int64, text string)
 		resp := b.service.AdminReinstateTeam(ctx, name)
 		b.sendMessage(chatID, resp, "main_menu")
 		b.notifyTeamReinstated(resp)
+		if b.bracket != nil && strings.Contains(resp, "возвращена в турнир") {
+			change, err := b.bracket.Reinstate(ctx, name)
+			b.reportBracketError(ctx, "reinstate", err)
+			if err == nil {
+				b.applyBracketChange(ctx, change)
+			}
+		}
 		return
 	}
 

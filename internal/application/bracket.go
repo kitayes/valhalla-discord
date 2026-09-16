@@ -20,6 +20,8 @@ type BracketProvider interface {
 	BulkAddParticipants(ctx context.Context, tournamentID int64, ps []challonge.NewParticipant) ([]challonge.Participant, error)
 	Start(ctx context.Context, tournamentID int64) error
 	ListMatches(ctx context.Context, tournamentID int64) ([]challonge.Match, error)
+	ListOpenMatches(ctx context.Context, tournamentID int64) ([]challonge.Match, error)
+	GetMatch(ctx context.Context, tournamentID, matchID int64) (challonge.Match, error)
 	ReportMatch(ctx context.Context, tournamentID, matchID, winnerPID, loserPID int64, winnerScore, loserScore int) error
 	ReopenMatch(ctx context.Context, tournamentID, matchID int64) error
 	DeleteTournament(ctx context.Context, tournamentID int64) error
@@ -31,6 +33,7 @@ const (
 	settingChallongeURL  = "challonge_tournament_url"
 	settingChallongeFor  = "challonge_tournament_for" // RFC3339 tournament time the bracket was built for
 	settingBuildFailures = "bracket_build_failures"
+	settingQuotaBlocked  = "challonge_quota_blocked_until"
 )
 
 var (
@@ -40,12 +43,13 @@ var (
 	ErrMatchNotOpen    = errors.New("матч не открыт: обе стороны ещё не определены или он уже сыгран")
 	ErrNotInMatch      = errors.New("команда не участвует в этом матче")
 	ErrHasResults      = errors.New("в сетке уже есть результаты")
+	ErrResultConflict  = errors.New("результат в Challonge отличается от локального отчёта")
 )
 
 // BracketService keeps the Challonge bracket and its local cache in step.
-// Challonge is the source of truth; every write goes there first and is
-// followed by exactly one ListMatches that rewrites the cache. Reads never
-// touch the API.
+// Challonge is the source of truth; writes go there first and then merge the
+// completed result plus the server-filtered open matches into the local cache.
+// Normal reads never touch the API.
 type BracketService struct {
 	repo     repository.Telegram
 	provider BracketProvider
@@ -69,6 +73,16 @@ type SeededTeam struct {
 	AvgStars float64
 }
 
+func mainRosterSize(team models.TelegramTeam) int {
+	n := 0
+	for _, player := range team.Players {
+		if !player.IsSubstitute {
+			n++
+		}
+	}
+	return n
+}
+
 // SeedTeams orders active teams by the average stars of the main roster
 // (substitutes excluded); ties go to the earlier-registered team. Byes in
 // Challonge go to the top seeds, so the strongest teams skip round 1.
@@ -76,6 +90,9 @@ func SeedTeams(teams []models.TelegramTeam) []SeededTeam {
 	var out []SeededTeam
 	for _, t := range teams {
 		if t.Status == models.TeamStatusDisqualified {
+			continue
+		}
+		if mainRosterSize(t) < MainRosterSlots {
 			continue
 		}
 		sum, n := 0, 0
@@ -87,9 +104,7 @@ func SeedTeams(teams []models.TelegramTeam) []SeededTeam {
 			n++
 		}
 		avg := 0.0
-		if n > 0 {
-			avg = float64(sum) / float64(n)
-		}
+		avg = float64(sum) / float64(n)
 		out = append(out, SeededTeam{Team: t, AvgStars: avg})
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -113,6 +128,8 @@ type BracketBuilt struct {
 	// byes meeting in round 2. Sync marked them notified, so the announcer
 	// must ping their captains itself.
 	Later []models.BracketMatch
+	// Incomplete teams were deliberately excluded from the bracket.
+	Incomplete []models.TelegramTeam
 }
 
 func (s *BracketService) tournamentID(ctx context.Context) int64 {
@@ -144,9 +161,61 @@ func (s *BracketService) BuildFailures(ctx context.Context) int {
 	return n
 }
 
+// CanAttempt reports whether the persisted quota circuit breaker is open.
+// Persisting it prevents a process restart from resuming one request a minute.
+func (s *BracketService) CanAttempt(ctx context.Context, now time.Time) bool {
+	value, _ := s.repo.GetSetting(ctx, settingQuotaBlocked)
+	until, err := time.Parse(time.RFC3339, value)
+	return err != nil || !now.Before(until)
+}
+
+func (s *BracketService) recordQuota(ctx context.Context, err error) {
+	if !errors.Is(err, challonge.ErrQuotaExceeded) {
+		return
+	}
+	delay := 24 * time.Hour
+	var quota *challonge.QuotaError
+	if errors.As(err, &quota) && quota.RetryAfter > 0 {
+		delay = quota.RetryAfter
+	}
+	until := s.now().Add(delay).UTC().Format(time.RFC3339)
+	s.logWrite("SetSetting", s.repo.SetSetting(ctx, settingQuotaBlocked, until))
+}
+
+// RecordAPIError updates persistent provider health state for delivery-layer
+// operations such as admin overrides and full synchronizations.
+func (s *BracketService) RecordAPIError(ctx context.Context, err error) {
+	s.recordQuota(ctx, err)
+}
+
+func (s *BracketService) clearQuotaBlock(ctx context.Context) {
+	s.logWrite("SetSetting", s.repo.SetSetting(ctx, settingQuotaBlocked, ""))
+}
+
 // Matches is the cached bracket, ordered by round and play order.
 func (s *BracketService) Matches(ctx context.Context) ([]models.BracketMatch, error) {
 	return s.repo.GetBracketMatches(ctx)
+}
+
+// Walkover returns the configured technical-defeat score.
+func (s *BracketService) Walkover() (int, int) {
+	return s.walkoverWin, s.walkoverLose
+}
+
+// CaptainChatIDs returns the Telegram chats to notify for a team.
+func (s *BracketService) CaptainChatIDs(ctx context.Context, teamID int) []int64 {
+	members, err := s.repo.GetTeamMembers(ctx, teamID)
+	if err != nil {
+		s.logger.Warn("bracket: get captains for team %d: %v", teamID, err)
+		return nil
+	}
+	var ids []int64
+	for _, member := range members {
+		if member.IsCaptain && member.TelegramID != nil {
+			ids = append(ids, *member.TelegramID)
+		}
+	}
+	return ids
 }
 
 // HasResults reports whether any match has been played. Byes complete
@@ -173,6 +242,7 @@ func (s *BracketService) Build(ctx context.Context, forTournament time.Time) (*B
 
 	built, err := s.build(ctx, forTournament)
 	if err != nil {
+		s.recordQuota(ctx, err)
 		n := s.BuildFailures(ctx) + 1
 		s.logWrite("SetSetting", s.repo.SetSetting(ctx, settingBuildFailures, strconv.Itoa(n)))
 		// The id stays so the next attempt deletes the half-made tournament;
@@ -181,6 +251,7 @@ func (s *BracketService) Build(ctx context.Context, forTournament time.Time) (*B
 		return nil, err
 	}
 	s.logWrite("SetSetting", s.repo.SetSetting(ctx, settingBuildFailures, "0"))
+	s.clearQuotaBlock(ctx)
 	return built, nil
 }
 
@@ -190,6 +261,12 @@ func (s *BracketService) build(ctx context.Context, forTournament time.Time) (*B
 		return nil, err
 	}
 	seeded := SeedTeams(teams)
+	var incomplete []models.TelegramTeam
+	for _, team := range teams {
+		if team.Status != models.TeamStatusDisqualified && mainRosterSize(team) < MainRosterSlots {
+			incomplete = append(incomplete, team)
+		}
+	}
 	if len(seeded) < 2 {
 		return nil, ErrTooFewTeams
 	}
@@ -274,7 +351,7 @@ func (s *BracketService) build(ctx context.Context, forTournament time.Time) (*B
 			byes = append(byes, st.Team)
 		}
 	}
-	return &BracketBuilt{URL: tr.URL, Round1: round1, Byes: byes, Later: later}, nil
+	return &BracketBuilt{URL: tr.URL, Round1: round1, Byes: byes, Later: later, Incomplete: incomplete}, nil
 }
 
 // Sync pulls the bracket from Challonge, rewrites the cache and returns the
@@ -306,25 +383,24 @@ func (s *BracketService) sync(ctx context.Context, tID int64) ([]models.BracketM
 			byPID[*t.ChallongeParticipantID] = t.ID
 		}
 	}
+	ms := make([]models.BracketMatch, 0, len(raw))
+	for _, m := range raw {
+		ms = append(ms, bracketMatchFromRemote(m, byPID))
+	}
+	return s.replaceAndReady(ctx, ms)
+}
+
+func bracketMatchFromRemote(m challonge.Match, byPID map[int64]int) models.BracketMatch {
 	toTeam := func(pid int64) *int {
 		if id, ok := byPID[pid]; ok {
 			return &id
 		}
 		return nil
 	}
-	ms := make([]models.BracketMatch, 0, len(raw))
-	for _, m := range raw {
-		ms = append(ms, models.BracketMatch{
-			ChallongeMatchID: m.ID,
-			Round:            m.Round,
-			PlayOrder:        m.PlayOrder,
-			Team1ID:          toTeam(m.Player1ID),
-			Team2ID:          toTeam(m.Player2ID),
-			WinnerID:         toTeam(m.WinnerID),
-			State:            m.State,
-			ScoresCSV:        m.Scores,
-		})
-	}
+	return models.BracketMatch{ChallongeMatchID: m.ID, Round: m.Round, PlayOrder: m.PlayOrder, Team1ID: toTeam(m.Player1ID), Team2ID: toTeam(m.Player2ID), WinnerID: toTeam(m.WinnerID), State: m.State, ScoresCSV: m.Scores}
+}
+
+func (s *BracketService) replaceAndReady(ctx context.Context, ms []models.BracketMatch) ([]models.BracketMatch, error) {
 	if err := s.repo.ReplaceBracketMatches(ctx, ms); err != nil {
 		return nil, err
 	}
@@ -344,6 +420,54 @@ func (s *BracketService) sync(ctx context.Context, tID int64) ([]models.BracketM
 		return nil, err
 	}
 	return ready, nil
+}
+
+// syncAfterReport merges the completed match and Challonge's currently open
+// matches into the existing full cache. Unlike ListMatches this is always one
+// page for a <=128-team single-elimination bracket, saving one API request per
+// reported match at the largest supported size.
+func (s *BracketService) syncAfterReport(ctx context.Context, tID int64, reported *models.BracketMatch, winnerTeamID, winnerScore, loserScore int) ([]models.BracketMatch, error) {
+	open, err := s.provider.ListOpenMatches(ctx, tID)
+	if err != nil {
+		s.recordQuota(ctx, err)
+		return nil, err
+	}
+	teams, err := s.repo.GetAllTeams(ctx)
+	if err != nil {
+		return nil, err
+	}
+	byPID := make(map[int64]int, len(teams))
+	for _, team := range teams {
+		if team.ChallongeParticipantID != nil {
+			byPID[*team.ChallongeParticipantID] = team.ID
+		}
+	}
+	ms, err := s.repo.GetBracketMatches(ctx)
+	if err != nil {
+		return nil, err
+	}
+	byRemoteID := make(map[int64]int, len(ms))
+	for i := range ms {
+		byRemoteID[ms[i].ChallongeMatchID] = i
+		if ms[i].ID == reported.ID {
+			winner := winnerTeamID
+			team1Score, team2Score := winnerScore, loserScore
+			if reported.Team2ID != nil && *reported.Team2ID == winnerTeamID {
+				team1Score, team2Score = loserScore, winnerScore
+			}
+			ms[i].WinnerID = &winner
+			ms[i].State = models.BracketComplete
+			ms[i].ScoresCSV = fmt.Sprintf("%d - %d", team1Score, team2Score)
+		}
+	}
+	for _, remote := range open {
+		m := bracketMatchFromRemote(remote, byPID)
+		if i, ok := byRemoteID[remote.ID]; ok {
+			m.ID = ms[i].ID
+			ms[i] = m
+		}
+	}
+	return s.replaceAndReady(ctx, ms)
 }
 
 func (s *BracketService) logWrite(op string, err error) {
@@ -408,7 +532,42 @@ func (s *BracketService) report(ctx context.Context, tID int64, m *models.Bracke
 	if err != nil {
 		return err
 	}
-	return s.provider.ReportMatch(ctx, tID, m.ChallongeMatchID, wPID, lPID, winnerScore, loserScore)
+	err = s.provider.ReportMatch(ctx, tID, m.ChallongeMatchID, wPID, lPID, winnerScore, loserScore)
+	if err == nil {
+		s.clearQuotaBlock(ctx)
+		return nil
+	}
+	if errors.Is(err, challonge.ErrQuotaExceeded) {
+		s.recordQuota(ctx, err)
+		return err
+	}
+	// A timed-out PUT is ambiguous: Challonge may have committed it before the
+	// connection broke. Read the match before allowing any caller to retry.
+	remote, readErr := s.provider.GetMatch(ctx, tID, m.ChallongeMatchID)
+	if readErr != nil {
+		return fmt.Errorf("%w; reconciliation failed: %v", err, readErr)
+	}
+	if resultMatches(remote, wPID, winnerScore, loserScore) {
+		return nil
+	}
+	if remote.State == models.BracketComplete {
+		return fmt.Errorf("%w: match #%d", ErrResultConflict, m.PlayOrder)
+	}
+	return err
+}
+
+func resultMatches(remote challonge.Match, winnerPID int64, winnerScore, loserScore int) bool {
+	if remote.State != models.BracketComplete || remote.WinnerID != winnerPID {
+		return false
+	}
+	first, second, _, ok := parseScore(remote.Scores)
+	if !ok {
+		return false
+	}
+	// Challonge's compact scores field follows participant order, while older
+	// responses/fixtures may preserve submission order. The winner id makes
+	// accepting either representation unambiguous.
+	return (first == winnerScore && second == loserScore) || (first == loserScore && second == winnerScore)
 }
 
 // ReportResult records a played match and returns the matches that became
@@ -419,6 +578,9 @@ func (s *BracketService) ReportResult(ctx context.Context, matchID, winnerTeamID
 	tID := s.tournamentID(ctx)
 	if tID == 0 {
 		return nil, ErrBracketNotBuilt
+	}
+	if !s.CanAttempt(ctx, s.now()) {
+		return nil, challonge.ErrQuotaExceeded
 	}
 	ms, err := s.repo.GetBracketMatches(ctx)
 	if err != nil {
@@ -431,7 +593,7 @@ func (s *BracketService) ReportResult(ctx context.Context, matchID, winnerTeamID
 	if err := s.report(ctx, tID, m, winnerTeamID, winnerScore, loserScore); err != nil {
 		return nil, err
 	}
-	return s.sync(ctx, tID)
+	return s.syncAfterReport(ctx, tID, m, winnerTeamID, winnerScore, loserScore)
 }
 
 // ForfeitDisqualified hands every open match of a disqualified team to its
@@ -443,6 +605,9 @@ func (s *BracketService) ForfeitDisqualified(ctx context.Context) ([]models.Brac
 	defer s.mu.Unlock()
 	tID := s.tournamentID(ctx)
 	if tID == 0 {
+		return nil, nil
+	}
+	if !s.CanAttempt(ctx, s.now()) {
 		return nil, nil
 	}
 	teams, err := s.repo.GetAllTeams(ctx)
@@ -662,14 +827,17 @@ func (s *BracketService) Reinstate(ctx context.Context, teamName string) (*Brack
 }
 
 // FlushPendingReports pushes reports saved while Challonge was unreachable.
-// A report whose match is no longer open (someone else's result got there
-// first, or an admin override) is marked synced and dropped: retrying it
-// forever would burn the quota.
+// Before retrying a write, the remote match is read: an already-applied result
+// is reconciled without another PUT, while a conflicting completed result is
+// removed from automatic retries and surfaced for an administrator.
 func (s *BracketService) FlushPendingReports(ctx context.Context) ([]models.BracketMatch, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	tID := s.tournamentID(ctx)
 	if tID == 0 {
+		return nil, nil
+	}
+	if !s.CanAttempt(ctx, s.now()) {
 		return nil, nil
 	}
 	queued, err := s.repo.GetUnsyncedReports(ctx)
@@ -678,12 +846,15 @@ func (s *BracketService) FlushPendingReports(ctx context.Context) ([]models.Brac
 	}
 	var out []models.BracketMatch
 	for _, rep := range queued {
+		if rep.BracketMatchID == nil {
+			continue
+		}
 		ms, err := s.repo.GetBracketMatches(ctx)
 		if err != nil {
 			return out, err
 		}
 		m := findMatch(ms, *rep.BracketMatchID)
-		if m == nil || !m.Ready() || !m.Has(rep.WinnerTeamID) {
+		if m == nil || !m.Has(rep.WinnerTeamID) {
 			s.logger.Warn("bracket: dropping queued report %d: match no longer open", rep.ID)
 			s.logWrite("SetReportSynced", s.repo.SetReportSynced(ctx, rep.ID))
 			continue
@@ -694,12 +865,41 @@ func (s *BracketService) FlushPendingReports(ctx context.Context) ([]models.Brac
 			s.logWrite("SetReportSynced", s.repo.SetReportSynced(ctx, rep.ID))
 			continue
 		}
-		if err := s.report(ctx, tID, m, rep.WinnerTeamID, w, l); err != nil {
-			return out, err // Challonge still down: keep the queue, try next tick
+		loserID := m.Opponent(rep.WinnerTeamID)
+		if loserID == nil {
+			return out, ErrMatchNotOpen
 		}
-		s.logWrite("SetReportSynced", s.repo.SetReportSynced(ctx, rep.ID))
-		ready, err := s.sync(ctx, tID)
+		wPID, _, err := s.participantIDs(ctx, rep.WinnerTeamID, *loserID)
 		if err != nil {
+			return out, err
+		}
+		remote, err := s.provider.GetMatch(ctx, tID, m.ChallongeMatchID)
+		if err != nil {
+			s.recordQuota(ctx, err)
+			return out, err
+		}
+		alreadyApplied := resultMatches(remote, wPID, w, l)
+		if remote.State == models.BracketComplete && !alreadyApplied {
+			// There is no retry that can safely fix a conflicting completed
+			// match. Remove it from the automatic queue and surface it to admins.
+			if err := s.repo.SetReportSynced(ctx, rep.ID); err != nil {
+				return out, err
+			}
+			return out, fmt.Errorf("%w: match #%d", ErrResultConflict, m.PlayOrder)
+		}
+		if !alreadyApplied {
+			if !m.Ready() {
+				return out, ErrMatchNotOpen
+			}
+			if err := s.report(ctx, tID, m, rep.WinnerTeamID, w, l); err != nil {
+				return out, err // Challonge still down: keep the queue, try next tick
+			}
+		}
+		ready, err := s.syncAfterReport(ctx, tID, m, rep.WinnerTeamID, w, l)
+		if err != nil {
+			return out, err
+		}
+		if err := s.repo.SetReportSynced(ctx, rep.ID); err != nil {
 			return out, err
 		}
 		out = append(out, ready...)

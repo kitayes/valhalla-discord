@@ -29,6 +29,7 @@ type Bot struct {
 	service            application.TelegramService
 	profileLinkService application.ProfileLinkService
 	bettingBot         *BettingBot
+	bracket            *application.BracketService
 	logger             application.Logger
 	adminIDs           map[int64]struct{}
 	// tournamentChatID is the Telegram chat/channel where tournament events
@@ -45,9 +46,10 @@ type Bot struct {
 	// single background worker goroutine.
 	remindedFor     time.Time
 	disqualifiedFor time.Time
+	quotaAlerted    bool
 }
 
-func NewBot(token string, adminIDs []int64, service application.TelegramService, profileLinkService application.ProfileLinkService, bettingService *application.BettingService, telegramChannelID string, tournamentChatID string, bets BetSettings, location *time.Location, logger application.Logger) (*Bot, error) {
+func NewBot(token string, adminIDs []int64, service application.TelegramService, profileLinkService application.ProfileLinkService, bettingService *application.BettingService, telegramChannelID string, tournamentChatID string, bets BetSettings, bracket *application.BracketService, location *time.Location, logger application.Logger) (*Bot, error) {
 	bot, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create telegram bot: %w", err)
@@ -67,6 +69,7 @@ func NewBot(token string, adminIDs []int64, service application.TelegramService,
 		bot:                bot,
 		service:            service,
 		profileLinkService: profileLinkService,
+		bracket:            bracket,
 		logger:             logger,
 		adminIDs:           admins,
 		tournamentChatID:   tournamentChatID,
@@ -82,6 +85,9 @@ func NewBot(token string, adminIDs []int64, service application.TelegramService,
 
 	if tournamentChatID != "" {
 		logger.Info("Tournament notifications configured for chat %s", tournamentChatID)
+	}
+	if bracket != nil {
+		logger.Info("Telegram bracket commands enabled (Challonge)")
 	}
 
 	return b, nil
@@ -195,6 +201,9 @@ func (b *Bot) handleUpdate(parent context.Context, msg *tgbotapi.Message) {
 	if b.handleDeskCommand(ctx, chatID, text) {
 		return
 	}
+	if b.handleBracketCommand(ctx, chatID, text) {
+		return
+	}
 	if b.isAdmin(chatID) && (text == "/admin" ||
 		text == "/list_teams" || text == "/checkin_status" || text == "/checkins" ||
 		strings.HasPrefix(text, "/check_team") ||
@@ -300,6 +309,8 @@ func (b *Bot) runScheduledChecks(ctx context.Context) {
 	if b.shouldFire(tTime, tTime.Add(technicalDefeatGrace), now, &b.disqualifiedFor) {
 		b.processTechnicalDefeat(ctx)
 	}
+
+	b.runBracketChecks(ctx, tTime, now)
 }
 
 // shouldFire reports whether a deadline has passed and has not been handled yet
@@ -369,6 +380,11 @@ func (b *Bot) processTechnicalDefeat(ctx context.Context) {
 		b.sendMessage(adminID, report.String(), "empty")
 	}
 	b.notifyTechnicalDefeats(report.String())
+	if b.bracket != nil {
+		ready, err := b.bracket.ForfeitDisqualified(ctx)
+		b.reportBracketError(ctx, "forfeit after technical defeat", err)
+		b.notifyMatchesReady(ctx, ready)
+	}
 }
 
 func (b *Bot) BettingBot() *BettingBot {

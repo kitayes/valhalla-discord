@@ -181,6 +181,30 @@ func (f *fakeChallonge) ListMatches(_ context.Context, tID int64) ([]challonge.M
 	return out, nil
 }
 
+func (f *fakeChallonge) ListOpenMatches(_ context.Context, tID int64) ([]challonge.Match, error) {
+	if err := f.call("ListOpenMatches"); err != nil {
+		return nil, err
+	}
+	var out []challonge.Match
+	for _, fm := range f.tourneys[tID].matches {
+		if fm.State == models.BracketOpen {
+			out = append(out, fm.Match)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeChallonge) GetMatch(_ context.Context, tID, matchID int64) (challonge.Match, error) {
+	if err := f.call("GetMatch"); err != nil {
+		return challonge.Match{}, err
+	}
+	fm := f.find(tID, matchID)
+	if fm == nil {
+		return challonge.Match{}, fmt.Errorf("fake: no match %d", matchID)
+	}
+	return fm.Match, nil
+}
+
 func (f *fakeChallonge) find(tID, matchID int64) *fakeMatch {
 	for _, fm := range f.tourneys[tID].matches {
 		if fm.ID == matchID {
@@ -262,9 +286,16 @@ func (f *fakeChallonge) count(name string) int {
 
 // --- fixtures ---------------------------------------------------------------
 
-// addTeam registers a team with a captain (tg id = 100+teamID) and a main
-// roster of the given stars; every player is non-substitute.
+// addBracketTeam registers a complete team with a captain. When fewer than
+// five star values are supplied, the last value is repeated so ordinary
+// bracket fixtures remain eligible without obscuring the rating they model.
 func addBracketTeam(repo *fakeTelegramRepo, id int, name string, stars ...int) *models.TelegramTeam {
+	if len(stars) == 0 {
+		stars = []int{0}
+	}
+	for len(stars) < MainRosterSlots {
+		stars = append(stars, stars[len(stars)-1])
+	}
 	t := &models.TelegramTeam{ID: id, Name: name, Status: models.TeamStatusActive, IsCheckedIn: true}
 	repo.teams[id] = t
 	// The fake's GetAllTeams/GetTeamMembers read players from repo.players
@@ -297,16 +328,16 @@ var tourneyAt = time.Date(2026, 9, 20, 18, 0, 0, 0, time.UTC)
 func TestSeedTeamsByAverageStarsOfMainRoster(t *testing.T) {
 	sub := true
 	teams := []models.TelegramTeam{
-		{ID: 1, Name: "Low", Status: models.TeamStatusActive, Players: []models.TelegramPlayer{{Stars: 10}, {Stars: 10}}},
-		{ID: 2, Name: "High", Status: models.TeamStatusActive, Players: []models.TelegramPlayer{{Stars: 30}, {Stars: 20}, {Stars: 99, IsSubstitute: sub}}},
+		{ID: 1, Name: "Low", Status: models.TeamStatusActive, Players: []models.TelegramPlayer{{Stars: 10}, {Stars: 10}, {Stars: 10}, {Stars: 10}, {Stars: 10}}},
+		{ID: 2, Name: "High", Status: models.TeamStatusActive, Players: []models.TelegramPlayer{{Stars: 30}, {Stars: 20}, {Stars: 25}, {Stars: 25}, {Stars: 25}, {Stars: 99, IsSubstitute: sub}}},
 		{ID: 3, Name: "Out", Status: models.TeamStatusDisqualified, Players: []models.TelegramPlayer{{Stars: 100}}},
-		{ID: 4, Name: "Tie", Status: models.TeamStatusActive, Players: []models.TelegramPlayer{{Stars: 25}}},
+		{ID: 4, Name: "Tie", Status: models.TeamStatusActive, Players: []models.TelegramPlayer{{Stars: 25}, {Stars: 25}, {Stars: 25}, {Stars: 25}, {Stars: 25}}},
 	}
 	got := SeedTeams(teams)
 	if len(got) != 3 {
 		t.Fatalf("seeded %d teams, want 3 (disqualified excluded)", len(got))
 	}
-	// High: (30+20)/2 = 25 (substitute ignored); Tie: 25 -> earlier id (2) first.
+	// High's five mains average 25 (substitute ignored); Tie: 25 -> earlier id (2) first.
 	want := []string{"High", "Tie", "Low"}
 	for i, w := range want {
 		if got[i].Team.Name != w || got[i].Seed != i+1 {
@@ -318,12 +349,28 @@ func TestSeedTeamsByAverageStarsOfMainRoster(t *testing.T) {
 	}
 }
 
+func TestSeedTeamsExcludesIncompleteMainRosters(t *testing.T) {
+	teams := []models.TelegramTeam{
+		{ID: 1, Name: "Complete", Status: models.TeamStatusActive, Players: []models.TelegramPlayer{{Stars: 10}, {Stars: 20}, {Stars: 30}, {Stars: 40}, {Stars: 50}}},
+		{ID: 2, Name: "FourMains", Status: models.TeamStatusActive, Players: []models.TelegramPlayer{{Stars: 100}, {Stars: 100}, {Stars: 100}, {Stars: 100}}},
+		{ID: 3, Name: "SubsDoNotCount", Status: models.TeamStatusActive, Players: []models.TelegramPlayer{{Stars: 100}, {Stars: 100}, {Stars: 100}, {Stars: 100}, {Stars: 100, IsSubstitute: true}, {Stars: 100, IsSubstitute: true}}},
+	}
+
+	got := SeedTeams(teams)
+	if len(got) != 1 || got[0].Team.Name != "Complete" {
+		t.Fatalf("SeedTeams = %+v, want only Complete", got)
+	}
+}
+
 func TestBuildCreatesTournamentAndCachesMatches(t *testing.T) {
 	svc, repo, prov := newBracketSvc(t)
 	// 6 teams -> bracket of 8, two byes for seeds 1 and 2.
 	for i := 1; i <= 6; i++ {
 		addBracketTeam(repo, i, fmt.Sprintf("T%d", i), 70-i*10, 70-i*10)
 	}
+	addBracketTeam(repo, 7, "Incomplete", 100, 100, 100, 100, 100)
+	// Remove one non-captain main so the team has only four roster players.
+	repo.members = repo.members[:len(repo.members)-1]
 	ctx := context.Background()
 
 	built, err := svc.Build(ctx, tourneyAt)
@@ -332,6 +379,9 @@ func TestBuildCreatesTournamentAndCachesMatches(t *testing.T) {
 	}
 	if built.URL == "" || repo.settings[settingChallongeURL] != built.URL {
 		t.Errorf("URL = %q, setting = %q", built.URL, repo.settings[settingChallongeURL])
+	}
+	if len(built.Incomplete) != 1 || built.Incomplete[0].Name != "Incomplete" {
+		t.Errorf("incomplete = %+v, want Incomplete", built.Incomplete)
 	}
 	if repo.settings[settingChallongeFor] != tourneyAt.Format(time.RFC3339) || !svc.IsBuiltFor(ctx, tourneyAt) {
 		t.Errorf("challonge_tournament_for = %q; IsBuiltFor = %v", repo.settings[settingChallongeFor], svc.IsBuiltFor(ctx, tourneyAt))
@@ -541,13 +591,14 @@ func TestReportResultAdvancesAndPingsFinalOnce(t *testing.T) {
 	m1, _ := svc.OpenMatchFor(ctx, 1)
 	m2, _ := svc.OpenMatchFor(ctx, 2)
 
-	before := prov.count("ListMatches")
+	beforeFull := prov.count("ListMatches")
+	beforeOpen := prov.count("ListOpenMatches")
 	ready, err := svc.ReportResult(ctx, m1.ID, 1, 2, 0)
 	if err != nil || len(ready) != 0 {
 		t.Fatalf("first result: ready=%v err=%v; the final is not ready yet", ready, err)
 	}
-	if prov.count("ListMatches") != before+1 || prov.count("ReportMatch") != 1 {
-		t.Errorf("budget: ListMatches +%d, ReportMatch %d; want +1, 1", prov.count("ListMatches")-before, prov.count("ReportMatch"))
+	if prov.count("ListMatches") != beforeFull || prov.count("ListOpenMatches") != beforeOpen+1 || prov.count("ReportMatch") != 1 {
+		t.Errorf("budget: ListMatches +%d, ListOpenMatches +%d, ReportMatch %d; want 0, 1, 1", prov.count("ListMatches")-beforeFull, prov.count("ListOpenMatches")-beforeOpen, prov.count("ReportMatch"))
 	}
 	ready, err = svc.ReportResult(ctx, m2.ID, 3, 2, 1) // upset: T3 beats T2
 	if err != nil || len(ready) != 1 || ready[0].Round != 2 || !ready[0].Has(1) || !ready[0].Has(3) {
@@ -555,6 +606,12 @@ func TestReportResultAdvancesAndPingsFinalOnce(t *testing.T) {
 	}
 	if ready[0].Team1Name == "" || ready[0].Team2Name == "" {
 		t.Errorf("ready match has no team names: %+v", ready[0])
+	}
+	ms, _ := svc.Matches(ctx)
+	for _, match := range ms {
+		if match.ID == m2.ID && match.ScoresCSV != "1 - 2" {
+			t.Errorf("upset score = %q, want team-order 1 - 2", match.ScoresCSV)
+		}
 	}
 	// Reporting a finished match is refused without a request.
 	calls := len(prov.calls)
@@ -566,6 +623,57 @@ func TestReportResultAdvancesAndPingsFinalOnce(t *testing.T) {
 	}
 	if len(prov.calls) != calls {
 		t.Error("refused reports still hit Challonge")
+	}
+}
+
+func TestFlushPendingReportDoesNotRepeatAlreadyAppliedWrite(t *testing.T) {
+	svc, repo, prov := buildFour(t)
+	ctx := context.Background()
+	m, _ := svc.OpenMatchFor(ctx, 1)
+	winner, loser, err := svc.participantIDs(ctx, 1, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := prov.ReportMatch(ctx, svc.tournamentID(ctx), m.ChallongeMatchID, winner, loser, 2, 0); err != nil {
+		t.Fatal(err)
+	}
+	matchID := m.ID
+	if err := repo.CreateMatchReport(ctx, &models.TelegramMatchReport{ReporterTelegramID: 100, WinnerTeamID: 1, LoserTeamID: 4, Score: "2:0", BracketMatchID: &matchID}); err != nil {
+		t.Fatal(err)
+	}
+	before := prov.count("ReportMatch")
+	if _, err := svc.FlushPendingReports(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := prov.count("ReportMatch"); got != before {
+		t.Fatalf("ReportMatch repeated: %d -> %d", before, got)
+	}
+	queued, _ := repo.GetUnsyncedReports(ctx)
+	if len(queued) != 0 {
+		t.Fatalf("queued reports = %+v", queued)
+	}
+	if open, _ := svc.OpenMatchFor(ctx, 1); open != nil {
+		t.Fatalf("stale local match after reconciliation: %+v", open)
+	}
+}
+
+func TestQuotaCircuitBreakerStopsAutomaticWrites(t *testing.T) {
+	svc, _, prov := buildFour(t)
+	ctx := context.Background()
+	m, _ := svc.OpenMatchFor(ctx, 1)
+	prov.fail["ReportMatch"] = challonge.ErrQuotaExceeded
+	if _, err := svc.ReportResult(ctx, m.ID, 1, 2, 0); !errors.Is(err, challonge.ErrQuotaExceeded) {
+		t.Fatalf("first report = %v", err)
+	}
+	calls := len(prov.calls)
+	if _, err := svc.ReportResult(ctx, m.ID, 1, 2, 0); !errors.Is(err, challonge.ErrQuotaExceeded) {
+		t.Fatalf("blocked report = %v", err)
+	}
+	if len(prov.calls) != calls {
+		t.Fatalf("blocked report reached provider: %d -> %d", calls, len(prov.calls))
+	}
+	if _, err := svc.FlushPendingReports(ctx); err != nil || len(prov.calls) != calls {
+		t.Fatalf("blocked flush: err=%v calls=%d->%d", err, calls, len(prov.calls))
 	}
 }
 
@@ -772,11 +880,12 @@ func TestFlushPendingReports(t *testing.T) {
 			t.Errorf("flushed score = %q, want 2 - 1", x.ScoresCSV)
 		}
 	}
-	// A queued report for a match that is no longer open is dropped, not retried forever.
+	// A conflicting queued report is removed from automatic retries and raised
+	// for an administrator instead of overwriting Challonge.
 	rep2 := &models.TelegramMatchReport{ReporterTelegramID: 100, WinnerTeamID: 1, LoserTeamID: 4, Score: "2:0", PhotoFileIDs: []string{"f"}, BracketMatchID: &m1.ID}
 	_ = repo.CreateMatchReport(ctx, rep2)
-	if _, err := svc.FlushPendingReports(ctx); err != nil {
-		t.Fatal(err)
+	if _, err := svc.FlushPendingReports(ctx); !errors.Is(err, ErrResultConflict) {
+		t.Fatalf("conflict = %v, want ErrResultConflict", err)
 	}
 	if q, _ := repo.GetUnsyncedReports(ctx); len(q) != 0 {
 		t.Errorf("stale report still queued: %+v", q)

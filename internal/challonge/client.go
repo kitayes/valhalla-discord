@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
+	"time"
 )
 
 const (
@@ -25,6 +27,15 @@ const (
 // ErrQuotaExceeded is returned on HTTP 429: the free plan allows 500
 // requests a month and the service refuses the rest.
 var ErrQuotaExceeded = errors.New("challonge: monthly request quota exceeded")
+
+// QuotaError preserves the server's Retry-After hint while remaining
+// compatible with errors.Is(err, ErrQuotaExceeded).
+type QuotaError struct {
+	RetryAfter time.Duration
+}
+
+func (e *QuotaError) Error() string { return ErrQuotaExceeded.Error() }
+func (e *QuotaError) Unwrap() error { return ErrQuotaExceeded }
 
 type Tournament struct {
 	ID   int64
@@ -60,13 +71,14 @@ type Client struct {
 	baseURL   string
 	apiKey    string
 	subdomain string
+	sleep     func(context.Context, time.Duration) error
 }
 
 func New(apiKey, subdomain string, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	return &Client{http: httpClient, baseURL: defaultBaseURL, apiKey: apiKey, subdomain: subdomain}
+	return &Client{http: httpClient, baseURL: defaultBaseURL, apiKey: apiKey, subdomain: subdomain, sleep: sleepContext}
 }
 
 // --- wire types -----------------------------------------------------------
@@ -174,37 +186,57 @@ func (c *Client) Start(ctx context.Context, tournamentID int64) error {
 }
 
 func (c *Client) ListMatches(ctx context.Context, tournamentID int64) ([]Match, error) {
+	return c.listMatches(ctx, tournamentID, "")
+}
+
+// ListOpenMatches asks Challonge to filter before pagination. A single-
+// elimination bracket can have at most half its participants open at once,
+// so this stays one request even for 128 teams.
+func (c *Client) ListOpenMatches(ctx context.Context, tournamentID int64) ([]Match, error) {
+	return c.listMatches(ctx, tournamentID, "open")
+}
+
+func (c *Client) listMatches(ctx context.Context, tournamentID int64, state string) ([]Match, error) {
 	var all []Match
 	for page := 1; ; page++ {
 		path := fmt.Sprintf("/tournaments/%d/matches.json?page=%d&per_page=%d", tournamentID, page, perPage)
+		if state != "" {
+			path += "&state=" + url.QueryEscape(state)
+		}
 		var out envelope[[]resource[matchAttrs]]
 		if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
 			return nil, err
 		}
 		for _, r := range out.Data {
-			id, _ := strconv.ParseInt(r.ID, 10, 64)
-			rel := r.Relationships
-			if r.Attributes.Relationships != nil {
-				rel = *r.Attributes.Relationships
-			}
-			m := Match{
-				ID:        id,
-				Round:     r.Attributes.Round,
-				PlayOrder: r.Attributes.SuggestedPlayOrder,
-				State:     r.Attributes.State,
-				Player1ID: rel.Player1.id(),
-				Player2ID: rel.Player2.id(),
-				Scores:    r.Attributes.Scores,
-			}
-			if r.Attributes.WinnerID != nil {
-				m.WinnerID = *r.Attributes.WinnerID
-			}
-			all = append(all, m)
+			all = append(all, matchFromResource(r))
 		}
 		if len(out.Data) < perPage {
 			return all, nil
 		}
 	}
+}
+
+// GetMatch reads one match and is used to resolve an ambiguous write: if the
+// PUT response was lost, the caller can see whether Challonge applied it.
+func (c *Client) GetMatch(ctx context.Context, tournamentID, matchID int64) (Match, error) {
+	var out envelope[resource[matchAttrs]]
+	if err := c.do(ctx, http.MethodGet, fmt.Sprintf("/tournaments/%d/matches/%d.json", tournamentID, matchID), nil, &out); err != nil {
+		return Match{}, err
+	}
+	return matchFromResource(out.Data), nil
+}
+
+func matchFromResource(r resource[matchAttrs]) Match {
+	id, _ := strconv.ParseInt(r.ID, 10, 64)
+	rel := r.Relationships
+	if r.Attributes.Relationships != nil {
+		rel = *r.Attributes.Relationships
+	}
+	m := Match{ID: id, Round: r.Attributes.Round, PlayOrder: r.Attributes.SuggestedPlayOrder, State: r.Attributes.State, Player1ID: rel.Player1.id(), Player2ID: rel.Player2.id(), Scores: r.Attributes.Scores}
+	if r.Attributes.WinnerID != nil {
+		m.WinnerID = *r.Attributes.WinnerID
+	}
+	return m
 }
 
 // ReportMatch closes a match. Scores are one "set" per side — the map count
@@ -242,47 +274,100 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 		q.Set("community_id", c.subdomain)
 		u.RawQuery = q.Encode()
 	}
-	var payload io.Reader
+	var bodyBytes []byte
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
 			return err
 		}
-		payload = bytes.NewReader(b)
+		bodyBytes = b
 	}
-	req, err := http.NewRequestWithContext(ctx, method, u.String(), payload)
-	if err != nil {
-		return err
+	attempts := 1
+	if method == http.MethodGet {
+		attempts = 3
 	}
-	req.Header.Set("Authorization-Type", "v1")
-	req.Header.Set("Authorization", c.apiKey)
-	req.Header.Set("Content-Type", "application/vnd.api+json")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("challonge: %s %s: %w", method, path, err)
-	}
-	defer resp.Body.Close() //nolint:errcheck // best-effort cleanup
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-
-	if resp.StatusCode == http.StatusTooManyRequests {
-		return ErrQuotaExceeded
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		var env envelope[json.RawMessage]
-		_ = json.Unmarshal(raw, &env)
-		detail := ""
-		for _, e := range env.Errors {
-			detail += " " + e.Detail
+	for attempt := 0; attempt < attempts; attempt++ {
+		var payload io.Reader
+		if bodyBytes != nil {
+			payload = bytes.NewReader(bodyBytes)
 		}
-		return fmt.Errorf("challonge: %s %s: HTTP %d%s", method, path, resp.StatusCode, detail)
-	}
-	if out == nil || len(raw) == 0 {
+		req, err := http.NewRequestWithContext(ctx, method, u.String(), payload)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization-Type", "v1")
+		req.Header.Set("Authorization", c.apiKey)
+		req.Header.Set("Content-Type", "application/vnd.api+json")
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := c.http.Do(req)
+		if err != nil {
+			if attempt+1 < attempts {
+				if err := c.sleep(ctx, retryDelay(attempt)); err != nil {
+					return err
+				}
+				continue
+			}
+			return fmt.Errorf("challonge: %s %s: %w", method, path, err)
+		}
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+		_ = resp.Body.Close()
+
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return &QuotaError{RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now())}
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			if attempt+1 < attempts && retryableStatus(resp.StatusCode) {
+				if err := c.sleep(ctx, retryDelay(attempt)); err != nil {
+					return err
+				}
+				continue
+			}
+			var env envelope[json.RawMessage]
+			_ = json.Unmarshal(raw, &env)
+			detail := ""
+			for _, e := range env.Errors {
+				detail += " " + e.Detail
+			}
+			return fmt.Errorf("challonge: %s %s: HTTP %d%s", method, path, resp.StatusCode, detail)
+		}
+		if out == nil || len(raw) == 0 {
+			return nil
+		}
+		if err := json.Unmarshal(raw, out); err != nil {
+			return fmt.Errorf("challonge: %s %s: decode: %w", method, path, err)
+		}
 		return nil
 	}
-	if err := json.Unmarshal(raw, out); err != nil {
-		return fmt.Errorf("challonge: %s %s: decode: %w", method, path, err)
+	return fmt.Errorf("challonge: %s %s: retries exhausted", method, path)
+}
+
+func retryableStatus(status int) bool {
+	return status == http.StatusBadGateway || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
+}
+
+func retryDelay(attempt int) time.Duration {
+	return 100 * time.Millisecond * time.Duration(1<<uint(attempt))
+}
+
+func sleepContext(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
 	}
-	return nil
+}
+
+func parseRetryAfter(value string, now time.Time) time.Duration {
+	value = strings.TrimSpace(value)
+	if seconds, err := strconv.Atoi(value); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if when, err := http.ParseTime(value); err == nil && when.After(now) {
+		return when.Sub(now)
+	}
+	return 0
 }

@@ -76,6 +76,16 @@ type Service struct {
 	BettingService     *BettingService
 	LicenseService     LicenseService
 	FAQService         *FAQService
+	Bracket            *BracketService
+}
+
+// SetBracketService enables Challonge-backed reports after the optional
+// provider has been constructed by the entrypoint.
+func (s *Service) SetBracketService(bracket *BracketService) {
+	s.Bracket = bracket
+	if telegram, ok := s.TelegramService.(*TelegramServiceImpl); ok {
+		telegram.WithBracket(bracket)
+	}
 }
 
 func NewService(repos *repository.Repository, ai AIProvider, sheetsClient sheets.Client, ownerEmail, spreadsheetID string, httpTimeoutSec int, logger Logger) *Service {

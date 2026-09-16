@@ -40,7 +40,7 @@ type TelegramService interface {
 	SelectReportOpponentByName(ctx context.Context, tgID int64, name string) (string, string)
 	SetReportScore(ctx context.Context, tgID int64, scoreStr string) (string, string)
 	AddReportPhoto(ctx context.Context, tgID int64, photoFileID string) (string, string, int)
-	SubmitReport(ctx context.Context, tgID int64) (string, string, *models.TelegramMatchReport)
+	SubmitReport(ctx context.Context, tgID int64) (string, string, *models.TelegramMatchReport, []models.BracketMatch)
 	CancelReport(ctx context.Context, tgID int64) (string, string)
 	ResetReportPhotos(ctx context.Context, tgID int64) (string, string)
 	GetRecentMatchReports(ctx context.Context, limit int) (string, error)
@@ -83,6 +83,9 @@ type TelegramServiceImpl struct {
 	// profiles is optional: with it, a captain linked to a Discord profile is
 	// offered that profile's in-game data instead of typing it again.
 	profiles ProfileLookup
+	// bracket is optional: with it, /report is bound to the team's current
+	// open match instead of accepting an arbitrary opponent.
+	bracket *BracketService
 
 	reportMu     sync.RWMutex
 	reportDrafts map[int64]*MatchReportDraft
@@ -98,6 +101,12 @@ type ProfileLookup interface {
 // WithProfileLookup enables prefilling from linked Discord profiles.
 func (s *TelegramServiceImpl) WithProfileLookup(p ProfileLookup) *TelegramServiceImpl {
 	s.profiles = p
+	return s
+}
+
+// WithBracket binds match reports to the active tournament bracket.
+func (s *TelegramServiceImpl) WithBracket(b *BracketService) *TelegramServiceImpl {
+	s.bracket = b
 	return s
 }
 

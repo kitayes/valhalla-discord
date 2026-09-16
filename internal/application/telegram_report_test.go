@@ -3,6 +3,7 @@ package application
 import (
 	"blackwatch/internal/models"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -165,7 +166,7 @@ func TestReportSubmitAndCancel(t *testing.T) {
 	svc.SetReportScore(context.Background(), 101, "2:0")
 
 	// Submit without photos fails
-	resp, kb, rep := svc.SubmitReport(context.Background(), 101)
+	resp, kb, rep, _ := svc.SubmitReport(context.Background(), 101)
 	if rep != nil || !strings.Contains(resp, "хотя бы один скриншот") {
 		t.Errorf("SubmitReport without photos = %v, %q, %q", rep, resp, kb)
 	}
@@ -175,7 +176,7 @@ func TestReportSubmitAndCancel(t *testing.T) {
 	svc.AddReportPhoto(context.Background(), 101, "photo_B")
 
 	// Submit with photos succeeds
-	resp, kb, rep = svc.SubmitReport(context.Background(), 101)
+	resp, kb, rep, _ = svc.SubmitReport(context.Background(), 101)
 	if rep == nil || !strings.Contains(resp, "успешно отправлен") || kb != "main_menu" {
 		t.Fatalf("SubmitReport with photos failed: rep=%v, resp=%q, kb=%q", rep, resp, kb)
 	}
@@ -200,5 +201,60 @@ func TestReportSubmitAndCancel(t *testing.T) {
 	}
 	if svc.GetReportDraft(101) != nil {
 		t.Errorf("draft still exists after cancel")
+	}
+}
+
+func TestReportWithBracketSkipsOpponentAndAdvancesWinner(t *testing.T) {
+	bsvc, repo, _ := buildFour(t)
+	svc := NewTelegramServiceImpl(repo, nopLogger{}).WithBracket(bsvc)
+	ctx := context.Background()
+	captain := int64(100)
+	repo.players[captain].FSMState = models.StateIdle
+
+	resp, kb := svc.StartReport(ctx, captain)
+	if !strings.Contains(resp, "T4") || !strings.Contains(resp, "#") || kb != KbReportScore {
+		t.Fatalf("StartReport = %q, %q; want bracket opponent T4", resp, kb)
+	}
+	draft := svc.GetReportDraft(captain)
+	if draft == nil || draft.LoserTeamID != 4 || draft.BracketMatchID == 0 {
+		t.Fatalf("draft = %+v, want T4 and bracket match id", draft)
+	}
+
+	svc.SetReportScore(ctx, captain, "2:1")
+	svc.AddReportPhoto(ctx, captain, "photo1")
+	msg, kb, rep, ready := svc.SubmitReport(ctx, captain)
+	if rep == nil || kb != "main_menu" || !strings.Contains(msg, "победитель проходит дальше") {
+		t.Fatalf("SubmitReport = %q, %q, %+v", msg, kb, rep)
+	}
+	if rep.BracketMatchID == nil || *rep.BracketMatchID != draft.BracketMatchID || rep.SyncedAt == nil {
+		t.Errorf("saved report = %+v, want bracket id and synced_at", rep)
+	}
+	if len(ready) != 0 {
+		t.Errorf("ready = %+v, want none before the other semifinal", ready)
+	}
+	if m, _ := bsvc.OpenMatchFor(ctx, 1); m != nil {
+		t.Errorf("winner still has old open match: %+v", m)
+	}
+}
+
+func TestReportWithBracketQueuesWhenChallongeFails(t *testing.T) {
+	bsvc, repo, prov := buildFour(t)
+	svc := NewTelegramServiceImpl(repo, nopLogger{}).WithBracket(bsvc)
+	ctx := context.Background()
+	captain := int64(100)
+	repo.players[captain].FSMState = models.StateIdle
+
+	svc.StartReport(ctx, captain)
+	svc.SetReportScore(ctx, captain, "2:0")
+	svc.AddReportPhoto(ctx, captain, "photo1")
+	prov.fail["ReportMatch"] = errors.New("503")
+
+	msg, kb, rep, _ := svc.SubmitReport(ctx, captain)
+	if rep == nil || kb != "main_menu" || !strings.Contains(msg, "сетка обновится") {
+		t.Fatalf("SubmitReport while down = %q, %q, %+v", msg, kb, rep)
+	}
+	queued, _ := repo.GetUnsyncedReports(ctx)
+	if len(queued) != 1 || queued[0].ID != rep.ID {
+		t.Errorf("queue = %+v, want report %d", queued, rep.ID)
 	}
 }

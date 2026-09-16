@@ -57,7 +57,7 @@ func (b *Bot) handleReportCallback(ctx context.Context, callback *tgbotapi.Callb
 		b.sendMessage(chatID, resp, kb)
 
 	case "submit":
-		resp, kb, report := b.service.SubmitReport(ctx, chatID)
+		resp, kb, report, ready := b.service.SubmitReport(ctx, chatID)
 		if report == nil {
 			b.apiRespond(callback, resp, true)
 			return
@@ -65,6 +65,7 @@ func (b *Bot) handleReportCallback(ctx context.Context, callback *tgbotapi.Callb
 		b.apiRespond(callback, "Отчет успешно отправлен!", false)
 		b.sendMessage(chatID, resp, kb)
 		b.forwardReportMedia(ctx, report, callback.From)
+		b.notifyMatchesReady(ctx, ready)
 
 	default:
 		b.apiRespond(callback, "Неизвестное действие.", true)
