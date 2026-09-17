@@ -25,6 +25,7 @@ func (b *Bot) handleAdminCommand(ctx context.Context, chatID int64, text string)
 			"/reports - Список последних отчетов о матчах\n" +
 			"/check_team [название] - Детальный состав\n" +
 			"/export - CSV файл\n" +
+			"/export_sheet - Составы и путь по сетке в Google Таблицу\n" +
 			"/list_solo - Список соло-игроков\n" +
 			"/export_solo - CSV соло-игроков\n\n" +
 			"/broadcast [текст] - Рассылка\n" +
@@ -90,6 +91,17 @@ func (b *Bot) handleAdminCommand(ctx context.Context, chatID int64, text string)
 			if _, err := b.bot.Send(tgbotapi.NewDocument(chatID, fileBytes)); err != nil {
 				b.logger.Error("telegram: failed to send teams.csv to %d: %v", chatID, err)
 			}
+		}
+		return
+	}
+
+	if text == "/export_sheet" {
+		url, err := b.service.ExportTeamsToSheet(ctx)
+		if err != nil {
+			b.sendMessage(chatID, "Ошибка: "+err.Error(), "main_menu")
+		} else {
+			b.sendMessage(chatID, "📊 Составы и путь по сетке выгружены:\n"+url+
+				"\n\nЛисты «Teams» и «Matches». Сетка — на момент последней синхронизации с Challonge.", "main_menu")
 		}
 		return
 	}

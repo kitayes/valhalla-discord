@@ -204,24 +204,38 @@ func (b *Bot) handleUpdate(parent context.Context, msg *tgbotapi.Message) {
 	if b.handleBracketCommand(ctx, chatID, text) {
 		return
 	}
-	if b.isAdmin(chatID) && (text == "/admin" ||
-		text == "/list_teams" || text == "/checkin_status" || text == "/checkins" ||
-		strings.HasPrefix(text, "/check_team") ||
-		text == "/export" || text == "/list_solo" || text == "/export_solo" ||
-		strings.HasPrefix(text, "/broadcast") || strings.HasPrefix(text, "/set_tourney") ||
-		text == "/close_reg" || text == "/open_reg" || strings.HasPrefix(text, "/del_team") ||
-		strings.HasPrefix(text, "/reinstate") || strings.HasPrefix(text, "/reset_user") ||
-		text == "/ping_debtors" || strings.HasPrefix(text, "/ping_debtors ") ||
-		text == "/ping" || strings.HasPrefix(text, "/ping ") ||
-		text == "/remind_debtors" || strings.HasPrefix(text, "/remind_debtors ") ||
-		text == "/remind_checkin" || strings.HasPrefix(text, "/remind_checkin ") ||
-		text == "/reports") {
-
+	if b.isAdmin(chatID) && isAdminCommand(text) {
 		b.handleAdminCommand(ctx, chatID, text)
 		return
 	}
 
 	b.handleUserCommand(ctx, chatID, text, username)
+}
+
+// isAdminCommand reports whether handleAdminCommand owns this text. Keep it
+// in step with that handler: a command missing here is not rejected, it is
+// answered by the user handler as an unknown command.
+func isAdminCommand(text string) bool {
+	switch text {
+	case "/admin", "/list_teams", "/checkin_status", "/checkins",
+		"/export", "/export_solo", "/export_sheet", "/list_solo",
+		"/close_reg", "/open_reg", "/reports",
+		"/ping_debtors", "/ping", "/remind_debtors", "/remind_checkin":
+		return true
+	}
+	// These take an argument. The prefixes are bare, as they have always
+	// been, so a bare "/del_team" still reaches the handler that explains the
+	// expected form instead of being answered as an unknown command.
+	for _, prefix := range []string{
+		"/check_team", "/broadcast", "/set_tourney", "/del_team",
+		"/reinstate", "/reset_user",
+		"/ping_debtors ", "/ping ", "/remind_debtors ", "/remind_checkin ",
+	} {
+		if strings.HasPrefix(text, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // safely runs fn and turns a panic into a log line. Handlers here run on the

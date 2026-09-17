@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"blackwatch/internal/application"
 	"blackwatch/internal/models"
 )
 
@@ -16,8 +17,8 @@ func TestRoundLabel(t *testing.T) {
 		want         string
 	}{{3, 3, "Раунд 3 — финал"}, {2, 3, "Раунд 2 — полуфинал"}, {1, 3, "Раунд 1 — 1/4"}}
 	for _, c := range cases {
-		if got := roundLabel(c.round, c.total); got != c.want {
-			t.Errorf("roundLabel(%d,%d) = %q, want %q", c.round, c.total, got, c.want)
+		if got := application.RoundLabel(c.round, c.total); got != c.want {
+			t.Errorf("RoundLabel(%d,%d) = %q, want %q", c.round, c.total, got, c.want)
 		}
 	}
 }

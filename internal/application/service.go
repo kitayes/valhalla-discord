@@ -112,7 +112,7 @@ func NewService(repos *repository.Repository, ai AIProvider, sheetsClient sheets
 	return &Service{
 		MatchService:       matchSvc,
 		ProfileLinkService: NewProfileLinkServiceImpl(repos.ProfileLink, repos.Match, logger),
-		TelegramService:    NewTelegramServiceImpl(repos.Telegram, logger).WithProfileLookup(repos.ProfileLink),
+		TelegramService:    NewTelegramServiceImpl(repos.Telegram, logger).WithProfileLookup(repos.ProfileLink).WithSheets(sheetsClient, spreadsheetID),
 		Lobby:              lobby,
 		EloService:         NewEloService(logger, matchSvc, repos.LobbyMatch),
 		BettingService:     NewBettingService(logger, repos),

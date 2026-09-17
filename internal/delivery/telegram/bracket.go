@@ -15,27 +15,6 @@ import (
 const telegramMessageLimit = 4000
 const bracketBuildFailureAlert = 5
 
-func roundLabel(round, total int) string {
-	switch d := total - round; d {
-	case 0:
-		return fmt.Sprintf("Раунд %d — финал", round)
-	case 1:
-		return fmt.Sprintf("Раунд %d — полуфинал", round)
-	default:
-		return fmt.Sprintf("Раунд %d — 1/%d", round, 1<<uint(d))
-	}
-}
-
-func totalRounds(ms []models.BracketMatch) int {
-	total := 0
-	for _, m := range ms {
-		if m.Round > total {
-			total = m.Round
-		}
-	}
-	return total
-}
-
 func matchLine(m models.BracketMatch) string {
 	name := func(id *int, n string) string {
 		if id == nil {
@@ -63,8 +42,8 @@ func matchLine(m models.BracketMatch) string {
 }
 
 func formatBracketRound(url string, ms []models.BracketMatch, round int) []string {
-	total := totalRounds(ms)
-	head := fmt.Sprintf("🏆 Сетка: %s\n\n%s\n", url, roundLabel(round, total))
+	total := application.TotalRounds(ms)
+	head := fmt.Sprintf("🏆 Сетка: %s\n\n%s\n", url, application.RoundLabel(round, total))
 	var lines []string
 	for _, m := range ms {
 		if m.Round == round {
@@ -97,7 +76,7 @@ func defaultBracketRound(ms []models.BracketMatch) int {
 		}
 	}
 	if best == 0 {
-		return totalRounds(ms)
+		return application.TotalRounds(ms)
 	}
 	return best
 }

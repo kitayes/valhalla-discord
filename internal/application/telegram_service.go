@@ -3,6 +3,7 @@ package application
 import (
 	"blackwatch/internal/models"
 	"blackwatch/internal/repository"
+	"blackwatch/pkg/sheets"
 	"bytes"
 	"context"
 	"encoding/csv"
@@ -54,6 +55,7 @@ type TelegramService interface {
 	SetRegistrationOpen(ctx context.Context, isOpen bool)
 	RegistrationStatus(ctx context.Context) (open bool, reason string)
 	GenerateTeamsCSV(ctx context.Context) ([]byte, error)
+	ExportTeamsToSheet(ctx context.Context) (string, error)
 	GetBroadcastList(ctx context.Context) ([]int64, error)
 	AdminDeleteTeam(ctx context.Context, teamName string) string
 	AdminResetUser(ctx context.Context, tgID int64) string
@@ -86,6 +88,10 @@ type TelegramServiceImpl struct {
 	// bracket is optional: with it, /report is bound to the team's current
 	// open match instead of accepting an arbitrary opponent.
 	bracket *BracketService
+	// sheets is optional: with it and spreadsheetID, rosters and bracket runs
+	// can be published to Google Sheets.
+	sheets        sheets.Client
+	spreadsheetID string
 
 	reportMu     sync.RWMutex
 	reportDrafts map[int64]*MatchReportDraft

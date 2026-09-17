@@ -3,6 +3,7 @@ package sheets
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"google.golang.org/api/drive/v3"
 	"google.golang.org/api/option"
@@ -13,6 +14,10 @@ type Client interface {
 	CreateSpreadsheet(title string) (spreadsheetID, url string, err error)
 	AddPermission(spreadsheetID, email, role string) error
 	MakePublic(spreadsheetID string) error
+	// EnsureSheet creates a tab if the spreadsheet does not have one by that
+	// title. Writers that must not disturb their neighbours call it first:
+	// ranges without a tab prefix land on the first sheet, whatever it holds.
+	EnsureSheet(spreadsheetID, title string) error
 	ClearRange(spreadsheetID, rangeStr string) error
 	UpdateValues(spreadsheetID, rangeStr string, values [][]interface{}) error
 }
@@ -72,6 +77,30 @@ func (c *GoogleSheetsClient) MakePublic(spreadsheetID string) error {
 	}).Do()
 	if err != nil {
 		return fmt.Errorf("failed to make spreadsheet public: %w", err)
+	}
+	return nil
+}
+
+func (c *GoogleSheetsClient) EnsureSheet(spreadsheetID, title string) error {
+	existing, err := c.sheets.Spreadsheets.Get(spreadsheetID).Fields("sheets.properties.title").Do()
+	if err != nil {
+		return fmt.Errorf("failed to read spreadsheet tabs: %w", err)
+	}
+	for _, sh := range existing.Sheets {
+		if sh.Properties != nil && sh.Properties.Title == title {
+			return nil
+		}
+	}
+
+	_, err = c.sheets.Spreadsheets.BatchUpdate(spreadsheetID, &sheets.BatchUpdateSpreadsheetRequest{
+		Requests: []*sheets.Request{{
+			AddSheet: &sheets.AddSheetRequest{Properties: &sheets.SheetProperties{Title: title}},
+		}},
+	}).Do()
+	// Two admins can export at once; the loser of that race asked for a tab
+	// that now exists, which is the state it wanted.
+	if err != nil && !strings.Contains(err.Error(), "already exists") {
+		return fmt.Errorf("failed to add sheet %q: %w", title, err)
 	}
 	return nil
 }

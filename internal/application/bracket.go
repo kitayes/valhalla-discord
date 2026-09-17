@@ -778,13 +778,7 @@ func (s *BracketService) Reinstate(ctx context.Context, teamName string) (*Brack
 	if err != nil {
 		return nil, err
 	}
-	var lost *models.BracketMatch
-	for i := range before {
-		b := &before[i]
-		if b.State == models.BracketComplete && b.Has(teamID) && b.WinnerID != nil && *b.WinnerID != teamID {
-			lost = b // ordered by round: the last one is the elimination
-		}
-	}
+	lost := eliminationMatch(before, teamID)
 	if lost == nil {
 		return nil, nil
 	}
