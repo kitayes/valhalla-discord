@@ -81,7 +81,7 @@ func TestBuildDebtorsChatAnnouncement(t *testing.T) {
 	ann := buildDebtorsChatAnnouncement(pending, incomplete, "Поторопитесь!", "BlackwatchBot")
 
 	expectedSubstrings := []string{
-		"ВНИМАНИЕ, ДОЛЖНИКИ ТУРНИРА! ⚠️",
+		"ВНИМАНИЕ, ДОЛЖНИКИ ТУРНИРА!",
 		"Ожидают Check-in (1):",
 		"1. Navi — @dendi (Dendi)",
 		"Неполный состав (1):",
@@ -121,7 +121,7 @@ func TestBuildDebtorsAdminReport(t *testing.T) {
 	report := buildDebtorsAdminReport(pending, incomplete, 2, 0, true)
 
 	expectedSubstrings := []string{
-		"📢 Пинг должников завершён:",
+		"Пинг должников завершён:",
 		"• Ожидают Check-in: 1",
 		"• Неполный состав: 1",
 		"• Доставлено в ЛС: 2",

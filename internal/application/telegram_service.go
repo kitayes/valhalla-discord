@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -73,6 +74,12 @@ type TelegramService interface {
 
 	GenerateSoloPlayersCSV(ctx context.Context) ([]byte, error)
 	GetSoloPlayersList(ctx context.Context) string
+
+	GetBracket(ctx context.Context) ([]models.BracketMatch, error)
+	GetTeamForPlayer(ctx context.Context, tgID int64) (*models.TelegramTeam, []models.TelegramPlayer, error)
+	UpdateTeamPlayer(ctx context.Context, captainTgID int64, playerID int, nick, gameID, zoneID, role string) error
+	GetCheckInSummary(ctx context.Context) (*models.CheckInSummary, error)
+	ReportMatchDirect(ctx context.Context, reporterTgID int64, matchID int, myScore, oppScore int, screenshotData string) (*models.TelegramMatchReport, error)
 }
 
 type TelegramServiceImpl struct {
@@ -284,6 +291,60 @@ func (s *TelegramServiceImpl) DeleteTeam(ctx context.Context, tgID int64) string
 		return fmt.Sprintf("Команда '%s' удалена.", name)
 	}
 	return "Команда удалена."
+}
+
+func (s *TelegramServiceImpl) UpdateTeamPlayer(ctx context.Context, captainTgID int64, playerID int, nick, gameID, zoneID, role string) error {
+	p, err := s.repo.GetPlayerByTelegramID(ctx, captainTgID)
+	if err != nil || p == nil || p.TeamID == nil || !p.IsCaptain {
+		return errors.New("только капитан команды может редактировать состав")
+	}
+	team, err := s.repo.GetTeamByID(ctx, *p.TeamID)
+	if err != nil || team == nil {
+		return errors.New("команда не найдена")
+	}
+	if team.IsCheckedIn {
+		return errors.New("редактирование заблокировано: команда уже прошла Check-in")
+	}
+
+	members, err := s.repo.GetTeamMembers(ctx, team.ID)
+	if err != nil {
+		return errors.New("не удалось получить состав команды")
+	}
+
+	found := false
+	for _, m := range members {
+		if m.ID == playerID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return errors.New("игрок не найден в составе вашей команды")
+	}
+
+	nick = strings.TrimSpace(nick)
+	gameID = strings.TrimSpace(gameID)
+	zoneID = strings.TrimSpace(zoneID)
+	role = strings.TrimSpace(role)
+
+	if nick == "" {
+		return errors.New("никнейм игрока не может быть пустым")
+	}
+	if gameID == "" {
+		return errors.New("game ID игрока не может быть пустым")
+	}
+
+	if dup := s.duplicateGameID(ctx, gameID, playerID); dup != "" {
+		return errors.New(dup)
+	}
+
+	s.logWrite("UpdatePlayerFieldByID", s.repo.UpdatePlayerFieldByID(ctx, playerID, "game_nickname", nick))
+	s.logWrite("UpdatePlayerFieldByID", s.repo.UpdatePlayerFieldByID(ctx, playerID, "game_id", gameID))
+	s.logWrite("UpdatePlayerFieldByID", s.repo.UpdatePlayerFieldByID(ctx, playerID, "zone_id", zoneID))
+	if role != "" {
+		s.logWrite("UpdatePlayerFieldByID", s.repo.UpdatePlayerFieldByID(ctx, playerID, "main_role", role))
+	}
+	return nil
 }
 
 // RegistrationCloseLead is how long before the tournament registration shuts
@@ -659,4 +720,191 @@ func parseStars(input string) (int, bool) {
 		return 0, false
 	}
 	return n, true
+}
+
+func (s *TelegramServiceImpl) GetBracket(ctx context.Context) ([]models.BracketMatch, error) {
+	return s.repo.GetBracketMatches(ctx)
+}
+
+func (s *TelegramServiceImpl) GetTeamForPlayer(ctx context.Context, tgID int64) (*models.TelegramTeam, []models.TelegramPlayer, error) {
+	p, err := s.repo.GetPlayerByTelegramID(ctx, tgID)
+	if err != nil || p == nil || p.TeamID == nil {
+		return nil, nil, err
+	}
+	t, err := s.repo.GetTeamByID(ctx, *p.TeamID)
+	if err != nil || t == nil {
+		return nil, nil, err
+	}
+	members, err := s.repo.GetTeamMembers(ctx, *p.TeamID)
+	if err != nil {
+		return t, nil, err
+	}
+	return t, members, nil
+}
+
+func (s *TelegramServiceImpl) GetCheckInSummary(ctx context.Context) (*models.CheckInSummary, error) {
+	teams, err := s.repo.GetAllTeams(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	summary := &models.CheckInSummary{
+		TotalTeams: len(teams),
+		Debtors:    []models.DebtorTeam{},
+	}
+
+	for _, t := range teams {
+		captainNick := ""
+		captainUser := ""
+		var captainTgID *int64
+		for _, p := range t.Players {
+			if p.IsCaptain {
+				captainNick = p.GameNickname
+				if captainNick == "" {
+					captainNick = p.FirstName
+				}
+				captainUser = p.TelegramUsername
+				captainTgID = p.TelegramID
+				break
+			}
+		}
+
+		status := "ok"
+		switch {
+		case t.Status == models.TeamStatusDisqualified:
+			status = "disqualified"
+			summary.DisqualifiedCount++
+		case len(t.Players) < mainRosterSlots:
+			status = "incomplete"
+			summary.IncompleteCount++
+		case !t.IsCheckedIn:
+			status = "pending"
+			summary.PendingCount++
+		default:
+			summary.CheckedInCount++
+		}
+
+		if status != "ok" {
+			summary.Debtors = append(summary.Debtors, models.DebtorTeam{
+				ID:                t.ID,
+				Name:              t.Name,
+				CaptainName:       captainNick,
+				CaptainUsername:   captainUser,
+				CaptainTelegramID: captainTgID,
+				PlayersCount:      len(t.Players),
+				Status:            status,
+			})
+		}
+	}
+
+	return summary, nil
+}
+
+func (s *TelegramServiceImpl) ReportMatchDirect(ctx context.Context, reporterTgID int64, matchID int, myScore, oppScore int, screenshotData string) (*models.TelegramMatchReport, error) {
+	if myScore < 0 || oppScore < 0 {
+		return nil, errors.New("счёт не может быть отрицательным")
+	}
+	if myScore == oppScore {
+		return nil, errors.New("в матче на выбывание счёт не может быть равным (должна быть победа одной из команд)")
+	}
+
+	p, err := s.repo.GetPlayerByTelegramID(ctx, reporterTgID)
+	if err != nil || p == nil || p.TeamID == nil {
+		return nil, errors.New("вы не состоите в команде")
+	}
+	if !p.IsCaptain {
+		return nil, errors.New("только капитан команды может вносить результат матча")
+	}
+
+	myTeam, err := s.repo.GetTeamByID(ctx, *p.TeamID)
+	if err != nil || myTeam == nil {
+		return nil, errors.New("команда не найдена")
+	}
+	if myTeam.Status == models.TeamStatusDisqualified {
+		return nil, errors.New("ваша команда дисквалифицирована")
+	}
+
+	var oppTeam *models.TelegramTeam
+	var bracketMatch *models.BracketMatch
+
+	if s.bracket != nil {
+		ms, err := s.repo.GetBracketMatches(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("ошибка чтения сетки: %w", err)
+		}
+		for i := range ms {
+			if (matchID > 0 && ms[i].ID == matchID) || (matchID == 0 && ms[i].Ready() && ms[i].Has(myTeam.ID)) {
+				bracketMatch = &ms[i]
+				break
+			}
+		}
+		if bracketMatch == nil {
+			return nil, errors.New("открытый матч для вашей команды не найден в сетке")
+		}
+		oppID := bracketMatch.Opponent(myTeam.ID)
+		if oppID == nil {
+			return nil, errors.New("соперник в сетке ещё не определён")
+		}
+		oppTeam, err = s.repo.GetTeamByID(ctx, *oppID)
+		if err != nil || oppTeam == nil {
+			return nil, errors.New("команда соперника не найдена")
+		}
+	} else {
+		opponents, err := s.GetEligibleOpponents(ctx, reporterTgID)
+		if err != nil || len(opponents) == 0 {
+			return nil, errors.New("нет доступных команд-соперников")
+		}
+		oppTeam = &opponents[0]
+	}
+
+	var winnerID, loserID int
+	var winnerName, loserName string
+	var winnerScore, loserScore int
+
+	if myScore > oppScore {
+		winnerID, loserID = myTeam.ID, oppTeam.ID
+		winnerName, loserName = myTeam.Name, oppTeam.Name
+		winnerScore, loserScore = myScore, oppScore
+	} else {
+		winnerID, loserID = oppTeam.ID, myTeam.ID
+		winnerName, loserName = oppTeam.Name, myTeam.Name
+		winnerScore, loserScore = oppScore, myScore
+	}
+
+	photoIDs := []string{}
+	if screenshotData != "" {
+		photoIDs = append(photoIDs, screenshotData)
+	}
+
+	scoreStr := fmt.Sprintf("%d:%d", winnerScore, loserScore)
+	rep := &models.TelegramMatchReport{
+		ReporterTelegramID: reporterTgID,
+		WinnerTeamID:       winnerID,
+		WinnerTeamName:     winnerName,
+		LoserTeamID:        loserID,
+		LoserTeamName:      loserName,
+		Score:              scoreStr,
+		PhotoFileIDs:       photoIDs,
+	}
+	if bracketMatch != nil {
+		rep.BracketMatchID = &bracketMatch.ID
+	}
+
+	if err := s.repo.CreateMatchReport(ctx, rep); err != nil {
+		s.logger.Error("telegram: ReportMatchDirect CreateMatchReport: %v", err)
+		return nil, fmt.Errorf("ошибка сохранения отчёта: %w", err)
+	}
+
+	if s.bracket != nil && bracketMatch != nil {
+		_, err := s.bracket.ReportResult(ctx, bracketMatch.ID, winnerID, winnerScore, loserScore)
+		if err != nil {
+			s.logger.Error("telegram: ReportMatchDirect ReportResult: %v", err)
+		} else {
+			now := s.now()
+			_ = s.repo.SetReportSynced(ctx, rep.ID)
+			rep.SyncedAt = &now
+		}
+	}
+
+	return rep, nil
 }

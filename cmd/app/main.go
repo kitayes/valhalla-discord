@@ -23,6 +23,7 @@ import (
 
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
+	_ "time/tzdata"
 )
 
 // shutdownTimeout bounds how long in-flight admin requests may finish.
@@ -143,7 +144,12 @@ func main() {
 
 	if telegramBot != nil {
 		location, _ := cfg.TournamentLocation()
-		telegramBot.WithMatchDesk(application.NewMatchDeskService(repository.NewTelegramPostgres(db), cfg.TelegramAdminIDs, location))
+		matchDesk := application.NewMatchDeskService(repository.NewTelegramPostgres(db), cfg.TelegramAdminIDs, location)
+		telegramBot.WithMatchDesk(matchDesk)
+		services.SetMatchDeskService(matchDesk)
+		if cfg.WebAppURL != "" {
+			telegramBot.WithWebAppURL(cfg.WebAppURL)
+		}
 	}
 	discordBot := discord.NewBot(&cfg, services, log)
 	if err := discordBot.Init(); err != nil {
@@ -162,24 +168,29 @@ func main() {
 		log.Info("Telegram bot started")
 	}
 
-	// The dashboard only starts when an admin key was explicitly configured —
-	// there is deliberately no default key to fall back on.
 	var adminServer *web.AdminServer
-	if !cfg.WebAdminEnabled() {
-		log.Warn("WEB_ADMIN_KEY not set, admin dashboard disabled")
-	} else {
-		adminServer, err = web.NewAdminServer(services, log, cfg.WebAdminPort, cfg.WebAdminKey, cfg.WebAdminTrustedProxies)
+	if cfg.WebAdminPort != "" {
+		adminServer, err = web.NewAdminServer(services, log, cfg.WebAdminPort, cfg.WebAdminKey, cfg.WebAdminTrustedProxies, cfg.TelegramToken)
 		if err != nil {
-			log.Error("failed to init web admin: %s", err.Error())
+			log.Error("failed to init web server: %s", err.Error())
 			adminServer = nil
 		} else {
+			adminServer.WithAdminIDs(cfg.TelegramAdminIDs)
+			if telegramBot != nil {
+				adminServer.WithDebtorNotifier(func(ctx context.Context, adminChatID int64, msg string) error {
+					return telegramBot.PingDebtors(ctx, adminChatID, msg)
+				})
+			}
 			srv := adminServer
 			go func() {
 				if err := srv.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-					log.Error("web admin server error: %s", err.Error())
+					log.Error("web server error: %s", err.Error())
 				}
 			}()
-			log.Info("Web admin dashboard started on :%s", cfg.WebAdminPort)
+			log.Info("Web server (Mini App & API) started on :%s", cfg.WebAdminPort)
+			if cfg.WebAdminKey != "" {
+				log.Info("Web admin dashboard enabled on :%s", cfg.WebAdminPort)
+			}
 		}
 	}
 

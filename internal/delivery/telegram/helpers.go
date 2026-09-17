@@ -58,7 +58,7 @@ func (b *Bot) trySendMessage(chatID int64, text string, kbType string) error {
 	case "checkin_status_admin":
 		rows := [][]tgbotapi.InlineKeyboardButton{
 			tgbotapi.NewInlineKeyboardRow(
-				tgbotapi.NewInlineKeyboardButtonData("📢 Пингануть должников", "admin_ping_debtors"),
+				tgbotapi.NewInlineKeyboardButtonData("Пинг должников", "admin_ping_debtors"),
 			),
 		}
 		msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(rows...)
@@ -153,7 +153,7 @@ func (b *Bot) reportOpponentKeyboard(ctx context.Context, chatID int64) tgbotapi
 	}
 
 	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
-		tgbotapi.NewInlineKeyboardButtonData("❌ Отмена", "rep:cancel"),
+		tgbotapi.NewInlineKeyboardButtonData("Отмена", "rep:cancel"),
 	))
 	return tgbotapi.NewInlineKeyboardMarkup(rows...)
 }

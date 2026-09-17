@@ -37,7 +37,7 @@ func formatCaptainMention(t models.TelegramTeam) string {
 // buildDebtorsChatAnnouncement formats a public mention announcement for the tournament chat.
 func buildDebtorsChatAnnouncement(pendingTeams, incompleteTeams []models.TelegramTeam, customMsg, botUsername string) string {
 	var sb strings.Builder
-	sb.WriteString("ВНИМАНИЕ, ДОЛЖНИКИ ТУРНИРА! ⚠️\n\n")
+	sb.WriteString("ВНИМАНИЕ, ДОЛЖНИКИ ТУРНИРА!\n\n")
 
 	if len(pendingTeams) > 0 {
 		sb.WriteString(fmt.Sprintf("Ожидают Check-in (%d):\n", len(pendingTeams)))
@@ -72,7 +72,7 @@ func buildDebtorsChatAnnouncement(pendingTeams, incompleteTeams []models.Telegra
 // buildDebtorsAdminReport formats the execution report sent back to the admin.
 func buildDebtorsAdminReport(pendingTeams, incompleteTeams []models.TelegramTeam, delivered, failed int, chatNotified bool) string {
 	var sb strings.Builder
-	sb.WriteString("📢 Пинг должников завершён:\n\n")
+	sb.WriteString("Пинг должников завершён:\n\n")
 	sb.WriteString(fmt.Sprintf("• Ожидают Check-in: %d\n", len(pendingTeams)))
 	sb.WriteString(fmt.Sprintf("• Неполный состав: %d\n", len(incompleteTeams)))
 	sb.WriteString(fmt.Sprintf("• Доставлено в ЛС: %d", delivered))
@@ -96,6 +96,11 @@ func buildDebtorsAdminReport(pendingTeams, incompleteTeams []models.TelegramTeam
 	}
 
 	return sb.String()
+}
+
+func (b *Bot) PingDebtors(ctx context.Context, adminChatID int64, customMsg string) error {
+	b.pingDebtors(ctx, adminChatID, customMsg)
+	return nil
 }
 
 func (b *Bot) handlePingDebtors(ctx context.Context, adminChatID int64, customMsg string) {

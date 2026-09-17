@@ -33,6 +33,8 @@ type AdminServer struct {
 	// trustedProxies are the peers whose X-Forwarded-For header may be believed.
 	// Empty means nobody: the direct peer address is used.
 	trustedProxies []netip.Prefix
+	adminIDs       map[int64]bool
+	debtorNotifier func(ctx context.Context, adminChatID int64, msg string) error
 	srv            *http.Server
 	startedAt      time.Time
 }
@@ -41,10 +43,7 @@ type AdminServer struct {
 //
 // trustedProxyCIDRs lists the reverse proxies allowed to rewrite the client
 // address; see clientAddr for why an unconditional X-Forwarded-For is not safe.
-func NewAdminServer(services *application.Service, logger application.Logger, port, apiKey string, trustedProxyCIDRs []string) (*AdminServer, error) {
-	if apiKey == "" {
-		return nil, fmt.Errorf("web: admin key must not be empty")
-	}
+func NewAdminServer(services *application.Service, logger application.Logger, port, apiKey string, trustedProxyCIDRs []string, botToken string) (*AdminServer, error) {
 	tmpl, err := template.ParseFS(templateFS, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("web: failed to parse templates: %w", err)
@@ -70,10 +69,35 @@ func NewAdminServer(services *application.Service, logger application.Logger, po
 	// data race, and a shutdown that won it read a nil srv, returned nil, and
 	// left the listener running while main went on to close the database.
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.authMiddleware(s.handleDashboard))
-	mux.HandleFunc("/api/license", s.authMiddleware(s.handleLicenseAPI))
-	mux.HandleFunc("/login", s.handleLogin)
-	mux.HandleFunc("/logout", s.handleLogout)
+	if apiKey != "" {
+		mux.HandleFunc("/", s.authMiddleware(s.handleDashboard))
+		mux.HandleFunc("/api/license", s.authMiddleware(s.handleLicenseAPI))
+		mux.HandleFunc("/login", s.handleLogin)
+		mux.HandleFunc("/logout", s.handleLogout)
+	}
+
+	// Telegram Mini App routes
+	mux.HandleFunc("/app", s.handleApp)
+
+	tmaAuth := func(h http.HandlerFunc) http.HandlerFunc {
+		if botToken == "" {
+			return h
+		}
+		return TMAAuthMiddleware(botToken, 24*time.Hour, h)
+	}
+
+	mux.HandleFunc("/api/me", tmaAuth(s.handleMe))
+	mux.HandleFunc("/api/bracket", s.handleBracket)
+	mux.HandleFunc("/api/match/active", tmaAuth(s.handleActiveMatch))
+	mux.HandleFunc("/api/match/ready", tmaAuth(s.handleMatchReady))
+	mux.HandleFunc("/api/match/referee", tmaAuth(s.handleMatchReferee))
+	mux.HandleFunc("/api/match/report", tmaAuth(s.handleMatchReport))
+	mux.HandleFunc("/api/team/checkin", tmaAuth(s.handleCheckIn))
+	mux.HandleFunc("/api/team/player", tmaAuth(s.handleUpdateTeamPlayer))
+	mux.HandleFunc("/api/admin/desk", tmaAuth(s.handleAdminDesk))
+	mux.HandleFunc("/api/admin/match_action", tmaAuth(s.handleAdminMatchAction))
+	mux.HandleFunc("/api/admin/ping_debtors", tmaAuth(s.handleAdminPingDebtors))
+	mux.HandleFunc("/api/admin/disqualify_uncheck", tmaAuth(s.handleAdminDisqualifyUncheck))
 
 	s.srv = &http.Server{
 		Addr:    ":" + port,
@@ -90,7 +114,7 @@ func NewAdminServer(services *application.Service, logger application.Logger, po
 
 // Start begins listening on the configured port.
 func (s *AdminServer) Start() error {
-	s.logger.Info("web: admin dashboard listening on :%s", s.port)
+	s.logger.Info("web: server listening on :%s", s.port)
 	return s.srv.ListenAndServe()
 }
 
@@ -99,11 +123,32 @@ func (s *AdminServer) Shutdown(ctx context.Context) error {
 	return s.srv.Shutdown(ctx)
 }
 
+func (s *AdminServer) WithAdminIDs(adminIDs []int64) *AdminServer {
+	s.adminIDs = make(map[int64]bool, len(adminIDs))
+	for _, id := range adminIDs {
+		s.adminIDs[id] = true
+	}
+	return s
+}
+
+func (s *AdminServer) WithDebtorNotifier(fn func(ctx context.Context, adminChatID int64, msg string) error) *AdminServer {
+	s.debtorNotifier = fn
+	return s
+}
+
+func (s *AdminServer) isAdmin(tgID int64) bool {
+	return s.adminIDs != nil && s.adminIDs[tgID]
+}
+
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("X-Frame-Options", "DENY")
+		if strings.HasPrefix(r.URL.Path, "/app") {
+			h.Set("Content-Security-Policy", "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org;")
+		} else {
+			h.Set("X-Frame-Options", "DENY")
+		}
 		h.Set("Referrer-Policy", "no-referrer")
 		next.ServeHTTP(w, r)
 	})

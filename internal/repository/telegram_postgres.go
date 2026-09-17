@@ -394,12 +394,16 @@ func (r *TelegramPostgres) FindByGameID(ctx context.Context, gameID string) ([]m
 func (r *TelegramPostgres) CreateMatchReport(ctx context.Context, report *models.TelegramMatchReport) error {
 	var id int
 	var createdAt time.Time
+	photoIDs := report.PhotoFileIDs
+	if photoIDs == nil {
+		photoIDs = []string{}
+	}
 	err := r.db.QueryRowContext(ctx, `
 		INSERT INTO telegram_match_reports
 			(reporter_telegram_id, winner_team_id, loser_team_id, score, photo_file_ids, bracket_match_id)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING id, created_at
-	`, report.ReporterTelegramID, report.WinnerTeamID, report.LoserTeamID, report.Score, pq.Array(report.PhotoFileIDs), report.BracketMatchID).Scan(&id, &createdAt)
+	`, report.ReporterTelegramID, report.WinnerTeamID, report.LoserTeamID, report.Score, pq.Array(photoIDs), report.BracketMatchID).Scan(&id, &createdAt)
 	if err != nil {
 		return err
 	}

@@ -37,7 +37,8 @@ type Bot struct {
 	tournamentChatID string
 	// location is the zone /set_tourney dates are read in and schedule times
 	// are printed in.
-	location *time.Location
+	location  *time.Location
+	webAppURL string
 
 	photoTimers   map[int64]*time.Timer
 	photoTimersMu sync.Mutex
@@ -91,6 +92,12 @@ func NewBot(token string, adminIDs []int64, service application.TelegramService,
 	}
 
 	return b, nil
+}
+
+// WithWebAppURL sets the public URL for the Telegram Mini App.
+func (b *Bot) WithWebAppURL(url string) *Bot {
+	b.webAppURL = url
+	return b
 }
 
 // Start consumes updates until ctx is cancelled. Each update is handled under

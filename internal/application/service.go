@@ -77,6 +77,7 @@ type Service struct {
 	LicenseService     LicenseService
 	FAQService         *FAQService
 	Bracket            *BracketService
+	MatchDesk          *MatchDeskService
 }
 
 // SetBracketService enables Challonge-backed reports after the optional
@@ -86,6 +87,11 @@ func (s *Service) SetBracketService(bracket *BracketService) {
 	if telegram, ok := s.TelegramService.(*TelegramServiceImpl); ok {
 		telegram.WithBracket(bracket)
 	}
+}
+
+// SetMatchDeskService provides the match desk state service to consumers (e.g. web TMA).
+func (s *Service) SetMatchDeskService(desk *MatchDeskService) {
+	s.MatchDesk = desk
 }
 
 func NewService(repos *repository.Repository, ai AIProvider, sheetsClient sheets.Client, ownerEmail, spreadsheetID string, httpTimeoutSec int, logger Logger) *Service {

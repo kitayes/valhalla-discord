@@ -344,3 +344,171 @@ func deskAllProblems(m *models.DeskMatch, c models.DeskContext, now time.Time) [
 	}
 	return problems
 }
+
+// MatchDeskDetail carries real-time desk state formatted for the web app.
+type MatchDeskDetail struct {
+	MatchID                 int       `json:"match_id"`
+	Number                  int       `json:"number"`
+	Generation              int64     `json:"generation"`
+	MyTeamName              string    `json:"my_team_name"`
+	MyTeamID                int       `json:"my_team_id"`
+	MyReady                 bool      `json:"my_ready"`
+	OpponentTeamName        string    `json:"opponent_team_name"`
+	OpponentTeamID          int       `json:"opponent_team_id"`
+	OpponentReady           bool      `json:"opponent_ready"`
+	OpponentCaptainUsername string    `json:"opponent_captain_username"`
+	OpponentCaptainGameID   string    `json:"opponent_captain_game_id"`
+	Deadline                time.Time `json:"deadline"`
+	DeadlineSeconds         int64     `json:"deadline_seconds"`
+	IsPaused                bool      `json:"is_paused"`
+	CanReady                bool      `json:"can_ready"`
+	Status                  string    `json:"status"`
+}
+
+// GetMatchDeskDetail finds the active desk match for a captain.
+func (s *MatchDeskService) GetMatchDeskDetail(ctx context.Context, actor int64) (*MatchDeskDetail, error) {
+	var detail *MatchDeskDetail
+	err := s.update(ctx, func(d *models.MatchDesk, c models.DeskContext) error {
+		now := s.now()
+		for _, m := range sortedDeskMatches(d) {
+			if !m.Active {
+				continue
+			}
+			for side, teamID := range m.Teams {
+				p := c.Captains[teamID]
+				if p.TelegramID != nil && *p.TelegramID == actor {
+					oppSide := 1 - side
+					oppTeamID := m.Teams[oppSide]
+					oppCaptain := c.Captains[oppTeamID]
+
+					oppUser := ""
+					if oppCaptain.TelegramUsername != "" {
+						oppUser = "@" + strings.TrimPrefix(oppCaptain.TelegramUsername, "@")
+					}
+					oppGameID := oppCaptain.GameID
+					if oppCaptain.ZoneID != "" {
+						oppGameID += " (" + oppCaptain.ZoneID + ")"
+					}
+
+					deadlineSec := int64(0)
+					if !m.Deadline.IsZero() && m.Deadline.After(now) {
+						deadlineSec = int64(m.Deadline.Sub(now).Seconds())
+					}
+
+					detail = &MatchDeskDetail{
+						MatchID:                 m.ID,
+						Number:                  m.Number,
+						Generation:              m.Generation,
+						MyTeamName:              m.Names[side],
+						MyTeamID:                teamID,
+						MyReady:                 m.Ready[side],
+						OpponentTeamName:        m.Names[oppSide],
+						OpponentTeamID:          oppTeamID,
+						OpponentReady:           m.Ready[oppSide],
+						OpponentCaptainUsername: oppUser,
+						OpponentCaptainGameID:   oppGameID,
+						Deadline:                m.Deadline.In(s.location),
+						DeadlineSeconds:         deadlineSec,
+						IsPaused:                m.LocalPaused || m.GlobalPaused,
+						CanReady:                !m.Ready[side] && !m.LocalPaused && !m.GlobalPaused,
+						Status:                  deskStatus(m),
+					}
+					return nil
+				}
+			}
+		}
+		return nil
+	})
+	return detail, err
+}
+
+// ReadyCaptain marks the captain's active match as ready.
+func (s *MatchDeskService) ReadyCaptain(ctx context.Context, actor int64) error {
+	detail, err := s.GetMatchDeskDetail(ctx, actor)
+	if err != nil {
+		return err
+	}
+	if detail == nil {
+		return errors.New("активный матч не найден")
+	}
+	return s.CaptainAction(ctx, actor, detail.MatchID, detail.Generation, "ready")
+}
+
+// CallJudgeCaptain signals referee attention for the captain's active match.
+func (s *MatchDeskService) CallJudgeCaptain(ctx context.Context, actor int64, reason string) error {
+	detail, err := s.GetMatchDeskDetail(ctx, actor)
+	if err != nil {
+		return err
+	}
+	if detail == nil {
+		return errors.New("активный матч не найден")
+	}
+	action := "judge_lobby"
+	switch reason {
+	case "noanswer":
+		action = "judge_noanswer"
+	case "score":
+		action = "judge_score"
+	}
+	return s.CaptainAction(ctx, actor, detail.MatchID, detail.Generation, action)
+}
+
+type AdminMatchItem struct {
+	MatchID           int       `json:"match_id"`
+	Number            int       `json:"number"`
+	Generation        int64     `json:"generation"`
+	Team1ID           int       `json:"team1_id"`
+	Team1Name         string    `json:"team1_name"`
+	Team1Ready        bool      `json:"team1_ready"`
+	Team2ID           int       `json:"team2_id"`
+	Team2Name         string    `json:"team2_name"`
+	Team2Ready        bool      `json:"team2_ready"`
+	IsPaused          bool      `json:"is_paused"`
+	Status            string    `json:"status"`
+	DeadlineFormatted string    `json:"deadline_formatted"`
+	Issues            [2]string `json:"issues"`
+	HasIssues         bool      `json:"has_issues"`
+}
+
+func (s *MatchDeskService) IsAdmin(actor int64) bool {
+	return s.admins[actor]
+}
+
+func (s *MatchDeskService) GetAdminMatches(ctx context.Context, actor int64) (bool, []AdminMatchItem, error) {
+	if !s.admins[actor] {
+		return false, nil, errors.New("действие доступно только администратору")
+	}
+	var matches []AdminMatchItem
+	var globalPaused bool
+	err := s.update(ctx, func(d *models.MatchDesk, c models.DeskContext) error {
+		globalPaused = d.GlobalPaused
+		for _, m := range sortedDeskMatches(d) {
+			if !m.Active {
+				continue
+			}
+			dl := ""
+			if !m.Deadline.IsZero() {
+				dl = m.Deadline.In(s.location).Format("15:04")
+			}
+			hasIssues := m.Issues[0] != "" || m.Issues[1] != ""
+			matches = append(matches, AdminMatchItem{
+				MatchID:           m.ID,
+				Number:            m.Number,
+				Generation:        m.Generation,
+				Team1ID:           m.Teams[0],
+				Team1Name:         m.Names[0],
+				Team1Ready:        m.Ready[0],
+				Team2ID:           m.Teams[1],
+				Team2Name:         m.Names[1],
+				Team2Ready:        m.Ready[1],
+				IsPaused:          m.LocalPaused || m.GlobalPaused,
+				Status:            deskStatus(m),
+				DeadlineFormatted: dl,
+				Issues:            m.Issues,
+				HasIssues:         hasIssues,
+			})
+		}
+		return nil
+	})
+	return globalPaused, matches, err
+}

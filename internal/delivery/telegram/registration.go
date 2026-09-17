@@ -138,7 +138,7 @@ func regKeyboard(kbType string) (tgbotapi.InlineKeyboardMarkup, bool) {
 				tgbotapi.NewInlineKeyboardButtonData("3:2", "rep:score:3:2"),
 			),
 			tgbotapi.NewInlineKeyboardRow(
-				tgbotapi.NewInlineKeyboardButtonData("❌ Отмена", "rep:cancel"),
+				tgbotapi.NewInlineKeyboardButtonData("Отмена", "rep:cancel"),
 			),
 		), true
 
@@ -146,16 +146,16 @@ func regKeyboard(kbType string) (tgbotapi.InlineKeyboardMarkup, bool) {
 		n, _ := strconv.Atoi(params)
 		var rows [][]tgbotapi.InlineKeyboardButton
 		if n > 0 {
-			label := fmt.Sprintf("✅ Отправить отчет (%d)", n)
+			label := fmt.Sprintf("Отправить отчет (%d)", n)
 			rows = append(rows, tgbotapi.NewInlineKeyboardRow(
 				tgbotapi.NewInlineKeyboardButtonData(label, "rep:submit"),
 			))
 			rows = append(rows, tgbotapi.NewInlineKeyboardRow(
-				tgbotapi.NewInlineKeyboardButtonData("🔄 Сбросить скриншоты", "rep:reset_photos"),
+				tgbotapi.NewInlineKeyboardButtonData("Сбросить скриншоты", "rep:reset_photos"),
 			))
 		}
 		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("❌ Отмена", "rep:cancel"),
+			tgbotapi.NewInlineKeyboardButtonData("Отмена", "rep:cancel"),
 		))
 		return tgbotapi.NewInlineKeyboardMarkup(rows...), true
 	}

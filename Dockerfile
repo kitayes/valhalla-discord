@@ -14,7 +14,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o blackwatch-bot ./cmd/app/main.go
 
 FROM alpine:latest
 
-RUN apk --no-cache add ca-certificates bash netcat-openbsd
+RUN apk --no-cache add ca-certificates bash netcat-openbsd tzdata
 
 WORKDIR /root/
 

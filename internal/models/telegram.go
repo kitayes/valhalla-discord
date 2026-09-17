@@ -122,3 +122,22 @@ func (m BracketMatch) Opponent(teamID int) *int {
 func (m BracketMatch) Ready() bool {
 	return m.State == BracketOpen && m.Team1ID != nil && m.Team2ID != nil
 }
+
+type CheckInSummary struct {
+	TotalTeams        int          `json:"total_teams"`
+	CheckedInCount    int          `json:"checked_in_count"`
+	PendingCount      int          `json:"pending_count"`
+	IncompleteCount   int          `json:"incomplete_count"`
+	DisqualifiedCount int          `json:"disqualified_count"`
+	Debtors           []DebtorTeam `json:"debtors"`
+}
+
+type DebtorTeam struct {
+	ID                int    `json:"id"`
+	Name              string `json:"name"`
+	CaptainName       string `json:"captain_name"`
+	CaptainUsername   string `json:"captain_username"`
+	CaptainTelegramID *int64 `json:"captain_telegram_id,omitempty"`
+	PlayersCount      int    `json:"players_count"`
+	Status            string `json:"status"` // "pending", "incomplete", "disqualified"
+}

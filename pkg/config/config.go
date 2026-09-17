@@ -81,6 +81,8 @@ type Config struct {
 	// address is used, because a caller who can reach the port directly would
 	// otherwise pick their own address and walk straight past the login throttle.
 	WebAdminTrustedProxies []string `env:"WEB_ADMIN_TRUSTED_PROXIES" envSeparator:"," envDefault:""`
+	// WebAppURL is the public HTTPS address where Telegram WebApp is hosted (e.g. "https://domain/app").
+	WebAppURL string `env:"WEB_APP_URL" envDefault:""`
 
 	// Rank roles granted automatically after each match. Leave a role empty to
 	// skip that tier; leave them all empty to disable role syncing entirely.

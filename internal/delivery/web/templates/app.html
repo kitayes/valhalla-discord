@@ -1,0 +1,2177 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Valhalla Cup // Mini App</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        :root {
+            --bg-color: #0c0d12;
+            --card-bg: #141620;
+            --card-border: #232638;
+            --text-main: #f0f2f5;
+            --text-muted: #838a9e;
+            --accent-red: #e74c3c;
+            --accent-green: #2ecc71;
+            --accent-blue: #3498db;
+            --accent-gold: #f39c12;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            min-height: 100vh;
+            padding-bottom: calc(75px + env(safe-area-inset-bottom, 0px));
+            overflow-x: hidden;
+            overscroll-behavior-y: none;
+            max-width: 540px;
+            margin: 0 auto;
+            position: relative;
+        }
+
+        /* Top Header */
+        .app-header {
+            background: rgba(18, 20, 30, 0.9);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--card-border);
+            padding: calc(12px + env(safe-area-inset-top, 0px)) 18px 12px 18px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            max-width: 540px;
+            margin: 0 auto;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-weight: 800;
+            letter-spacing: 1.5px;
+            font-size: 14px;
+            color: #fff;
+        }
+        .brand span { color: var(--accent-red); }
+
+        .user-badge {
+            background: #1b1d2a;
+            border: 1px solid var(--card-border);
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .user-badge strong { color: var(--text-main); }
+
+        /* Container & Tabs */
+        .tab-content { display: none; padding: 16px; }
+        .tab-content.active { display: block; animation: fadeIn 0.2s ease-in-out; }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Card Styles */
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 14px;
+            padding: 16px;
+            margin-bottom: 14px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        .card-title {
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+        }
+
+        /* Match Desk Styles */
+        .vs-container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin: 16px 0;
+            gap: 10px;
+        }
+
+        .team-box {
+            flex: 1;
+            background: #1a1c28;
+            border: 1px solid var(--card-border);
+            border-radius: 12px;
+            padding: 12px;
+            text-align: center;
+        }
+        .team-box.my-team { border-color: rgba(52, 152, 219, 0.4); }
+
+        .team-name {
+            font-size: 14px;
+            font-weight: 700;
+            margin-bottom: 6px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* Status Pills & Indicators */
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            padding: 3px 8px;
+            border-radius: 8px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+        .status-ready { background: rgba(46, 204, 113, 0.15); color: var(--accent-green); border: 1px solid rgba(46, 204, 113, 0.3); }
+        .status-waiting { background: rgba(243, 156, 18, 0.15); color: var(--accent-gold); border: 1px solid rgba(243, 156, 18, 0.3); }
+
+        .status-dot {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            margin-right: 5px;
+            flex-shrink: 0;
+        }
+        .status-ready .status-dot {
+            background: var(--accent-green);
+            box-shadow: 0 0 6px var(--accent-green);
+        }
+        .status-waiting .status-dot {
+            background: var(--accent-gold);
+            box-shadow: 0 0 6px var(--accent-gold);
+        }
+
+        .vs-divider {
+            font-weight: 900;
+            font-size: 13px;
+            color: var(--accent-red);
+        }
+
+        .timer-box {
+            background: linear-gradient(135deg, rgba(231, 76, 60, 0.1), rgba(243, 156, 18, 0.08));
+            border: 1px solid rgba(231, 76, 60, 0.3);
+            border-radius: 12px;
+            padding: 12px;
+            text-align: center;
+            margin-bottom: 14px;
+        }
+        .timer-label { font-size: 11px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 4px; }
+        .timer-value { font-size: 24px; font-weight: 800; font-family: monospace; color: var(--accent-red); }
+
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            font-size: 13px;
+        }
+        .info-row:last-child { border-bottom: none; }
+        .info-label { color: var(--text-muted); }
+        .info-val { font-weight: 600; display: flex; align-items: center; gap: 8px; }
+
+        /* Modern Buttons with SVG Icons */
+        .btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            width: 100%;
+            padding: 13px;
+            border-radius: 12px;
+            border: none;
+            font-weight: 700;
+            font-size: 13px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            text-align: center;
+            margin-top: 10px;
+        }
+        .btn:active { transform: scale(0.98); }
+        .btn-green {
+            background: linear-gradient(135deg, #2ecc71, #27ae60);
+            color: #0b1e12;
+            box-shadow: 0 4px 14px rgba(46, 204, 113, 0.25);
+        }
+        .btn-red-outline {
+            background: rgba(231, 76, 60, 0.08);
+            border: 1px solid var(--accent-red);
+            color: var(--accent-red);
+        }
+        .btn-red-outline:active {
+            background: rgba(231, 76, 60, 0.18);
+        }
+        .btn-copy {
+            background: #232635;
+            border: 1px solid #363a4e;
+            color: #e0e3eb;
+            padding: 5px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            transition: background 0.15s;
+        }
+        .btn-copy:active { background: #2f3448; }
+
+        .btn-edit-player {
+            background: #232635;
+            border: 1px solid #363a4e;
+            color: var(--text-muted);
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            margin-left: 8px;
+            transition: all 0.15s;
+            flex-shrink: 0;
+        }
+        .btn-edit-player:active { background: #2f3448; color: #fff; }
+
+        /* Bracket View */
+        .bracket-tree {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .bracket-match {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 12px;
+            padding: 12px;
+        }
+        .bracket-match-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+        }
+        .match-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 0;
+            font-size: 14px;
+        }
+        .match-row.winner { font-weight: 700; color: var(--accent-green); }
+        .match-score { font-family: monospace; font-weight: 700; }
+
+        /* Bracket Badges */
+        .bracket-status {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            padding: 3px 8px;
+            border-radius: 6px;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .bracket-status.status-live {
+            background: rgba(231, 76, 60, 0.15);
+            color: var(--accent-red);
+            border: 1px solid rgba(231, 76, 60, 0.3);
+        }
+        .bracket-status.status-complete {
+            background: rgba(46, 204, 113, 0.12);
+            color: var(--accent-green);
+            border: 1px solid rgba(46, 204, 113, 0.25);
+        }
+        .bracket-status.status-pending {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-muted);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        @keyframes pulseGlow {
+            0% { transform: scale(0.9); opacity: 0.7; }
+            50% { transform: scale(1.25); opacity: 1; }
+            100% { transform: scale(0.9); opacity: 0.7; }
+        }
+        .live-pulse {
+            background: var(--accent-red) !important;
+            box-shadow: 0 0 8px var(--accent-red) !important;
+            animation: pulseGlow 1.4s infinite ease-in-out;
+        }
+
+        /* Team Roster */
+        .roster-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        .roster-item:last-child { border-bottom: none; }
+        .player-info { display: flex; flex-direction: column; gap: 2px; }
+        .player-nick { font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 6px; }
+        .player-meta { font-size: 11px; color: var(--text-muted); font-family: monospace; }
+        .badge-role {
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 6px;
+            background: #1f2230;
+            color: var(--accent-blue);
+            font-weight: 600;
+            border: 1px solid rgba(52, 152, 219, 0.2);
+        }
+
+        .captain-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            background: rgba(243, 156, 18, 0.15);
+            border: 1px solid rgba(243, 156, 18, 0.3);
+            color: var(--accent-gold);
+            font-size: 10px;
+            font-weight: 700;
+            padding: 1px 6px;
+            border-radius: 4px;
+            letter-spacing: 0.5px;
+        }
+
+        /* Empty State */
+        .empty-icon-box {
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--card-border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 16px auto;
+            color: var(--text-muted);
+        }
+
+        /* Form Inputs */
+        .form-group {
+            margin-bottom: 12px;
+            text-align: left;
+        }
+        .form-label {
+            display: block;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            margin-bottom: 5px;
+        }
+        .form-input {
+            width: 100%;
+            background: #101118;
+            border: 1px solid var(--card-border);
+            border-radius: 8px;
+            padding: 10px 12px;
+            color: var(--text-main);
+            font-size: 13px;
+            outline: none;
+            transition: border-color 0.15s;
+            box-sizing: border-box;
+        }
+        .form-input:focus {
+            border-color: var(--accent-blue);
+        }
+
+        /* Bottom Nav */
+        .bottom-nav {
+            position: fixed;
+            bottom: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 100%;
+            max-width: 540px;
+            height: calc(65px + env(safe-area-inset-bottom, 0px));
+            padding-bottom: env(safe-area-inset-bottom, 0px);
+            background: rgba(16, 17, 24, 0.95);
+            backdrop-filter: blur(14px);
+            border-top: 1px solid var(--card-border);
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            z-index: 100;
+        }
+
+        .nav-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 600;
+            flex: 1;
+            padding: 8px 0;
+            transition: color 0.15s;
+        }
+        .nav-item.active { color: var(--accent-red); }
+        .nav-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 22px;
+            height: 22px;
+        }
+
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.75);
+            backdrop-filter: blur(4px);
+            z-index: 200;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .modal.active { display: flex; }
+        .modal-content {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            padding: 20px;
+            width: 100%;
+            max-width: 360px;
+            box-shadow: 0 16px 36px rgba(0,0,0,0.6);
+        }
+        .modal-title { font-size: 15px; font-weight: 700; margin-bottom: 14px; text-align: center; }
+        .modal-option {
+            background: #1b1d2a;
+            border: 1px solid var(--card-border);
+            padding: 12px 14px;
+            border-radius: 10px;
+            margin-bottom: 10px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            transition: all 0.15s ease;
+        }
+        .modal-option:active { background: #26293a; border-color: #3b3f58; }
+
+        /* Toast notification */
+        .app-toast {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%) translateY(-50px);
+            background: #1e202d;
+            border: 1px solid #363b52;
+            color: #fff;
+            padding: 10px 18px;
+            border-radius: 24px;
+            font-size: 13px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+            z-index: 1000;
+            opacity: 0;
+            pointer-events: none;
+            transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+            max-width: 90%;
+            text-align: center;
+        }
+        .app-toast.show {
+            transform: translateX(-50%) translateY(0);
+            opacity: 1;
+        }
+
+        /* Full Product UI Enhancements */
+        .btn-blue {
+            background: linear-gradient(135deg, #3498db, #2980b9);
+            color: #fff;
+            box-shadow: 0 4px 14px rgba(52, 152, 219, 0.25);
+        }
+        .btn-blue:active { transform: scale(0.98); background: #2980b9; }
+
+        .btn-gold {
+            background: linear-gradient(135deg, #f39c12, #d35400);
+            color: #fff;
+            box-shadow: 0 4px 14px rgba(243, 156, 18, 0.25);
+        }
+        .btn-gold:active { transform: scale(0.98); }
+
+        .btn-sm {
+            padding: 8px 12px;
+            font-size: 11px;
+            border-radius: 8px;
+            width: auto;
+            margin-top: 0;
+            display: inline-flex;
+        }
+
+        /* Admin Hub Styles */
+        .admin-stats-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin-bottom: 14px;
+        }
+        .stat-card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 12px;
+            padding: 12px;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 20px;
+            font-weight: 800;
+            color: var(--text-main);
+            font-family: monospace;
+        }
+        .stat-label {
+            font-size: 10px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-top: 4px;
+        }
+
+        .admin-section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 16px 0 10px 0;
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+        }
+
+        .admin-dispute-card {
+            background: rgba(231, 76, 60, 0.07);
+            border: 1px solid rgba(231, 76, 60, 0.35);
+            border-radius: 12px;
+            padding: 14px;
+            margin-bottom: 10px;
+        }
+
+        .admin-badge-count {
+            position: absolute;
+            top: 6px;
+            right: calc(50% - 18px);
+            background: var(--accent-red);
+            color: #fff;
+            font-size: 9px;
+            font-weight: 800;
+            border-radius: 10px;
+            padding: 1px 5px;
+            min-width: 14px;
+            text-align: center;
+            box-shadow: 0 0 8px rgba(231, 76, 60, 0.6);
+        }
+
+        .score-selector {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 14px;
+        }
+        .score-btn {
+            flex: 1;
+            padding: 10px 4px;
+            background: #1a1c28;
+            border: 1px solid var(--card-border);
+            border-radius: 10px;
+            color: var(--text-main);
+            font-family: monospace;
+            font-weight: 800;
+            font-size: 15px;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.15s;
+        }
+        .score-btn.active {
+            border-color: var(--accent-blue);
+            background: rgba(52, 152, 219, 0.18);
+            color: #fff;
+            box-shadow: 0 0 10px rgba(52, 152, 219, 0.3);
+        }
+
+        .screenshot-preview-box {
+            border: 2px dashed var(--card-border);
+            border-radius: 10px;
+            padding: 14px;
+            text-align: center;
+            cursor: pointer;
+            background: rgba(255, 255, 255, 0.02);
+            margin-bottom: 14px;
+            transition: border-color 0.15s;
+        }
+        .screenshot-preview-box:hover {
+            border-color: var(--accent-blue);
+        }
+        .screenshot-preview-img {
+            max-width: 100%;
+            max-height: 180px;
+            border-radius: 8px;
+            margin-top: 8px;
+            display: none;
+            object-fit: contain;
+        }
+
+        .status-disqualified {
+            background: rgba(231, 76, 60, 0.15);
+            color: var(--accent-red);
+            border: 1px solid rgba(231, 76, 60, 0.3);
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Toast Component -->
+    <div id="appToast" class="app-toast">
+        <svg id="toastIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2ecc71" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12"/>
+        </svg>
+        <span id="toastMessage">Уведомление</span>
+    </div>
+
+    <!-- Top Bar -->
+    <header class="app-header">
+        <div class="brand">VALHALLA<span>//</span>CUP</div>
+        <div class="user-badge" id="userBadge">
+            <span id="userStatus">●</span>
+            <strong id="userName">Загрузка...</strong>
+        </div>
+    </header>
+
+    <!-- Tab 1: Match Desk -->
+    <main id="tabMatch" class="tab-content active">
+        <div id="matchLoading" class="card" style="text-align: center; color: var(--text-muted);">
+            Загрузка данных матча...
+        </div>
+
+        <div id="noMatchCard" class="card" style="display: none; text-align: center; padding: 34px 20px;">
+            <div class="empty-icon-box">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                    <circle cx="12" cy="11" r="3"/>
+                </svg>
+            </div>
+            <h3 style="margin-bottom: 8px; font-size: 16px;">Нет активного матча</h3>
+            <p style="font-size: 13px; color: var(--text-muted);">
+                Матч появится здесь, как только стартует ваш раунд турнирной сетки.
+            </p>
+        </div>
+
+        <div id="matchCard" style="display: none;">
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title" id="matchHeader">Матч #1</span>
+                    <span class="status-pill status-ready" id="matchStatusPill">
+                        <span class="status-dot"></span> <span id="matchStatusText">ИДЁТ</span>
+                    </span>
+                </div>
+
+                <div class="timer-box" id="timerBox">
+                    <div class="timer-label">Дедлайн подтверждения</div>
+                    <div class="timer-value" id="timerValue">10:00</div>
+                </div>
+
+                <div class="vs-container">
+                    <div class="team-box my-team">
+                        <div class="team-name" id="myTeamName">Моя Команда</div>
+                        <span class="status-pill status-waiting" id="myTeamStatus">
+                            <span class="status-dot"></span> <span id="myTeamStatusText">ОЖИДАНИЕ</span>
+                        </span>
+                    </div>
+                    <div class="vs-divider">VS</div>
+                    <div class="team-box">
+                        <div class="team-name" id="oppTeamName">Соперник</div>
+                        <span class="status-pill status-waiting" id="oppTeamStatus">
+                            <span class="status-dot"></span> <span id="oppTeamStatusText">ОЖИДАНИЕ</span>
+                        </span>
+                    </div>
+                </div>
+
+                <div class="info-row">
+                    <span class="info-label">Капитан соперника</span>
+                    <span class="info-val" id="oppCaptain">@rival</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Game ID соперника</span>
+                    <span class="info-val">
+                        <span id="oppGameID">12345678</span>
+                        <button class="btn-copy" onclick="copyGameID()">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                            <span>Копировать</span>
+                        </button>
+                    </span>
+                </div>
+
+                <button class="btn btn-green" id="btnReady" onclick="confirmReady()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    <span id="btnReadyText">ПОДТВЕРДИТЬ ГОТОВНОСТЬ</span>
+                </button>
+                <button class="btn btn-blue" id="btnReportResult" onclick="openReportModal()" style="display: none;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/>
+                        <path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/>
+                        <path d="M4 22h16"/>
+                        <path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/>
+                    </svg>
+                    <span>ВНЕСТИ РЕЗУЛЬТАТ МАТЧА</span>
+                </button>
+                <button class="btn btn-red-outline" onclick="openRefereeModal()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m4.93 4.93 4.24 4.24"/><path d="m14.83 9.17 4.24-4.24"/><path d="m14.83 14.83 4.24 4.24"/><path d="m9.17 14.83-4.24 4.24"/><circle cx="12" cy="12" r="4"/></svg>
+                    <span>ВЫЗВАТЬ СУДЬЮ</span>
+                </button>
+            </div>
+        </div>
+    </main>
+
+    <!-- Tab 2: Tournament Bracket -->
+    <main id="tabBracket" class="tab-content">
+        <div class="card-header">
+            <span class="card-title">Турнирная сетка</span>
+            <button class="btn-copy" onclick="loadBracket()">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg>
+                <span>Обновить</span>
+            </button>
+        </div>
+        <div id="bracketList" class="bracket-tree">
+            <!-- Dynamically populated -->
+        </div>
+    </main>
+
+    <!-- Tab 3: Team Roster -->
+    <main id="tabTeam" class="tab-content">
+        <!-- Empty / No Team State -->
+        <div id="noTeamCard" class="card" style="display: none; text-align: center; padding: 34px 20px;">
+            <div class="empty-icon-box">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+                    <circle cx="9" cy="7" r="4"/>
+                    <line x1="17" y1="8" x2="23" y2="14"/>
+                    <line x1="23" y1="8" x2="17" y2="14"/>
+                </svg>
+            </div>
+            <h3 style="margin-bottom: 8px; font-size: 16px;">Вы не состоите в команде</h3>
+            <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">
+                Для участия в турнире капитан должен зарегистрировать команду.
+            </p>
+            <div style="background: #1b1d2a; border: 1px solid var(--card-border); border-radius: 10px; padding: 12px; font-size: 12px; text-align: left; color: var(--text-muted); line-height: 1.6;">
+                <strong style="color: var(--text-main); display: block; margin-bottom: 4px;">Как зарегистрироваться:</strong>
+                1. Перейдите в чат с ботом <span style="color: var(--text-main);">@Blackwatch_mlbbbot</span><br>
+                2. Отправьте команду <code style="color: var(--accent-blue); font-weight: bold;">/reg_team</code><br>
+                3. Укажите название и добавьте 5 игроков
+            </div>
+        </div>
+
+        <!-- Team Profile Card -->
+        <div id="teamProfileCard" class="card" style="display: none;">
+            <div class="card-header">
+                <span class="card-title">Моя Команда</span>
+                <span class="status-pill status-ready" id="checkInBadge">
+                    <span class="status-dot"></span> <span id="checkInBadgeText">CHECK-IN</span>
+                </span>
+            </div>
+            <h2 id="teamProfileName" style="font-size: 18px; margin-bottom: 12px; font-weight: 800;">—</h2>
+            
+            <button class="btn btn-green" id="btnCheckIn" onclick="toggleCheckIn()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                <span id="btnCheckInText">Подтвердить участие (Check-in)</span>
+            </button>
+            <div id="checkInNotice" style="display: none; font-size: 11px; color: var(--text-muted); margin-top: 8px; text-align: center;">
+                Только капитан команды может подтвердить или снять Check-in.
+            </div>
+        </div>
+
+        <!-- Roster Card -->
+        <div id="rosterCard" class="card" style="display: none;">
+            <div class="card-header">
+                <span class="card-title">Состав игроков</span>
+            </div>
+            
+            <!-- Roster Lock Notice (Shown when Checked In) -->
+            <div id="rosterLockedNotice" style="display: none; background: rgba(243, 156, 18, 0.1); border: 1px solid rgba(243, 156, 18, 0.25); border-radius: 8px; padding: 10px 12px; font-size: 12px; color: var(--accent-gold); margin-bottom: 12px; align-items: center; gap: 8px;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;">
+                    <rect width="18" height="11" x="3" y="11" rx="2" ry="2"/>
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                </svg>
+                <span>Состав зафиксирован (Check-in пройден). Чтобы изменить данные или состав игроков, сначала отмените Check-in.</span>
+            </div>
+
+            <div id="rosterList">
+                <!-- Dynamically populated -->
+            </div>
+        </div>
+    </main>
+
+    <!-- Tab 4: Admin & Referee Hub (Admins Only) -->
+    <main id="tabAdmin" class="tab-content">
+        <div class="card" style="border-color: rgba(231, 76, 60, 0.4); background: linear-gradient(180deg, rgba(231, 76, 60, 0.08) 0%, var(--card-bg) 100%);">
+            <div class="card-header">
+                <span class="card-title" style="color: var(--accent-red); display: flex; align-items: center; gap: 6px;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                    </svg>
+                    Судейский Пульт
+                </span>
+                <span class="status-pill status-ready" id="adminGlobalStatusPill">
+                    <span class="status-dot"></span> <span id="adminGlobalStatusText">ТУРНИР АКТИВЕН</span>
+                </span>
+            </div>
+            
+            <div style="display: flex; gap: 8px; margin-top: 4px;">
+                <button class="btn-copy" id="btnToggleGlobalPause" onclick="toggleGlobalPause()" style="width: 100%; justify-content: center; padding: 8px;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="4" height="16" x="6" y="4"/><rect width="4" height="16" x="14" y="4"/></svg>
+                    <span id="btnToggleGlobalPauseText">Поставить турнир на паузу</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- 4-Stat Metrics Grid -->
+        <div class="admin-stats-grid">
+            <div class="stat-card">
+                <div class="stat-value" id="statActiveMatches" style="color: var(--accent-blue);">0</div>
+                <div class="stat-label">Матчей идёт</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statDisputes" style="color: var(--accent-red);">0</div>
+                <div class="stat-label">Вызовов судьи</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statCheckIn" style="color: var(--accent-green);">0 / 0</div>
+                <div class="stat-label">Check-in</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statDebtors" style="color: var(--accent-gold);">0</div>
+                <div class="stat-label">Должников</div>
+            </div>
+        </div>
+
+        <!-- Section 1: Disputes Queue -->
+        <div class="admin-section-header">
+            <span>Очередь вызовов судей & Споры</span>
+            <button class="btn-copy" onclick="loadAdminDesk()">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg>
+                <span>Обновить</span>
+            </button>
+        </div>
+        <div id="adminDisputesList">
+            <!-- Dynamically populated -->
+        </div>
+
+        <!-- Section 2: Active Matches -->
+        <div class="admin-section-header">
+            <span>Активные матчи турнира</span>
+        </div>
+        <div id="adminMatchesList">
+            <!-- Dynamically populated -->
+        </div>
+
+        <!-- Section 3: Check-in & Debtors Monitor -->
+        <div class="admin-section-header">
+            <span>Контроль Check-in и Должники</span>
+        </div>
+        <div class="card">
+            <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+                <button class="btn btn-gold btn-sm" style="flex: 1;" onclick="openPingDebtorsModal()">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>
+                    <span>Оповестить</span>
+                </button>
+                <button class="btn btn-red-outline btn-sm" style="flex: 1;" onclick="confirmDisqualifyUncheck()">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                    <span>Дисквалиф. (ТП)</span>
+                </button>
+            </div>
+            <div id="adminDebtorsList">
+                <!-- Dynamically populated -->
+            </div>
+        </div>
+    </main>
+
+    <!-- Bottom Navigation Bar -->
+    <nav class="bottom-nav">
+        <div class="nav-item active" onclick="switchTab('tabMatch', this)">
+            <span class="nav-icon">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="14.5 17.5 3 6 3 3 6 3 17.5 14.5"/>
+                    <line x1="13" y1="19" x2="19" y2="13"/>
+                    <line x1="16" y1="16" x2="20" y2="20"/>
+                    <line x1="19" y1="21" x2="21" y2="19"/>
+                    <polyline points="14.5 6.5 18 3 21 3 21 6 17.5 9.5"/>
+                    <line x1="5" y1="14" x2="9" y2="18"/>
+                    <line x1="7" y1="17" x2="4" y2="20"/>
+                    <line x1="3" y1="19" x2="5" y2="21"/>
+                </svg>
+            </span>
+            <span>Матч</span>
+        </div>
+        <div class="nav-item" onclick="switchTab('tabBracket', this)">
+            <span class="nav-icon">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/>
+                    <path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/>
+                    <path d="M4 22h16"/>
+                    <path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/>
+                    <path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/>
+                    <path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/>
+                </svg>
+            </span>
+            <span>Сетка</span>
+        </div>
+        <div class="nav-item" onclick="switchTab('tabTeam', this)">
+            <span class="nav-icon">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+                    <circle cx="9" cy="7" r="4"/>
+                    <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
+                    <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                </svg>
+            </span>
+            <span>Команда</span>
+        </div>
+        <div class="nav-item" id="adminNavTab" style="display: none; position: relative;" onclick="switchTab('tabAdmin', this)">
+            <span class="nav-icon">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                    <path d="m9 12 2 2 4-4"/>
+                </svg>
+            </span>
+            <span>Судейство</span>
+            <span class="admin-badge-count" id="adminBadge" style="display: none;">0</span>
+        </div>
+    </nav>
+
+    <!-- Referee Modal -->
+    <div class="modal" id="refModal">
+        <div class="modal-content">
+            <div class="modal-title">Причина вызова судьи</div>
+            <div class="modal-option" onclick="callReferee('lobby')">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="12" x2="10" y2="12"/><line x1="8" y1="10" x2="8" y2="14"/><line x1="15" y1="13" x2="15.01" y2="13"/><line x1="18" y1="11" x2="18.01" y2="11"/><rect width="20" height="12" x="2" y="6" rx="6"/></svg>
+                <span>Проблема с лобби</span>
+            </div>
+            <div class="modal-option" onclick="callReferee('noanswer')">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                <span>Соперник не отвечает / не заходит</span>
+            </div>
+            <div class="modal-option" onclick="callReferee('score')">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="M7 21h10"/><path d="M12 3v18"/><path d="M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2"/></svg>
+                <span>Несогласие со счётом матча</span>
+            </div>
+            <button class="btn btn-red-outline" onclick="closeRefereeModal()">Отмена</button>
+        </div>
+    </div>
+
+    <!-- Edit Player Modal -->
+    <div class="modal" id="editPlayerModal">
+        <div class="modal-content">
+            <div class="modal-title">Редактировать игрока</div>
+            <input type="hidden" id="editPlayerID">
+            <div class="form-group">
+                <label class="form-label">Игровой ник</label>
+                <input type="text" id="editPlayerNick" class="form-input" placeholder="Ник в игре">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Game ID</label>
+                <input type="text" id="editPlayerGameID" class="form-input" placeholder="Например: 12345678">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Zone ID (Сервер)</label>
+                <input type="text" id="editPlayerZoneID" class="form-input" placeholder="Например: 1001">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Основная роль</label>
+                <select id="editPlayerRole" class="form-input">
+                    <option value="Mid">Mid (Мидлейн)</option>
+                    <option value="Roam">Roam (Роум)</option>
+                    <option value="Gold">Gold (Голдлейн)</option>
+                    <option value="Exp">Exp (Эксплейн)</option>
+                    <option value="Jungle">Jungle (Лесник)</option>
+                    <option value="Запас">Запас (Substitute)</option>
+                </select>
+            </div>
+            <button class="btn btn-green" id="btnSavePlayer" onclick="savePlayerEdit()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Сохранить изменения</span>
+            </button>
+            <button class="btn btn-red-outline" onclick="closeEditPlayerModal()">Отмена</button>
+        </div>
+    </div>
+
+    <!-- Match Score Report Modal -->
+    <div class="modal" id="reportModal">
+        <div class="modal-content" style="max-height: 90vh; overflow-y: auto;">
+            <div class="modal-title">Внести счёт матча</div>
+            
+            <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
+                Выберите быстрый счёт или укажите счёт вручную:
+            </p>
+
+            <div class="score-selector">
+                <div class="score-btn active" onclick="selectScore(2, 0, this)">2 : 0</div>
+                <div class="score-btn" onclick="selectScore(2, 1, this)">2 : 1</div>
+                <div class="score-btn" onclick="selectScore(1, 2, this)">1 : 2</div>
+                <div class="score-btn" onclick="selectScore(0, 2, this)">0 : 2</div>
+            </div>
+
+            <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 14px;">
+                <div style="flex: 1;">
+                    <label class="form-label" id="myTeamScoreLabel" style="font-size: 11px;">Моя команда</label>
+                    <input type="number" class="form-input" id="reportMyScore" value="2" min="0" max="10" style="text-align: center; font-size: 18px; font-weight: bold; font-family: monospace;">
+                </div>
+                <div style="font-size: 20px; font-weight: bold; color: var(--accent-red); padding-top: 14px;">:</div>
+                <div style="flex: 1;">
+                    <label class="form-label" id="oppTeamScoreLabel" style="font-size: 11px;">Соперник</label>
+                    <input type="number" class="form-input" id="reportOppScore" value="0" min="0" max="10" style="text-align: center; font-size: 18px; font-weight: bold; font-family: monospace;">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Скриншот победы (пруф):</label>
+                <div class="screenshot-preview-box" onclick="document.getElementById('reportScreenshotInput').click()">
+                    <input type="file" id="reportScreenshotInput" accept="image/*" style="display: none;" onchange="handleScreenshotSelected(event)">
+                    <div id="screenshotPrompt" style="display: flex; flex-direction: column; align-items: center; gap: 6px;">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent-blue)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>
+                            <circle cx="9" cy="9" r="2"/>
+                            <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>
+                        </svg>
+                        <span style="font-size: 12px; color: var(--text-muted);">Нажмите, чтобы прикрепить скриншот</span>
+                    </div>
+                    <img id="screenshotPreviewImg" class="screenshot-preview-img" alt="Скриншот матча">
+                </div>
+            </div>
+
+            <button class="btn btn-blue" id="btnSubmitReport" onclick="submitMatchReport()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Подтвердить и отправить</span>
+            </button>
+            <button class="btn btn-red-outline" onclick="closeReportModal()">Отмена</button>
+        </div>
+    </div>
+
+    <!-- Admin Tech Win Modal -->
+    <div class="modal" id="techWinModal">
+        <div class="modal-content">
+            <div class="modal-title">Присудить тех. победу (ТП)</div>
+            <input type="hidden" id="techWinMatchID">
+            <input type="hidden" id="techWinGeneration">
+            
+            <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
+                Выберите команду-победителя для матча #<span id="techWinMatchNumber">1</span>:
+            </p>
+
+            <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px;">
+                <button type="button" class="btn btn-sm" id="btnTechWinTeam1" onclick="selectTechWinner(1)" style="justify-content: flex-start; background: #1a1c28; border: 1px solid var(--card-border); color: #fff; padding: 12px;">
+                    <span id="techWinTeam1Name">Команда 1</span>
+                </button>
+                <button type="button" class="btn btn-sm" id="btnTechWinTeam2" onclick="selectTechWinner(2)" style="justify-content: flex-start; background: #1a1c28; border: 1px solid var(--card-border); color: #fff; padding: 12px;">
+                    <span id="techWinTeam2Name">Команда 2</span>
+                </button>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Счёт матча:</label>
+                <input type="text" id="techWinScore" class="form-input" value="2:0" style="text-align: center; font-family: monospace; font-weight: bold;">
+            </div>
+
+            <button class="btn btn-gold" id="btnConfirmTechWin" onclick="confirmTechWinSubmit()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Присудить победу</span>
+            </button>
+            <button class="btn btn-red-outline" onclick="closeTechWinModal()">Отмена</button>
+        </div>
+    </div>
+
+    <!-- Admin Ping Debtors Modal -->
+    <div class="modal" id="pingDebtorsModal">
+        <div class="modal-content">
+            <div class="modal-title">Оповещение должников</div>
+            <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
+                Капитаны всех команд, не прошедших Check-in или не укомплектованных, получат уведомление в Telegram.
+            </p>
+            <div class="form-group">
+                <label class="form-label">Дополнительное сообщение (необязательно):</label>
+                <textarea id="pingDebtorsCustomMsg" class="form-input" style="height: 70px; resize: none;" placeholder="Например: У вас 15 минут до выдачи ТП!"></textarea>
+            </div>
+            <button class="btn btn-gold" onclick="submitPingDebtors()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>
+                <span>Отправить оповещение</span>
+            </button>
+            <button class="btn btn-red-outline" onclick="closePingDebtorsModal()">Отмена</button>
+        </div>
+    </div>
+
+    <script>
+        const tg = window.Telegram?.WebApp;
+        let initData = "";
+        let deadlineTimer = null;
+        let remainingSeconds = 0;
+        let currentOpponentID = "";
+        let currentTeamCheckedIn = false;
+        let currentUserIsCaptain = false;
+        let currentUserIsAdmin = false;
+        let cachedTeammates = [];
+
+        // Match State Tracking
+        let currentActiveMatchID = 0;
+        let currentMatchGeneration = 0;
+        let currentMyTeamName = "";
+        let currentOppTeamName = "";
+        let selectedScreenshotBase64 = "";
+
+        // Admin State Tracking
+        let adminDeskData = null;
+        let selectedTechWinnerSide = 1;
+        let currentTab = 'tabMatch';
+        let smartPollingTimer = null;
+
+        if (tg) {
+            tg.ready();
+            tg.expand();
+            if (tg.isVerticalSwipesEnabled !== undefined && tg.disableVerticalSwipes) {
+                tg.disableVerticalSwipes();
+            }
+            initData = tg.initData || "";
+            if (tg.setHeaderColor) tg.setHeaderColor('#101118');
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+        function escapeAttr(str) {
+            if (!str) return '';
+            return String(str).replace(/'/g, "\\'").replace(/"/g, '&quot;');
+        }
+
+        function showToast(message, isSuccess = true) {
+            const toast = document.getElementById('appToast');
+            const msgEl = document.getElementById('toastMessage');
+            const iconEl = document.getElementById('toastIcon');
+            msgEl.textContent = message;
+            if (isSuccess) {
+                iconEl.innerHTML = `<polyline points="20 6 9 17 4 12"/>`;
+                iconEl.setAttribute('stroke', '#2ecc71');
+            } else {
+                iconEl.innerHTML = `<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>`;
+                iconEl.setAttribute('stroke', '#e74c3c');
+            }
+            toast.classList.add('show');
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 3000);
+        }
+
+        // Native Telegram Back Button integration for Android/iOS
+        function updateBackButton() {
+            if (!tg?.BackButton) return;
+            const anyModalActive = document.querySelector('.modal.active');
+            const activeTab = document.querySelector('.tab-content.active');
+            if (anyModalActive || (activeTab && activeTab.id !== 'tabMatch')) {
+                tg.BackButton.show();
+            } else {
+                tg.BackButton.hide();
+            }
+        }
+
+        if (tg?.BackButton) {
+            tg.BackButton.onClick(() => {
+                const anyModal = document.querySelector('.modal.active');
+                if (anyModal) {
+                    anyModal.classList.remove('active');
+                    updateBackButton();
+                    return;
+                }
+                switchTab('tabMatch', document.querySelector('.nav-item'));
+            });
+        }
+
+        // Fetch wrapper with Telegram initData auth
+        async function apiFetch(url, options = {}) {
+            options.headers = options.headers || {};
+            if (initData) {
+                options.headers['X-Telegram-Init-Data'] = initData;
+            }
+            try {
+                const res = await fetch(url, options);
+                const data = await res.json();
+                if (!res.ok) {
+                    return { ok: false, error: data.error || data.message || 'Ошибка сервера' };
+                }
+                return data;
+            } catch (err) {
+                console.error("API error:", err);
+                return { ok: false, error: 'Ошибка соединения с сервером' };
+            }
+        }
+
+        function haptic(type = 'light') {
+            if (tg?.HapticFeedback) {
+                if (type === 'success') tg.HapticFeedback.notificationOccurred('success');
+                else if (type === 'warning') tg.HapticFeedback.notificationOccurred('warning');
+                else tg.HapticFeedback.impactOccurred('light');
+            }
+        }
+
+        function switchTab(tabId, el) {
+            haptic('light');
+            currentTab = tabId;
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+            document.getElementById(tabId).classList.add('active');
+            if (el) el.classList.add('active');
+
+            updateBackButton();
+
+            if (tabId === 'tabBracket') loadBracket();
+            if (tabId === 'tabTeam') loadProfile();
+            if (tabId === 'tabMatch') loadActiveMatch();
+            if (tabId === 'tabAdmin') loadAdminDesk();
+        }
+
+        // Load Me & Team Profile
+        async function loadProfile() {
+            if (!initData) {
+                // Browser Preview Fallback
+                document.getElementById('userName').textContent = 'Капитан (Браузер)';
+                document.getElementById('noTeamCard').style.display = 'none';
+                document.getElementById('teamProfileCard').style.display = 'block';
+                document.getElementById('rosterCard').style.display = 'block';
+                document.getElementById('teamProfileName').textContent = 'Valhalla Tigers';
+                cachedTeammates = [
+                    { id: 1, nickname: 'TigerLeader', is_captain: true, game_id: '11223344', zone_id: '1001', role: 'Mid' },
+                    { id: 2, nickname: 'ShadowBlade', is_captain: false, game_id: '22334455', zone_id: '1001', role: 'Roam' },
+                    { id: 3, nickname: 'IronFist', is_captain: false, game_id: '33445566', zone_id: '1001', role: 'Gold' },
+                    { id: 4, nickname: 'SwiftArrow', is_captain: false, game_id: '44556677', zone_id: '1001', role: 'Exp' },
+                    { id: 5, nickname: 'GhostWalker', is_captain: false, game_id: '55667788', zone_id: '1001', role: 'Jungle' },
+                    { id: 6, nickname: 'NightRider', is_captain: false, game_id: '66778899', zone_id: '1001', role: 'Запас' }
+                ];
+                currentUserIsCaptain = true;
+                currentUserIsAdmin = true;
+                const adminTab = document.getElementById('adminNavTab');
+                if (adminTab) adminTab.style.display = 'flex';
+                updateCheckInStatus(demoCheckedIn, true);
+                renderRoster(cachedTeammates, !demoCheckedIn);
+                return;
+            }
+
+            const data = await apiFetch('/api/me');
+            if (data && data.user) {
+                document.getElementById('userName').textContent = data.user.first_name || data.user.username || 'Игрок';
+                if (data.is_admin) {
+                    currentUserIsAdmin = true;
+                    const adminTab = document.getElementById('adminNavTab');
+                    if (adminTab) adminTab.style.display = 'flex';
+                }
+                if (data.team) {
+                    document.getElementById('noTeamCard').style.display = 'none';
+                    document.getElementById('teamProfileCard').style.display = 'block';
+                    document.getElementById('rosterCard').style.display = 'block';
+                    document.getElementById('teamProfileName').textContent = data.team.name;
+                    cachedTeammates = data.teammates || [];
+                    const isCaptain = data.player ? data.player.is_captain : false;
+                    currentUserIsCaptain = isCaptain;
+                    updateCheckInStatus(data.team.is_checked_in, isCaptain);
+                    const canEdit = isCaptain && !data.team.is_checked_in;
+                    renderRoster(cachedTeammates, canEdit);
+                } else {
+                    document.getElementById('noTeamCard').style.display = 'block';
+                    document.getElementById('teamProfileCard').style.display = 'none';
+                    document.getElementById('rosterCard').style.display = 'none';
+                }
+            }
+        }
+
+        function renderRoster(players, canEdit) {
+            const list = document.getElementById('rosterList');
+            list.innerHTML = "";
+            if (!players.length) {
+                list.innerHTML = `<div style="color:var(--text-muted); font-size:13px; text-align:center; padding:10px;">Состав не заполнен</div>`;
+                return;
+            }
+            players.forEach((p, idx) => {
+                const item = document.createElement('div');
+                item.className = 'roster-item';
+                const capBadge = p.is_captain ? `<span class="captain-tag"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7zm3 16h14"/></svg> C</span>` : '';
+                const pNick = p.nickname || p.game_nickname || ('Игрок ' + (idx + 1));
+                const pRole = p.role || p.main_role || (p.is_captain ? 'Капитан' : 'Основа');
+                const pGameId = p.game_id || '';
+                const pZoneId = p.zone_id || '';
+
+                const editBtn = canEdit ? `
+                    <button class="btn-edit-player" onclick="openEditModal(${p.id}, '${escapeAttr(pNick)}', '${escapeAttr(pGameId)}', '${escapeAttr(pZoneId)}', '${escapeAttr(pRole)}')" title="Редактировать игрока">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
+                        </svg>
+                    </button>
+                ` : '';
+
+                item.innerHTML = `
+                    <div class="player-info">
+                        <div class="player-nick">
+                            <span>${escapeHtml(pNick)}</span>
+                            ${capBadge}
+                        </div>
+                        <div class="player-meta">ID: ${pGameId || '—'} ${pZoneId ? '(' + pZoneId + ')' : ''}</div>
+                    </div>
+                    <div style="display:flex; align-items:center;">
+                        <div class="badge-role">${escapeHtml(pRole)}</div>
+                        ${editBtn}
+                    </div>
+                `;
+                list.appendChild(item);
+            });
+        }
+
+        let demoCheckedIn = false;
+        function updateCheckInStatus(isChecked, isCaptain = true) {
+            demoCheckedIn = isChecked;
+            currentTeamCheckedIn = isChecked;
+            currentUserIsCaptain = isCaptain;
+
+            const badge = document.getElementById('checkInBadge');
+            const badgeText = document.getElementById('checkInBadgeText');
+            const btn = document.getElementById('btnCheckIn');
+            const btnText = document.getElementById('btnCheckInText');
+            const notice = document.getElementById('checkInNotice');
+            const lockedNotice = document.getElementById('rosterLockedNotice');
+
+            if (isChecked) {
+                badge.className = 'status-pill status-ready';
+                badgeText.textContent = 'CHECKED-IN';
+                btnText.textContent = 'Отменить Check-in';
+                btn.className = 'btn btn-red-outline';
+                lockedNotice.style.display = 'flex';
+            } else {
+                badge.className = 'status-pill status-waiting';
+                badgeText.textContent = 'НЕ ПОДТВЕРЖДЕНО';
+                btnText.textContent = 'Подтвердить участие (Check-in)';
+                btn.className = 'btn btn-green';
+                lockedNotice.style.display = 'none';
+            }
+
+            if (!isCaptain) {
+                btn.disabled = true;
+                btn.style.opacity = '0.5';
+                btn.style.cursor = 'not-allowed';
+                notice.style.display = 'block';
+            } else {
+                btn.disabled = false;
+                btn.style.opacity = '1';
+                btn.style.cursor = 'pointer';
+                notice.style.display = 'none';
+            }
+        }
+
+        async function toggleCheckIn() {
+            haptic('light');
+            if (!initData) {
+                demoCheckedIn = !demoCheckedIn;
+                updateCheckInStatus(demoCheckedIn, true);
+                renderRoster(cachedTeammates, !demoCheckedIn);
+                showToast(demoCheckedIn ? 'Check-in подтверждён' : 'Check-in отменён', true);
+                return;
+            }
+            const res = await apiFetch('/api/team/checkin', { method: 'POST' });
+            if (res && res.ok) {
+                showToast(res.message || (res.is_checked_in ? 'Check-in подтверждён' : 'Check-in отменён'), true);
+                loadProfile();
+            } else if (res && (res.error || res.message)) {
+                showToast(res.error || res.message, false);
+            } else {
+                showToast('Ошибка при выполнении чек-ина', false);
+            }
+        }
+
+        // Edit Player Modal Functions
+        function openEditModal(id, nick, gameId, zoneId, role) {
+            haptic('light');
+            if (currentTeamCheckedIn) {
+                showToast('Редактирование запрещено: Check-in уже пройден!', false);
+                return;
+            }
+            document.getElementById('editPlayerID').value = id;
+            document.getElementById('editPlayerNick').value = nick;
+            document.getElementById('editPlayerGameID').value = gameId;
+            document.getElementById('editPlayerZoneID').value = zoneId;
+            document.getElementById('editPlayerRole').value = role || 'Mid';
+            document.getElementById('editPlayerModal').classList.add('active');
+            updateBackButton();
+        }
+
+        function closeEditPlayerModal() {
+            document.getElementById('editPlayerModal').classList.remove('active');
+            updateBackButton();
+        }
+
+        async function savePlayerEdit() {
+            haptic('light');
+            const id = parseInt(document.getElementById('editPlayerID').value, 10);
+            const nick = document.getElementById('editPlayerNick').value.trim();
+            const gameId = document.getElementById('editPlayerGameID').value.trim();
+            const zoneId = document.getElementById('editPlayerZoneID').value.trim();
+            const role = document.getElementById('editPlayerRole').value;
+
+            if (!nick) {
+                showToast('Введите игровой никнейм', false);
+                return;
+            }
+            if (!gameId) {
+                showToast('Введите Game ID', false);
+                return;
+            }
+
+            const btn = document.getElementById('btnSavePlayer');
+            btn.disabled = true;
+            btn.style.opacity = '0.6';
+
+            if (!initData) {
+                const p = cachedTeammates.find(x => x.id === id);
+                if (p) {
+                    p.nickname = nick;
+                    p.game_id = gameId;
+                    p.zone_id = zoneId;
+                    p.role = role;
+                }
+                closeEditPlayerModal();
+                showToast('Данные игрока сохранены', true);
+                btn.disabled = false;
+                btn.style.opacity = '1';
+                renderRoster(cachedTeammates, !demoCheckedIn);
+                return;
+            }
+
+            const res = await apiFetch('/api/team/player', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    player_id: id,
+                    nickname: nick,
+                    game_id: gameId,
+                    zone_id: zoneId,
+                    role: role
+                })
+            });
+
+            btn.disabled = false;
+            btn.style.opacity = '1';
+
+            if (res && res.ok) {
+                closeEditPlayerModal();
+                showToast(res.message || 'Данные игрока сохранены', true);
+                loadProfile();
+            } else if (res && (res.error || res.message)) {
+                showToast(res.error || res.message, false);
+            } else {
+                showToast('Не удалось сохранить данные', false);
+            }
+        }
+
+        // Load Active Match Desk
+        let demoMyReady = false;
+        async function loadActiveMatch(silent = false) {
+            if (!silent) {
+                document.getElementById('matchLoading').style.display = 'none';
+            }
+
+            if (!initData) {
+                document.getElementById('noMatchCard').style.display = 'none';
+                document.getElementById('matchCard').style.display = 'block';
+
+                document.getElementById('matchHeader').textContent = 'РАУНД 1 // МАТЧ #1';
+                currentMyTeamName = 'Valhalla Tigers';
+                currentOppTeamName = 'Shadow Ravens';
+                document.getElementById('myTeamName').textContent = currentMyTeamName;
+                document.getElementById('oppTeamName').textContent = currentOppTeamName;
+
+                const myPill = document.getElementById('myTeamStatus');
+                const myPillText = document.getElementById('myTeamStatusText');
+                myPillText.textContent = demoMyReady ? 'ГОТОВ' : 'ОЖИДАНИЕ';
+                myPill.className = 'status-pill ' + (demoMyReady ? 'status-ready' : 'status-waiting');
+
+                const oppPill = document.getElementById('oppTeamStatus');
+                const oppPillText = document.getElementById('oppTeamStatusText');
+                oppPillText.textContent = 'ГОТОВ';
+                oppPill.className = 'status-pill status-ready';
+
+                document.getElementById('oppCaptain').textContent = '@shadow_cap';
+                currentOpponentID = '98765432 (1001)';
+                document.getElementById('oppGameID').textContent = currentOpponentID;
+
+                const btnReady = document.getElementById('btnReady');
+                const btnReadyText = document.getElementById('btnReadyText');
+                if (demoMyReady) {
+                    btnReadyText.textContent = 'ГОТОВНОСТЬ ПОДТВЕРЖДЕНА';
+                    btnReady.disabled = true;
+                    btnReady.style.opacity = '0.6';
+                } else {
+                    btnReadyText.textContent = 'ПОДТВЕРДИТЬ ГОТОВНОСТЬ';
+                    btnReady.disabled = false;
+                    btnReady.style.opacity = '1';
+                }
+
+                const btnReport = document.getElementById('btnReportResult');
+                if (btnReport) btnReport.style.display = 'flex';
+
+                if (!deadlineTimer) {
+                    remainingSeconds = 582;
+                    startCountdown();
+                }
+                return;
+            }
+
+            const data = await apiFetch('/api/match/active');
+            if (!data || !data.has_match || !data.match) {
+                document.getElementById('noMatchCard').style.display = 'block';
+                document.getElementById('matchCard').style.display = 'none';
+                return;
+            }
+
+            const m = data.match;
+            currentActiveMatchID = m.match_id;
+            currentMatchGeneration = m.generation;
+            currentMyTeamName = m.my_team_name;
+            currentOppTeamName = m.opponent_team_name;
+
+            document.getElementById('noMatchCard').style.display = 'none';
+            document.getElementById('matchCard').style.display = 'block';
+
+            document.getElementById('matchHeader').textContent = `МАТЧ #${m.number}`;
+            document.getElementById('myTeamName').textContent = m.my_team_name;
+            document.getElementById('oppTeamName').textContent = m.opponent_team_name;
+
+            const myPill = document.getElementById('myTeamStatus');
+            const myPillText = document.getElementById('myTeamStatusText');
+            myPillText.textContent = m.my_ready ? 'ГОТОВ' : 'ОЖИДАНИЕ';
+            myPill.className = 'status-pill ' + (m.my_ready ? 'status-ready' : 'status-waiting');
+
+            const oppPill = document.getElementById('oppTeamStatus');
+            const oppPillText = document.getElementById('oppTeamStatusText');
+            oppPillText.textContent = m.opponent_ready ? 'ГОТОВ' : 'ОЖИДАНИЕ';
+            oppPill.className = 'status-pill ' + (m.opponent_ready ? 'status-ready' : 'status-waiting');
+
+            document.getElementById('oppCaptain').textContent = m.opponent_captain_username || '—';
+            currentOpponentID = m.opponent_captain_game_id || '—';
+            document.getElementById('oppGameID').textContent = currentOpponentID;
+
+            const btnReady = document.getElementById('btnReady');
+            const btnReadyText = document.getElementById('btnReadyText');
+            if (m.my_ready) {
+                btnReadyText.textContent = 'ГОТОВНОСТЬ ПОДТВЕРЖДЕНА';
+                btnReady.disabled = true;
+                btnReady.style.opacity = '0.6';
+            } else {
+                btnReadyText.textContent = 'ПОДТВЕРДИТЬ ГОТОВНОСТЬ';
+                btnReady.disabled = !m.can_ready;
+                btnReady.style.opacity = '1';
+            }
+
+            const btnReport = document.getElementById('btnReportResult');
+            if (btnReport) {
+                btnReport.style.display = currentUserIsCaptain ? 'flex' : 'none';
+            }
+
+            remainingSeconds = m.deadline_seconds;
+            if (!deadlineTimer) {
+                startCountdown();
+            }
+        }
+
+        function startCountdown() {
+            if (deadlineTimer) clearInterval(deadlineTimer);
+            updateTimerDisplay();
+            deadlineTimer = setInterval(() => {
+                if (remainingSeconds > 0) {
+                    remainingSeconds--;
+                    updateTimerDisplay();
+                } else {
+                    clearInterval(deadlineTimer);
+                }
+            }, 1000);
+        }
+
+        function updateTimerDisplay() {
+            const mins = Math.floor(remainingSeconds / 60);
+            const secs = remainingSeconds % 60;
+            document.getElementById('timerValue').textContent = 
+                `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        async function confirmReady() {
+            haptic('success');
+            if (!initData) {
+                demoMyReady = true;
+                showToast('Готовность подтверждена', true);
+                loadActiveMatch();
+                return;
+            }
+            const res = await apiFetch('/api/match/ready', { method: 'POST' });
+            if (res && res.ok) {
+                showToast('Готовность подтверждена', true);
+                loadActiveMatch();
+            } else if (res && (res.error || res.message)) {
+                showToast(res.error || res.message, false);
+            }
+        }
+
+        function copyGameID() {
+            haptic('light');
+            if (navigator.clipboard && currentOpponentID) {
+                const cleanID = currentOpponentID.split(' ')[0];
+                navigator.clipboard.writeText(cleanID);
+                showToast(`Game ID ${cleanID} скопирован`, true);
+            }
+        }
+
+        function openRefereeModal() {
+            haptic('warning');
+            document.getElementById('refModal').classList.add('active');
+            updateBackButton();
+        }
+
+        function closeRefereeModal() {
+            document.getElementById('refModal').classList.remove('active');
+            updateBackButton();
+        }
+
+        async function callReferee(reason) {
+            haptic('warning');
+            closeRefereeModal();
+            if (!initData) {
+                showToast('Судья вызван в матч', true);
+                return;
+            }
+            const res = await apiFetch('/api/match/referee', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ reason })
+            });
+            if (res && res.ok) {
+                showToast('Судья вызван! Ожидайте ответа в Telegram', true);
+                loadActiveMatch();
+            } else if (res && (res.error || res.message)) {
+                showToast(res.error || res.message, false);
+            }
+        }
+
+        // Match Report Modal
+        function openReportModal() {
+            haptic('light');
+            document.getElementById('myTeamScoreLabel').textContent = currentMyTeamName || 'Моя команда';
+            document.getElementById('oppTeamScoreLabel').textContent = currentOppTeamName || 'Соперник';
+            selectScore(2, 0, document.querySelector('.score-btn'));
+            document.getElementById('reportScreenshotInput').value = '';
+            document.getElementById('screenshotPreviewImg').style.display = 'none';
+            document.getElementById('screenshotPrompt').style.display = 'flex';
+            selectedScreenshotBase64 = '';
+            document.getElementById('reportModal').classList.add('active');
+            updateBackButton();
+        }
+
+        function closeReportModal() {
+            document.getElementById('reportModal').classList.remove('active');
+            updateBackButton();
+        }
+
+        function selectScore(my, opp, el) {
+            haptic('light');
+            document.querySelectorAll('.score-btn').forEach(b => b.classList.remove('active'));
+            if (el) el.classList.add('active');
+            document.getElementById('reportMyScore').value = my;
+            document.getElementById('reportOppScore').value = opp;
+        }
+
+        function handleScreenshotSelected(e) {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            if (file.size > 10 * 1024 * 1024) {
+                showToast('Размер файла превышает 10 МБ', false);
+                return;
+            }
+            const reader = new FileReader();
+            reader.onload = function(evt) {
+                selectedScreenshotBase64 = evt.target.result;
+                const img = document.getElementById('screenshotPreviewImg');
+                img.src = selectedScreenshotBase64;
+                img.style.display = 'block';
+                document.getElementById('screenshotPrompt').style.display = 'none';
+                showToast('Скриншот прикреплён', true);
+            };
+            reader.readAsDataURL(file);
+        }
+
+        async function submitMatchReport() {
+            haptic('success');
+            const myScore = parseInt(document.getElementById('reportMyScore').value, 10);
+            const oppScore = parseInt(document.getElementById('reportOppScore').value, 10);
+
+            if (isNaN(myScore) || isNaN(oppScore) || myScore < 0 || oppScore < 0) {
+                showToast('Укажите корректный счёт матча', false);
+                return;
+            }
+            if (myScore === oppScore) {
+                showToast('В матче на выбывание не может быть ничьей', false);
+                return;
+            }
+
+            const btn = document.getElementById('btnSubmitReport');
+            btn.disabled = true;
+            btn.style.opacity = '0.6';
+
+            if (!initData) {
+                closeReportModal();
+                showToast(`Результат ${myScore}:${oppScore} успешно внесён!`, true);
+                btn.disabled = false;
+                btn.style.opacity = '1';
+                return;
+            }
+
+            const res = await apiFetch('/api/match/report', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    match_id: currentActiveMatchID,
+                    my_score: myScore,
+                    opp_score: oppScore,
+                    screenshot: selectedScreenshotBase64
+                })
+            });
+
+            btn.disabled = false;
+            btn.style.opacity = '1';
+
+            if (res && res.ok) {
+                closeReportModal();
+                showToast(res.message || 'Результат матча зафиксирован!', true);
+                loadActiveMatch();
+                loadBracket();
+            } else {
+                showToast(res?.error || res?.message || 'Ошибка сохранения результата', false);
+            }
+        }
+
+        // Bracket View
+        async function loadBracket() {
+            const list = document.getElementById('bracketList');
+            list.innerHTML = `<div style="text-align:center; color:var(--text-muted); padding:20px; font-size:13px;">Загрузка сетки...</div>`;
+            const data = await apiFetch('/api/bracket');
+            list.innerHTML = "";
+            if (!data || !data.matches || !data.matches.length) {
+                list.innerHTML = `<div class="card" style="text-align:center; color:var(--text-muted); font-size:13px;">Сетка ещё не сформирована</div>`;
+                return;
+            }
+
+            data.matches.forEach(m => {
+                const card = document.createElement('div');
+                card.className = 'bracket-match';
+                let statusBadge = `<span class="bracket-status status-pending">ОЖИДАНИЕ</span>`;
+                if (m.state === 'complete') {
+                    statusBadge = `<span class="bracket-status status-complete">ЗАВЕРШЁН</span>`;
+                } else if (m.state === 'open') {
+                    statusBadge = `<span class="bracket-status status-live"><span class="status-dot live-pulse"></span> LIVE</span>`;
+                }
+                card.innerHTML = `
+                    <div class="bracket-match-header">
+                        <span>Раунд ${m.round} // Матч #${m.play_order}</span>
+                        <span>${statusBadge}</span>
+                    </div>
+                    <div class="match-row ${m.winner_id === m.team1_id ? 'winner' : ''}">
+                        <span>${escapeHtml(m.team1_name || 'Ожидание')}</span>
+                        <span class="match-score">${escapeHtml(m.scores_csv ? m.scores_csv.split('-')[0] : '—')}</span>
+                    </div>
+                    <div class="match-row ${m.winner_id === m.team2_id ? 'winner' : ''}">
+                        <span>${escapeHtml(m.team2_name || 'Ожидание')}</span>
+                        <span class="match-score">${escapeHtml(m.scores_csv ? m.scores_csv.split('-')[1] || '' : '—')}</span>
+                    </div>
+                `;
+                list.appendChild(card);
+            });
+        }
+
+        // Admin & Referee Hub Functions
+        async function loadAdminDesk(silent = false) {
+            if (!currentUserIsAdmin) return;
+            const data = await apiFetch('/api/admin/desk');
+            if (!data || data.ok === false) return;
+            adminDeskData = data;
+
+            // Global Status
+            const globalPill = document.getElementById('adminGlobalStatusPill');
+            const globalText = document.getElementById('adminGlobalStatusText');
+            const toggleBtnText = document.getElementById('btnToggleGlobalPauseText');
+            if (data.global_paused) {
+                globalPill.className = 'status-pill status-waiting';
+                globalText.textContent = 'ТУРНИР НА ПАУЗЕ';
+                toggleBtnText.textContent = 'Возобновить турнир';
+            } else {
+                globalPill.className = 'status-pill status-ready';
+                globalText.textContent = 'ТУРНИР АКТИВЕН';
+                toggleBtnText.textContent = 'Поставить турнир на паузу';
+            }
+
+            // Metric Cards
+            document.getElementById('statActiveMatches').textContent = data.active_matches ? data.active_matches.length : 0;
+            const disputesCount = data.disputes ? data.disputes.length : 0;
+            const disputesEl = document.getElementById('statDisputes');
+            disputesEl.textContent = disputesCount;
+            disputesEl.style.color = disputesCount > 0 ? 'var(--accent-red)' : 'var(--text-main)';
+
+            const badge = document.getElementById('adminBadge');
+            if (badge) {
+                badge.textContent = disputesCount;
+                badge.style.display = disputesCount > 0 ? 'inline-block' : 'none';
+            }
+
+            if (data.checkin) {
+                document.getElementById('statCheckIn').textContent = `${data.checkin.checked_in_count} / ${data.checkin.total_teams}`;
+                const debtorsCount = data.checkin.debtors ? data.checkin.debtors.length : 0;
+                const debtorsEl = document.getElementById('statDebtors');
+                debtorsEl.textContent = debtorsCount;
+                debtorsEl.style.color = debtorsCount > 0 ? 'var(--accent-gold)' : 'var(--text-main)';
+            }
+
+            // Section 1: Disputes Queue
+            const disputesList = document.getElementById('adminDisputesList');
+            if (!data.disputes || data.disputes.length === 0) {
+                disputesList.innerHTML = `
+                    <div class="card" style="text-align: center; color: var(--text-muted); padding: 18px; font-size: 13px;">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 4px; display: inline-block;">
+                            <polyline points="20 6 9 17 4 12"/>
+                        </svg>
+                        <div>Активных споров и вызовов судей нет</div>
+                    </div>
+                `;
+            } else {
+                disputesList.innerHTML = '';
+                data.disputes.forEach(d => {
+                    const card = document.createElement('div');
+                    card.className = 'admin-dispute-card';
+                    const issuesText = (d.issues[0] ? `Команда 1: ${d.issues[0]}` : '') + (d.issues[1] ? ` | Команда 2: ${d.issues[1]}` : '');
+                    card.innerHTML = `
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                            <strong style="font-size: 13px; color: var(--accent-red);">Матч #${d.number}: ${escapeHtml(d.team1_name)} vs ${escapeHtml(d.team2_name)}</strong>
+                            <span class="status-pill status-waiting">СУДЬЯ В МАТЧЕ</span>
+                        </div>
+                        <div style="font-size: 12px; color: var(--text-main); margin-bottom: 10px; background: rgba(0,0,0,0.25); padding: 8px; border-radius: 6px;">
+                            <strong>Обращение:</strong> ${escapeHtml(issuesText)}
+                        </div>
+                        <div style="display: flex; gap: 6px;">
+                            <button class="btn btn-green btn-sm" style="flex: 1;" onclick="resolveDispute(${d.match_id}, ${d.generation})">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                                <span>Вопрос решён</span>
+                            </button>
+                            <button class="btn ${d.is_paused ? 'btn-green' : 'btn-red-outline'} btn-sm" style="flex: 1;" onclick="toggleMatchPause(${d.match_id}, ${d.generation}, ${d.is_paused})">
+                                <span>${d.is_paused ? 'Снять паузу' : 'Пауза'}</span>
+                            </button>
+                            <button class="btn btn-gold btn-sm" style="flex: 1;" onclick="openTechWinModal(${d.match_id}, ${d.generation}, ${d.number}, '${escapeAttr(d.team1_name)}', '${escapeAttr(d.team2_name)}')">
+                                <span>ТП</span>
+                            </button>
+                        </div>
+                    `;
+                    disputesList.appendChild(card);
+                });
+            }
+
+            // Section 2: Active Matches List
+            const matchesList = document.getElementById('adminMatchesList');
+            if (!data.active_matches || data.active_matches.length === 0) {
+                matchesList.innerHTML = `<div class="card" style="text-align: center; color: var(--text-muted); font-size: 13px; padding: 18px;">Нет активных матчей</div>`;
+            } else {
+                matchesList.innerHTML = '';
+                data.active_matches.forEach(m => {
+                    const card = document.createElement('div');
+                    card.className = 'card';
+                    card.innerHTML = `
+                        <div class="card-header">
+                            <span class="card-title">Матч #${m.number}</span>
+                            <span class="status-pill ${m.is_paused ? 'status-waiting' : 'status-ready'}">
+                                ${m.is_paused ? 'ПАУЗА' : 'ИДЁТ'}
+                            </span>
+                        </div>
+                        <div style="font-size: 14px; font-weight: 700; margin-bottom: 8px;">
+                            ${escapeHtml(m.team1_name)} ${m.team1_ready ? '<span style="color:var(--accent-green)">[готов]</span>' : '<span style="color:var(--accent-gold)">[ждём]</span>'} 
+                            vs 
+                            ${escapeHtml(m.team2_name)} ${m.team2_ready ? '<span style="color:var(--accent-green)">[готов]</span>' : '<span style="color:var(--accent-gold)">[ждём]</span>'}
+                        </div>
+                        <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 10px;">
+                            Дедлайн: ${escapeHtml(m.deadline_formatted || '—')}
+                        </div>
+                        <div style="display: flex; gap: 6px;">
+                            <button class="btn btn-sm ${m.is_paused ? 'btn-green' : 'btn-red-outline'}" style="flex: 1;" onclick="toggleMatchPause(${m.match_id}, ${m.generation}, ${m.is_paused})">
+                                <span>${m.is_paused ? 'Снять паузу' : 'Пауза'}</span>
+                            </button>
+                            <button class="btn btn-gold btn-sm" style="flex: 1;" onclick="openTechWinModal(${m.match_id}, ${m.generation}, ${m.number}, '${escapeAttr(m.team1_name)}', '${escapeAttr(m.team2_name)}')">
+                                <span>Присудить ТП</span>
+                            </button>
+                        </div>
+                    `;
+                    matchesList.appendChild(card);
+                });
+            }
+
+            // Section 3: Debtors
+            const debtorsList = document.getElementById('adminDebtorsList');
+            if (!data.checkin || !data.checkin.debtors || data.checkin.debtors.length === 0) {
+                debtorsList.innerHTML = `<div style="color: var(--text-muted); text-align: center; font-size: 12px; padding: 10px;">Должников нет, все команды подтверждены</div>`;
+            } else {
+                debtorsList.innerHTML = '';
+                data.checkin.debtors.forEach(d => {
+                    const row = document.createElement('div');
+                    row.className = 'info-row';
+                    let statusLabel = 'Не подтвердил';
+                    let statusClass = 'status-waiting';
+                    if (d.status === 'incomplete') {
+                        statusLabel = `Неполный (${d.players_count}/5)`;
+                        statusClass = 'status-waiting';
+                    } else if (d.status === 'disqualified') {
+                        statusLabel = 'Дисквалифицирован';
+                        statusClass = 'status-disqualified';
+                    }
+                    row.innerHTML = `
+                        <div>
+                            <strong style="font-size: 13px;">${escapeHtml(d.name)}</strong>
+                            <div style="font-size: 11px; color: var(--text-muted);">
+                                Кап: ${escapeHtml(d.captain_name || 'Не назначен')} ${d.captain_username ? '(@' + escapeHtml(d.captain_username) + ')' : ''}
+                            </div>
+                        </div>
+                        <span class="status-pill ${statusClass}" style="font-size: 10px;">${statusLabel}</span>
+                    `;
+                    debtorsList.appendChild(row);
+                });
+            }
+        }
+
+        async function toggleGlobalPause() {
+            haptic('warning');
+            const isPaused = adminDeskData ? adminDeskData.global_paused : false;
+            const res = await apiFetch('/api/admin/match_action', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: isPaused ? 'resume' : 'pause',
+                    match_id: 0,
+                    generation: 0
+                })
+            });
+            if (res && res.ok) {
+                showToast(isPaused ? 'Турнир возобновлён' : 'Турнир поставлен на паузу', true);
+                loadAdminDesk();
+            } else {
+                showToast(res?.error || 'Ошибка смены статуса', false);
+            }
+        }
+
+        async function toggleMatchPause(matchID, gen, isPaused) {
+            haptic('light');
+            const res = await apiFetch('/api/admin/match_action', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: isPaused ? 'resume' : 'pause',
+                    match_id: matchID,
+                    generation: gen
+                })
+            });
+            if (res && res.ok) {
+                showToast(isPaused ? 'Матч возобновлён' : 'Матч на паузе', true);
+                loadAdminDesk();
+            } else {
+                showToast(res?.error || 'Ошибка', false);
+            }
+        }
+
+        async function resolveDispute(matchID, gen) {
+            haptic('success');
+            const res = await apiFetch('/api/admin/match_action', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'resolve',
+                    match_id: matchID,
+                    generation: gen
+                })
+            });
+            if (res && res.ok) {
+                showToast('Обращение по матчу закрыто', true);
+                loadAdminDesk();
+            } else {
+                showToast(res?.error || 'Ошибка', false);
+            }
+        }
+
+        // Tech Win Modal Functions
+        function openTechWinModal(matchID, gen, number, team1, team2) {
+            haptic('light');
+            document.getElementById('techWinMatchID').value = matchID;
+            document.getElementById('techWinGeneration').value = gen;
+            document.getElementById('techWinMatchNumber').textContent = number;
+            document.getElementById('techWinTeam1Name').textContent = team1;
+            document.getElementById('techWinTeam2Name').textContent = team2;
+            selectTechWinner(1);
+            document.getElementById('techWinModal').classList.add('active');
+            updateBackButton();
+        }
+
+        function closeTechWinModal() {
+            document.getElementById('techWinModal').classList.remove('active');
+            updateBackButton();
+        }
+
+        function selectTechWinner(side) {
+            selectedTechWinnerSide = side;
+            const btn1 = document.getElementById('btnTechWinTeam1');
+            const btn2 = document.getElementById('btnTechWinTeam2');
+            if (side === 1) {
+                btn1.style.borderColor = 'var(--accent-gold)';
+                btn1.style.background = 'rgba(243, 156, 18, 0.15)';
+                btn2.style.borderColor = 'var(--card-border)';
+                btn2.style.background = '#1a1c28';
+            } else {
+                btn2.style.borderColor = 'var(--accent-gold)';
+                btn2.style.background = 'rgba(243, 156, 18, 0.15)';
+                btn1.style.borderColor = 'var(--card-border)';
+                btn1.style.background = '#1a1c28';
+            }
+        }
+
+        async function confirmTechWinSubmit() {
+            haptic('success');
+            const matchID = parseInt(document.getElementById('techWinMatchID').value, 10);
+            const gen = parseInt(document.getElementById('techWinGeneration').value, 10);
+            const score = document.getElementById('techWinScore').value.trim() || '2:0';
+            const winnerName = selectedTechWinnerSide === 1 
+                ? document.getElementById('techWinTeam1Name').textContent 
+                : document.getElementById('techWinTeam2Name').textContent;
+
+            const res = await apiFetch('/api/admin/match_action', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'tech_win',
+                    match_id: matchID,
+                    generation: gen,
+                    winner_team_name: winnerName,
+                    score: score
+                })
+            });
+
+            if (res && res.ok) {
+                closeTechWinModal();
+                showToast(res.message || 'Техническая победа присуждена!', true);
+                loadAdminDesk();
+                loadBracket();
+            } else {
+                showToast(res?.error || 'Ошибка присуждения ТП', false);
+            }
+        }
+
+        // Ping Debtors Modal Functions
+        function openPingDebtorsModal() {
+            haptic('light');
+            document.getElementById('pingDebtorsCustomMsg').value = '';
+            document.getElementById('pingDebtorsModal').classList.add('active');
+            updateBackButton();
+        }
+
+        function closePingDebtorsModal() {
+            document.getElementById('pingDebtorsModal').classList.remove('active');
+            updateBackButton();
+        }
+
+        async function submitPingDebtors() {
+            haptic('success');
+            const msg = document.getElementById('pingDebtorsCustomMsg').value.trim();
+            closePingDebtorsModal();
+            const res = await apiFetch('/api/admin/ping_debtors', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: msg })
+            });
+            if (res && res.ok) {
+                showToast(res.message || 'Оповещение отправлено в Telegram', true);
+            } else {
+                showToast(res?.error || 'Ошибка отправки', false);
+            }
+        }
+
+        async function confirmDisqualifyUncheck() {
+            if (!confirm('Вы уверены, что хотите снять с турнира все команды, не прошедшие Check-in? Им будет проставлено техническое поражение.')) {
+                return;
+            }
+            haptic('warning');
+            const res = await apiFetch('/api/admin/disqualify_uncheck', { method: 'POST' });
+            if (res && res.ok) {
+                showToast(res.message || 'Команды дисквалифицированы', true);
+                loadAdminDesk();
+                loadBracket();
+            } else {
+                showToast(res?.error || 'Ошибка дисквалификации', false);
+            }
+        }
+
+        // Smart Live Polling Engine
+        function startSmartPolling() {
+            if (smartPollingTimer) clearInterval(smartPollingTimer);
+            smartPollingTimer = setInterval(() => {
+                if (document.hidden) return;
+                const activeModal = document.querySelector('.modal.active');
+                if (activeModal) return;
+
+                if (currentTab === 'tabMatch') {
+                    loadActiveMatch(true);
+                } else if (currentTab === 'tabAdmin') {
+                    loadAdminDesk(true);
+                }
+            }, 4000);
+        }
+
+        // Initial Boot
+        loadProfile();
+        loadActiveMatch();
+        startSmartPolling();
+    </script>
+</body>
+</html>

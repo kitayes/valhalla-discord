@@ -249,16 +249,50 @@ func (b *Bot) handleUserCommand(ctx context.Context, chatID int64, text string, 
 		return
 	}
 
-	// Every branch below, default included, sets both values.
 	var response, kbType string
-
 	switch text {
 	case "/start":
 		response = "Добро пожаловать в Valhalla Cup Bot!\n\nВыберите действие:"
+		if b.webAppURL != "" {
+			response += "\nТурнирное приложение: /app"
+		}
 		if b.isAdmin(chatID) {
 			response += "\n\nВы вошли как Администратор. Используйте команду /admin или кнопку меню для открытия панели управления."
 		}
 		kbType = "main_menu"
+
+	case "/app":
+		if b.webAppURL == "" {
+			b.sendMessage(chatID, "Веб-приложение турнира пока не сконфигурировано (WEB_APP_URL не задан).", "main_menu")
+			return
+		}
+		msg := tgbotapi.NewMessage(chatID, "Нажмите кнопку ниже для перехода в турнирное приложение:")
+		msg.ReplyMarkup = struct {
+			Keyboard [][]struct {
+				Text   string `json:"text"`
+				WebApp struct {
+					URL string `json:"url"`
+				} `json:"web_app"`
+			} `json:"inline_keyboard"`
+		}{
+			Keyboard: [][]struct {
+				Text   string `json:"text"`
+				WebApp struct {
+					URL string `json:"url"`
+				} `json:"web_app"`
+			}{
+				{
+					{
+						Text: "Открыть Valhalla App",
+						WebApp: struct {
+							URL string `json:"url"`
+						}{URL: b.webAppURL},
+					},
+				},
+			},
+		}
+		_, _ = b.bot.Send(msg)
+		return
 
 	case "/reg_solo":
 		response = "Соло-регистрация отключена. Для участия регистрируйте команду: /reg_team"

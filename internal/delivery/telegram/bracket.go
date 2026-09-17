@@ -43,7 +43,7 @@ func matchLine(m models.BracketMatch) string {
 
 func formatBracketRound(url string, ms []models.BracketMatch, round int) []string {
 	total := application.TotalRounds(ms)
-	head := fmt.Sprintf("🏆 Сетка: %s\n\n%s\n", url, application.RoundLabel(round, total))
+	head := fmt.Sprintf("Сетка: %s\n\n%s\n", url, application.RoundLabel(round, total))
 	var lines []string
 	for _, m := range ms {
 		if m.Round == round {
@@ -51,7 +51,7 @@ func formatBracketRound(url string, ms []models.BracketMatch, round int) []strin
 		}
 	}
 	if len(lines) == 0 {
-		return []string{fmt.Sprintf("🏆 Сетка: %s\n\nВ раунде %d нет матчей.", url, round)}
+		return []string{fmt.Sprintf("Сетка: %s\n\nВ раунде %d нет матчей.", url, round)}
 	}
 	var parts []string
 	cur := head
@@ -138,11 +138,11 @@ func (b *Bot) reportBracketError(ctx context.Context, what string, err error) {
 	}
 	b.logger.Error("telegram: bracket %s: %v", what, err)
 	if errors.Is(err, application.ErrResultConflict) {
-		b.notifyAdmins("⚠️ Конфликт результата: " + err.Error() + ". Проверьте сетку и отчёт, затем при необходимости используйте /set_winner.")
+		b.notifyAdmins("КОНФЛИКТ РЕЗУЛЬТАТА: " + err.Error() + ". Проверьте сетку и отчёт, затем при необходимости используйте /set_winner.")
 	}
 	if errors.Is(err, challonge.ErrQuotaExceeded) && !b.quotaAlerted {
 		b.quotaAlerted = true
-		b.notifyAdmins("⚠️ Challonge: исчерпана квота API. Сетка временно не обновляется; отчёты сохраняются локально и будут отправлены после восстановления доступа.")
+		b.notifyAdmins("Challonge: исчерпана квота API. Сетка временно не обновляется; отчёты сохраняются локально и будут отправлены после восстановления доступа.")
 	}
 }
 
@@ -169,7 +169,7 @@ func (b *Bot) notifyMatchesReady(ctx context.Context, ms []models.BracketMatch) 
 		if m.Team1ID == nil || m.Team2ID == nil {
 			continue
 		}
-		text := fmt.Sprintf("⚔️ Раунд %d, матч #%d: %s vs %s.\n\nПосле игры капитан победителя отправляет /report.", m.Round, m.PlayOrder, m.Team1Name, m.Team2Name)
+		text := fmt.Sprintf("Раунд %d, матч #%d: %s vs %s.\n\nПосле игры капитан победителя отправляет /report.", m.Round, m.PlayOrder, m.Team1Name, m.Team2Name)
 		b.notifyTeam(ctx, *m.Team1ID, text, "main_menu")
 		b.notifyTeam(ctx, *m.Team2ID, text, "main_menu")
 	}
@@ -177,7 +177,7 @@ func (b *Bot) notifyMatchesReady(ctx context.Context, ms []models.BracketMatch) 
 
 func (b *Bot) notifyMatchesReset(ctx context.Context, ms []models.BracketMatch) {
 	for _, m := range ms {
-		text := fmt.Sprintf("⚠️ Результат матча #%d (%s vs %s) отменён администратором. Бот пришлёт нового соперника или попросит переиграть матч.", m.PlayOrder, m.Team1Name, m.Team2Name)
+		text := fmt.Sprintf("Результат матча #%d (%s vs %s) отменён администратором. Бот пришлёт нового соперника или попросит переиграть матч.", m.PlayOrder, m.Team1Name, m.Team2Name)
 		if m.Team1ID != nil {
 			b.notifyTeam(ctx, *m.Team1ID, text, "main_menu")
 		}
@@ -214,18 +214,18 @@ func (b *Bot) announceBracket(ctx context.Context, built *application.BracketBui
 		for _, team := range built.Incomplete {
 			names = append(names, team.Name)
 		}
-		b.notifyAdmins("⚠️ Не включены в сетку: неполный основной состав — " + strings.Join(names, ", "))
+		b.notifyAdmins("Не включены в сетку: неполный основной состав — " + strings.Join(names, ", "))
 	}
 	for _, m := range built.Round1 {
 		if m.Team1ID == nil || m.Team2ID == nil {
 			continue
 		}
-		text := fmt.Sprintf("⚔️ Сетка готова! Раунд 1, матч #%d: %s vs %s.\nСетка: %s\n\nПодтвердите участие кнопкой ниже до %s, иначе — техническое поражение.", m.PlayOrder, m.Team1Name, m.Team2Name, built.URL, deadline)
+		text := fmt.Sprintf("Сетка готова! Раунд 1, матч #%d: %s vs %s.\nСетка: %s\n\nПодтвердите участие кнопкой ниже до %s, иначе — техническое поражение.", m.PlayOrder, m.Team1Name, m.Team2Name, built.URL, deadline)
 		b.notifyTeam(ctx, *m.Team1ID, text, application.KbRegCheckin)
 		b.notifyTeam(ctx, *m.Team2ID, text, application.KbRegCheckin)
 	}
 	for _, team := range built.Byes {
-		text := fmt.Sprintf("🏆 Сетка готова! В 1-м раунде у команды '%s' автопроход.\nСетка: %s\n\nЧек-ин обязателен: подтвердите участие кнопкой ниже до %s, иначе — техническое поражение.", team.Name, built.URL, deadline)
+		text := fmt.Sprintf("Сетка готова! В 1-м раунде у команды '%s' автопроход.\nСетка: %s\n\nЧек-ин обязателен: подтвердите участие кнопкой ниже до %s, иначе — техническое поражение.", team.Name, built.URL, deadline)
 		b.notifyTeam(ctx, team.ID, text, application.KbRegCheckin)
 	}
 	if len(built.Later) > 0 {
@@ -240,7 +240,7 @@ func (b *Bot) runBracketChecks(ctx context.Context, tTime, now time.Time) {
 	if !b.bracket.CanAttempt(ctx, now) {
 		if !b.quotaAlerted {
 			b.quotaAlerted = true
-			b.notifyAdmins("⚠️ Challonge: исчерпана квота API. Автоматические запросы временно остановлены; отчёты сохраняются локально.")
+			b.notifyAdmins("Challonge: исчерпана квота API. Автоматические запросы временно остановлены; отчёты сохраняются локально.")
 		}
 		return
 	}
@@ -266,7 +266,7 @@ func (b *Bot) buildBracket(ctx context.Context, tTime time.Time, adminChat int64
 		if adminChat != 0 {
 			b.sendMessage(adminChat, "Не удалось построить сетку: "+err.Error(), "main_menu")
 		} else if b.bracket.BuildFailures(ctx) == bracketBuildFailureAlert {
-			b.notifyAdmins(fmt.Sprintf("⚠️ Не удалось построить сетку в Challonge (%d попыток подряд): %v\nБот продолжает пробовать раз в минуту до старта. Вручную: /build_bracket", bracketBuildFailureAlert, err))
+			b.notifyAdmins(fmt.Sprintf("Не удалось построить сетку в Challonge (%d попыток подряд): %v\nБот продолжает пробовать раз в минуту до старта. Вручную: /build_bracket", bracketBuildFailureAlert, err))
 		}
 		return
 	}
