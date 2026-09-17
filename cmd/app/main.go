@@ -141,7 +141,7 @@ func main() {
 		log.Warn("TELEGRAM_TOKEN not set, telegram bot disabled")
 	}
 
-	if telegramBot != nil && cfg.BracketEnabled() {
+	if telegramBot != nil {
 		location, _ := cfg.TournamentLocation()
 		telegramBot.WithMatchDesk(application.NewMatchDeskService(repository.NewTelegramPostgres(db), cfg.TelegramAdminIDs, location))
 	}

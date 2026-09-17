@@ -432,7 +432,7 @@ func (r *TelegramPostgres) GetRecentMatchReports(ctx context.Context, limit int)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // best-effort cleanup
 
 	var reports []models.TelegramMatchReport
 	for rows.Next() {
@@ -568,4 +568,3 @@ func (r *TelegramPostgres) GetUnsyncedReports(ctx context.Context) ([]models.Tel
 	}
 	return out, rows.Err()
 }
-

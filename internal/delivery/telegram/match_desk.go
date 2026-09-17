@@ -4,6 +4,7 @@ import (
 	"blackwatch/internal/application"
 	"blackwatch/internal/models"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -54,6 +55,23 @@ func (b *Bot) sendDeskNotice(ctx context.Context, n models.DeskNotice) error {
 	return err
 }
 
+func isPermanentTelegramError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var tgErr tgbotapi.Error
+	if errors.As(err, &tgErr) {
+		switch tgErr.Code {
+		case http.StatusForbidden, http.StatusBadRequest, http.StatusUnauthorized:
+			return true
+		}
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "bot was blocked by the user") ||
+		strings.Contains(msg, "chat not found") ||
+		strings.Contains(msg, "user is deactivated")
+}
+
 func (b *Bot) startMatchDeskWorker(ctx context.Context) {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
@@ -93,6 +111,11 @@ func (b *Bot) flushMatchDesk(ctx context.Context) {
 		}
 		if err := b.sendDeskNotice(ctx, n); err != nil {
 			b.logger.Warn("telegram match desk delivery %d: %v", n.ID, err)
+			if isPermanentTelegramError(err) {
+				if ackErr := b.matchDesk.Acknowledge(ctx, n); ackErr != nil {
+					b.logger.Warn("telegram match desk acknowledge permanent failure %d: %v", n.ID, ackErr)
+				}
+			}
 		} else if err := b.matchDesk.Acknowledge(ctx, n); err != nil {
 			b.logger.Warn("telegram match desk acknowledge %d: %v", n.ID, err)
 		}

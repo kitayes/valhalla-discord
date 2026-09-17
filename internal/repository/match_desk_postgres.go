@@ -43,49 +43,49 @@ func (r *TelegramPostgres) UpdateMatchDesk(ctx context.Context, change func(*mod
 	}
 	d.Tournament = tournament
 	snapshot := models.DeskContext{StartsAt: startsAt, Captains: map[int]models.TelegramPlayer{}, Revisions: map[int]int64{}}
-	rows, err := tx.QueryContext(ctx, `SELECT m.id,m.challonge_match_id,m.play_order,m.team1_id,m.team2_id,m.state,COALESCE(a.name,''),COALESCE(b.name,''),m.desk_revision
+	err = func() error {
+		rows, err := tx.QueryContext(ctx, `SELECT m.id,m.challonge_match_id,m.play_order,m.team1_id,m.team2_id,m.state,COALESCE(a.name,''),COALESCE(b.name,''),m.desk_revision
  FROM telegram_bracket_matches m LEFT JOIN telegram_teams a ON a.id=m.team1_id LEFT JOIN telegram_teams b ON b.id=m.team2_id ORDER BY m.id FOR SHARE OF m`)
-	if err != nil {
-		return err
-	}
-	for rows.Next() {
-		var m models.BracketMatch
-		var revision int64
-		if err = rows.Scan(&m.ID, &m.ChallongeMatchID, &m.PlayOrder, &m.Team1ID, &m.Team2ID, &m.State, &m.Team1Name, &m.Team2Name, &revision); err != nil {
-			_ = rows.Close()
+		if err != nil {
 			return err
 		}
-		snapshot.Matches = append(snapshot.Matches, m)
-		snapshot.Revisions[m.ID] = revision
-	}
-	err = rows.Err()
-	if closeErr := rows.Close(); err == nil {
-		err = closeErr
-	}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var m models.BracketMatch
+			var revision int64
+			if err = rows.Scan(&m.ID, &m.ChallongeMatchID, &m.PlayOrder, &m.Team1ID, &m.Team2ID, &m.State, &m.Team1Name, &m.Team2Name, &revision); err != nil {
+				return err
+			}
+			snapshot.Matches = append(snapshot.Matches, m)
+			snapshot.Revisions[m.ID] = revision
+		}
+		return rows.Err()
+	}()
 	if err != nil {
 		return err
 	}
-	rows, err = tx.QueryContext(ctx, `SELECT p.id,p.telegram_id,COALESCE(p.telegram_username,''),COALESCE(p.game_nickname,''),COALESCE(p.game_id,''),COALESCE(p.zone_id,''),p.team_id
+
+	err = func() error {
+		rows, err := tx.QueryContext(ctx, `SELECT p.id,p.telegram_id,COALESCE(p.telegram_username,''),COALESCE(p.game_nickname,''),COALESCE(p.game_id,''),COALESCE(p.zone_id,''),p.team_id
  FROM telegram_players p JOIN telegram_teams t ON t.id=p.team_id WHERE p.is_captain AND p.telegram_id IS NOT NULL AND t.status='active' FOR SHARE OF p,t`)
-	if err != nil {
-		return err
-	}
-	for rows.Next() {
-		var p models.TelegramPlayer
-		if err = rows.Scan(&p.ID, &p.TelegramID, &p.TelegramUsername, &p.GameNickname, &p.GameID, &p.ZoneID, &p.TeamID); err != nil {
-			_ = rows.Close()
+		if err != nil {
 			return err
 		}
-		p.IsCaptain = true
-		snapshot.Captains[*p.TeamID] = p
-	}
-	err = rows.Err()
-	if closeErr := rows.Close(); err == nil {
-		err = closeErr
-	}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var p models.TelegramPlayer
+			if err = rows.Scan(&p.ID, &p.TelegramID, &p.TelegramUsername, &p.GameNickname, &p.GameID, &p.ZoneID, &p.TeamID); err != nil {
+				return err
+			}
+			p.IsCaptain = true
+			snapshot.Captains[*p.TeamID] = p
+		}
+		return rows.Err()
+	}()
 	if err != nil {
 		return err
 	}
+
 	if err = change(&d, snapshot); err != nil {
 		return err
 	}

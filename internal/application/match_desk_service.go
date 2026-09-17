@@ -38,7 +38,7 @@ func (s *MatchDeskService) update(ctx context.Context, action func(*models.Match
 	return s.store.UpdateMatchDesk(ctx, func(d *models.MatchDesk, c models.DeskContext) error {
 		now := s.now()
 		for _, b := range c.Matches {
-			if m:=d.Matches[b.ID]; m!=nil && b.Ready() && m.BracketRevision != c.Revisions[b.ID] {
+			if m := d.Matches[b.ID]; m != nil && b.Ready() && m.BracketRevision != c.Revisions[b.ID] {
 				m.Active = false
 			}
 		}
@@ -89,7 +89,7 @@ func (s *MatchDeskService) AdminAction(ctx context.Context, actor int64, id int,
 			return nil
 		}
 		m := d.Matches[id]
-		if m == nil || (!m.Active && action!="resolve") || m.Generation != generation {
+		if m == nil || (!m.Active && action != "resolve") || m.Generation != generation {
 			return ErrDeskStale
 		}
 		switch action {
@@ -265,7 +265,9 @@ func (s *MatchDeskService) attentionCard(m *models.DeskMatch, c models.DeskConte
 		text += "\nОбщая пауза: /resume_matches"
 	}
 	buttons := [][]models.DeskButton{}
-	if m.Active {buttons=append(buttons,[]models.DeskButton{{Text:pauseText,Data:DeskCallback(m,pauseAction)}})}
+	if m.Active {
+		buttons = append(buttons, []models.DeskButton{{Text: pauseText, Data: DeskCallback(m, pauseAction)}})
+	}
 	if m.Issues != [2]string{} {
 		buttons = append(buttons, []models.DeskButton{{Text: "Обращения решены", Data: DeskCallback(m, "resolve")}})
 	}
@@ -313,7 +315,7 @@ func (s *MatchDeskService) queueNotices(d *models.MatchDesk, c models.DeskContex
 	pending := d.Outbox[:0]
 	for _, n := range d.Outbox {
 		m := d.Matches[n.MatchID]
-		if m == nil || (!m.Active && n.Kind!="alert") || m.Generation != n.Generation {
+		if m == nil || (!m.Active && n.Kind != "alert") || m.Generation != n.Generation {
 			continue
 		}
 		if n.Kind == "card" && n.Revision != m.Revision {
@@ -330,7 +332,9 @@ func (s *MatchDeskService) queueNotices(d *models.MatchDesk, c models.DeskContex
 func deskAllProblems(m *models.DeskMatch, c models.DeskContext, now time.Time) []string {
 	problems := deskProblems(m, now)
 	if !m.Active {
-		if len(problems)>0{problems=append(problems,"Матч закрыт; обращение требует решения")}
+		if len(problems) > 0 {
+			problems = append(problems, "Матч закрыт; обращение требует решения")
+		}
 		return problems
 	}
 	for side, team := range m.Teams {

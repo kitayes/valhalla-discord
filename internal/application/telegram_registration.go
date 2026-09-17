@@ -850,4 +850,3 @@ func (s *TelegramServiceImpl) discordLinkHelp(_ context.Context, _ int64) (strin
 	msg := "Для привязки Discord профиля:\n\n1. Зайдите в Discord на сервер турнира\n2. Введите команду: /link <ваш ID игрока>\n3. Получите одноразовый код\n4. Отправьте его сюда командой: /link <код>"
 	return msg, "main_menu"
 }
-

@@ -545,4 +545,3 @@ func TestGetCheckInStatus(t *testing.T) {
 		}
 	}
 }
-

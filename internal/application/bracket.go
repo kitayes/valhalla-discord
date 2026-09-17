@@ -173,7 +173,7 @@ func (s *BracketService) recordQuota(ctx context.Context, err error) {
 	if !errors.Is(err, challonge.ErrQuotaExceeded) {
 		return
 	}
-	delay := 24 * time.Hour
+	delay := 5 * time.Minute
 	var quota *challonge.QuotaError
 	if errors.As(err, &quota) && quota.RetryAfter > 0 {
 		delay = quota.RetryAfter
@@ -545,7 +545,7 @@ func (s *BracketService) report(ctx context.Context, tID int64, m *models.Bracke
 	// connection broke. Read the match before allowing any caller to retry.
 	remote, readErr := s.provider.GetMatch(ctx, tID, m.ChallongeMatchID)
 	if readErr != nil {
-		return fmt.Errorf("%w; reconciliation failed: %v", err, readErr)
+		return fmt.Errorf("%w; reconciliation failed: %w", err, readErr)
 	}
 	if resultMatches(remote, wPID, winnerScore, loserScore) {
 		return nil
@@ -810,7 +810,7 @@ func (s *BracketService) Reinstate(ctx context.Context, teamName string) (*Brack
 		}
 	}
 	for _, b := range before {
-		if b.ID == lost.ID || !(b.State == models.BracketComplete || b.Ready()) {
+		if b.ID == lost.ID || (!b.Ready() && b.State != models.BracketComplete) {
 			continue
 		}
 		if a, ok := afterByID[b.ID]; !ok || a.State != b.State || !samePairIDs(a, b) {

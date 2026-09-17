@@ -227,75 +227,89 @@ func (s *TelegramServiceImpl) SetReportScore(ctx context.Context, tgID int64, sc
 }
 
 func (s *TelegramServiceImpl) AddReportPhoto(ctx context.Context, tgID int64, photoFileID string) (string, string, int) {
-	draft := s.GetReportDraft(tgID)
+	s.reportMu.Lock()
+	draft := s.reportDrafts[tgID]
 	if draft == nil {
+		s.reportMu.Unlock()
 		return "Сессия отчета не найдена. Начните заново: /report", KbNone, 0
 	}
 
 	draft.PhotoFileIDs = append(draft.PhotoFileIDs, photoFileID)
 	draft.UpdatedAt = time.Now()
-	s.setReportDraft(tgID, draft)
-
 	n := len(draft.PhotoFileIDs)
+	s.reportMu.Unlock()
+
 	msg := fmt.Sprintf("📸 Скриншот добавлен! Всего загружено: %d.\n\nОтправьте ещё скриншот или нажмите «Отправить отчет» ниже:", n)
 	return msg, KbReportPhotos + ":" + strconv.Itoa(n), n
 }
 
 func (s *TelegramServiceImpl) ResetReportPhotos(ctx context.Context, tgID int64) (string, string) {
-	draft := s.GetReportDraft(tgID)
+	s.reportMu.Lock()
+	draft := s.reportDrafts[tgID]
 	if draft == nil {
+		s.reportMu.Unlock()
 		return "Сессия отчета не найдена. Начните заново: /report", KbNone
 	}
 
 	draft.PhotoFileIDs = nil
 	draft.UpdatedAt = time.Now()
-	s.setReportDraft(tgID, draft)
+	winnerName := draft.WinnerTeamName
+	score := draft.Score
+	loserName := draft.LoserTeamName
+	s.reportMu.Unlock()
 
 	msg := fmt.Sprintf("Скриншоты сброшены.\nМатч: %s %s %s\n\n📸 Отправьте новые скриншоты победы:",
-		draft.WinnerTeamName, draft.Score, draft.LoserTeamName)
+		winnerName, score, loserName)
 	return msg, KbReportPhotos + ":0"
 }
 
 func (s *TelegramServiceImpl) SubmitReport(ctx context.Context, tgID int64) (string, string, *models.TelegramMatchReport, []models.BracketMatch) {
-	draft := s.GetReportDraft(tgID)
+	s.reportMu.Lock()
+	draft := s.reportDrafts[tgID]
 	if draft == nil {
+		s.reportMu.Unlock()
 		return "Сессия отчета истекла. Начните заново: /report", KbNone, nil, nil
 	}
 
 	if len(draft.PhotoFileIDs) == 0 {
+		s.reportMu.Unlock()
 		return "Сначала загрузите хотя бы один скриншот матча.", KbReportPhotos + ":0", nil, nil
 	}
 
+	d := *draft
+	d.PhotoFileIDs = append([]string(nil), draft.PhotoFileIDs...)
+	s.reportMu.Unlock()
+
 	report := &models.TelegramMatchReport{
 		ReporterTelegramID: tgID,
-		WinnerTeamID:       draft.WinnerTeamID,
-		WinnerTeamName:     draft.WinnerTeamName,
-		LoserTeamID:        draft.LoserTeamID,
-		LoserTeamName:      draft.LoserTeamName,
-		Score:              draft.Score,
-		PhotoFileIDs:       draft.PhotoFileIDs,
+		WinnerTeamID:       d.WinnerTeamID,
+		WinnerTeamName:     d.WinnerTeamName,
+		LoserTeamID:        d.LoserTeamID,
+		LoserTeamName:      d.LoserTeamName,
+		Score:              d.Score,
+		PhotoFileIDs:       d.PhotoFileIDs,
 	}
-	if draft.BracketMatchID != 0 {
-		id := draft.BracketMatchID
+	if d.BracketMatchID != 0 {
+		id := d.BracketMatchID
 		report.BracketMatchID = &id
 	}
 
 	if err := s.repo.CreateMatchReport(ctx, report); err != nil {
 		s.logger.Error("telegram: failed to save match report: %v", err)
-		return "Ошибка при сохранении отчета в базу данных: " + err.Error(), KbReportPhotos + ":" + strconv.Itoa(len(draft.PhotoFileIDs)), nil, nil
+		return "Ошибка при сохранении отчета в базу данных: " + err.Error(), KbReportPhotos + ":" + strconv.Itoa(len(d.PhotoFileIDs)), nil, nil
 	}
 
 	s.setState(ctx, tgID, models.StateIdle)
 	s.clearReportDraft(tgID)
 
 	successMsg := fmt.Sprintf("✅ Отчет о матче %s %s %s успешно отправлен судьям!",
-		draft.WinnerTeamName, draft.Score, draft.LoserTeamName)
+		d.WinnerTeamName, d.Score, d.LoserTeamName)
 	var ready []models.BracketMatch
-	if s.bracket != nil && draft.BracketMatchID != 0 {
+	if s.bracket != nil && d.BracketMatchID != 0 {
 		var err error
-		ready, err = s.bracket.ReportResult(ctx, draft.BracketMatchID, draft.WinnerTeamID, draft.WinnerScore, draft.LoserScore)
+		ready, err = s.bracket.ReportResult(ctx, d.BracketMatchID, d.WinnerTeamID, d.WinnerScore, d.LoserScore)
 		if err != nil {
-			s.logger.Error("telegram: bracket report for match %d failed, queued: %v", draft.BracketMatchID, err)
+			s.logger.Error("telegram: bracket report for match %d failed, queued: %v", d.BracketMatchID, err)
 			successMsg += "\n\nСетка сейчас недоступна — результат принят, сетка обновится в течение нескольких минут."
 		} else {
 			if err := s.repo.SetReportSynced(ctx, report.ID); err != nil {
@@ -304,7 +318,7 @@ func (s *TelegramServiceImpl) SubmitReport(ctx context.Context, tgID int64) (str
 				now := time.Now()
 				report.SyncedAt = &now
 			}
-			successMsg += fmt.Sprintf("\nМатч #%d закрыт, победитель проходит дальше.", draft.PlayOrder)
+			successMsg += fmt.Sprintf("\nМатч #%d закрыт, победитель проходит дальше.", d.PlayOrder)
 		}
 	}
 	return successMsg, "main_menu", report, ready

@@ -10,11 +10,19 @@ import (
 // "полуфинал", "1/4". The bracket is single elimination, so the distance to
 // the last round is the whole story.
 func StageLabel(round, total int) string {
-	switch d := total - round; d {
-	case 0:
+	if total <= 0 || round <= 0 {
+		return fmt.Sprintf("раунд %d", round)
+	}
+	d := total - round
+	switch {
+	case d < 0:
+		return fmt.Sprintf("раунд %d", round)
+	case d == 0:
 		return "финал"
-	case 1:
+	case d == 1:
 		return "полуфинал"
+	case d > 30:
+		return fmt.Sprintf("раунд %d", round)
 	default:
 		return fmt.Sprintf("1/%d", 1<<uint(d))
 	}

@@ -702,7 +702,7 @@ func TestProfileEditFlow(t *testing.T) {
 	}
 
 	// 2. Cancel works
-	resp, kb = act(t, svc, tg, "cancel", "")
+	_, kb = act(t, svc, tg, "cancel", "")
 	if kb != "main_menu" || repo.players[tg].FSMState != models.StateIdle {
 		t.Fatalf("cancel: kb=%q state=%q", kb, repo.players[tg].FSMState)
 	}
@@ -718,7 +718,7 @@ func TestProfileEditFlow(t *testing.T) {
 	}
 
 	// 4. Redo line works
-	resp, kb = act(t, svc, tg, "redo", "")
+	_, kb = act(t, svc, tg, "redo", "")
 	if kb != KbRegCancel || repo.players[tg].FSMState != models.StateProfileLine {
 		t.Fatalf("redo: kb=%q state=%q", kb, repo.players[tg].FSMState)
 	}
@@ -743,4 +743,3 @@ func TestProfileEditFlow(t *testing.T) {
 		t.Fatalf("linked profile not updated: %+v", linked)
 	}
 }
-

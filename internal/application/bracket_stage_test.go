@@ -15,7 +15,15 @@ func TestStageLabel(t *testing.T) {
 	cases := []struct {
 		round, total int
 		want         string
-	}{{3, 3, "финал"}, {2, 3, "полуфинал"}, {1, 3, "1/4"}, {1, 4, "1/8"}}
+	}{
+		{3, 3, "финал"},
+		{2, 3, "полуфинал"},
+		{1, 3, "1/4"},
+		{1, 4, "1/8"},
+		{4, 3, "раунд 4"},
+		{0, 0, "раунд 0"},
+		{-1, 3, "раунд -1"},
+	}
 	for _, c := range cases {
 		if got := StageLabel(c.round, c.total); got != c.want {
 			t.Errorf("StageLabel(%d,%d) = %q, want %q", c.round, c.total, got, c.want)

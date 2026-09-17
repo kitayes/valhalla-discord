@@ -225,17 +225,27 @@ func TestDeskServiceRemovedCaptainDoesNotReceiveQueuedCard(t *testing.T) {
 	}
 }
 
-func TestDeskServiceUnresolvedDisputeSurvivesReportedResult(t *testing.T){
- s,store,_:=deskServiceFixture(t)
- ctx:=context.Background()
- if err:=s.Tick(ctx);err!=nil{t.Fatal(err)}
- gen:=store.state.Matches[1].Generation
- if err:=s.CaptainAction(ctx,100,1,gen,"judge_score");err!=nil{t.Fatal(err)}
- store.snapshot.Matches[0].State=models.BracketComplete
- store.snapshot.Revisions=map[int]int64{1:1}
- notices,err:=s.Attention(ctx,999)
- if err!=nil || len(notices)!=1{t.Fatalf("reported result hid unresolved dispute: %v %v",notices,err)}
- if err:=s.AdminAction(ctx,999,1,gen,"resolve");err!=nil{t.Fatal(err)}
- notices,err=s.Attention(ctx,999)
- if err!=nil || len(notices)!=0{t.Fatalf("resolved dispute still present: %v %v",notices,err)}
+func TestDeskServiceUnresolvedDisputeSurvivesReportedResult(t *testing.T) {
+	s, store, _ := deskServiceFixture(t)
+	ctx := context.Background()
+	if err := s.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	gen := store.state.Matches[1].Generation
+	if err := s.CaptainAction(ctx, 100, 1, gen, "judge_score"); err != nil {
+		t.Fatal(err)
+	}
+	store.snapshot.Matches[0].State = models.BracketComplete
+	store.snapshot.Revisions = map[int]int64{1: 1}
+	notices, err := s.Attention(ctx, 999)
+	if err != nil || len(notices) != 1 {
+		t.Fatalf("reported result hid unresolved dispute: %v %v", notices, err)
+	}
+	if err := s.AdminAction(ctx, 999, 1, gen, "resolve"); err != nil {
+		t.Fatal(err)
+	}
+	notices, err = s.Attention(ctx, 999)
+	if err != nil || len(notices) != 0 {
+		t.Fatalf("resolved dispute still present: %v %v", notices, err)
+	}
 }

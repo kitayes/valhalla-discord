@@ -3,11 +3,11 @@ package models
 import "time"
 
 const (
-	StateIdle            = ""
-	StateWaitingTeamName = "waiting_team_name"
-	StateWaitingReport   = "waiting_report" // legacy report state
-	StateReportOpponent  = "report_opponent"
-	StateReportScore     = "report_score"
+	StateIdle              = ""
+	StateWaitingTeamName   = "waiting_team_name"
+	StateWaitingReport     = "waiting_report" // legacy report state
+	StateReportOpponent    = "report_opponent"
+	StateReportScore       = "report_score"
 	StateReportScreenshots = "report_screenshots"
 
 	StateSoloLine    = "solo_line"
@@ -35,10 +35,10 @@ const (
 )
 
 type TelegramTeam struct {
-	ID          int              `json:"id"`
-	Name        string           `json:"name"`
-	IsCheckedIn bool             `json:"is_checked_in"`
-	Status      string           `json:"status"`
+	ID          int    `json:"id"`
+	Name        string `json:"name"`
+	IsCheckedIn bool   `json:"is_checked_in"`
+	Status      string `json:"status"`
 	// ChallongeParticipantID is the team's id in the Challonge bracket, nil
 	// until a bracket is built.
 	ChallongeParticipantID *int64           `json:"challonge_participant_id"`
@@ -62,14 +62,14 @@ type TelegramPlayer struct {
 }
 
 type TelegramMatchReport struct {
-	ID                 int       `json:"id"`
-	ReporterTelegramID int64     `json:"reporter_telegram_id"`
-	WinnerTeamID       int       `json:"winner_team_id"`
-	WinnerTeamName     string    `json:"winner_team_name,omitempty"`
-	LoserTeamID        int       `json:"loser_team_id"`
-	LoserTeamName      string    `json:"loser_team_name,omitempty"`
-	Score              string    `json:"score"`
-	PhotoFileIDs       []string  `json:"photo_file_ids"`
+	ID                 int      `json:"id"`
+	ReporterTelegramID int64    `json:"reporter_telegram_id"`
+	WinnerTeamID       int      `json:"winner_team_id"`
+	WinnerTeamName     string   `json:"winner_team_name,omitempty"`
+	LoserTeamID        int      `json:"loser_team_id"`
+	LoserTeamName      string   `json:"loser_team_name,omitempty"`
+	Score              string   `json:"score"`
+	PhotoFileIDs       []string `json:"photo_file_ids"`
 	// BracketMatchID links the report to the cached bracket match; nil for
 	// reports made without a bracket.
 	BracketMatchID *int `json:"bracket_match_id"`
@@ -122,4 +122,3 @@ func (m BracketMatch) Opponent(teamID int) *int {
 func (m BracketMatch) Ready() bool {
 	return m.State == BracketOpen && m.Team1ID != nil && m.Team2ID != nil
 }
-

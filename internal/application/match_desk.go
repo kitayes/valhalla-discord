@@ -57,7 +57,7 @@ func syncDesk(d *models.MatchDesk, matches []models.BracketMatch, tournament, no
 	pending := d.Outbox[:0]
 	for _, n := range d.Outbox {
 		m := d.Matches[n.MatchID]
-		if m == nil || (!m.Active && n.Kind!="alert") || m.Generation != n.Generation {
+		if m == nil || (!m.Active && n.Kind != "alert") || m.Generation != n.Generation {
 			continue
 		}
 		if n.Kind == "card" && n.Revision != m.Revision {

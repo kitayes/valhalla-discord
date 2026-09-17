@@ -133,7 +133,9 @@ func (b *Bot) reportBracketError(ctx context.Context, what string, err error) {
 	if err == nil {
 		return
 	}
-	b.bracket.RecordAPIError(ctx, err)
+	if b.bracket != nil {
+		b.bracket.RecordAPIError(ctx, err)
+	}
 	b.logger.Error("telegram: bracket %s: %v", what, err)
 	if errors.Is(err, application.ErrResultConflict) {
 		b.notifyAdmins("⚠️ Конфликт результата: " + err.Error() + ". Проверьте сетку и отчёт, затем при необходимости используйте /set_winner.")
@@ -151,6 +153,9 @@ func (b *Bot) notifyAdmins(text string) {
 }
 
 func (b *Bot) notifyTeam(ctx context.Context, teamID int, text, kb string) {
+	if b.bracket == nil {
+		return
+	}
 	for _, chatID := range b.bracket.CaptainChatIDs(ctx, teamID) {
 		b.sendMessage(chatID, text, kb)
 	}
@@ -222,6 +227,9 @@ func (b *Bot) announceBracket(ctx context.Context, built *application.BracketBui
 	for _, team := range built.Byes {
 		text := fmt.Sprintf("🏆 Сетка готова! В 1-м раунде у команды '%s' автопроход.\nСетка: %s\n\nЧек-ин обязателен: подтвердите участие кнопкой ниже до %s, иначе — техническое поражение.", team.Name, built.URL, deadline)
 		b.notifyTeam(ctx, team.ID, text, application.KbRegCheckin)
+	}
+	if len(built.Later) > 0 {
+		b.notifyMatchesReady(ctx, built.Later)
 	}
 }
 
