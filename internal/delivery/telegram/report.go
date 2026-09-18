@@ -88,7 +88,7 @@ func (b *Bot) forwardReportMedia(ctx context.Context, rep *models.TelegramMatchR
 		reporterInfo = fmt.Sprintf("TG ID: %d", rep.ReporterTelegramID)
 	}
 
-	caption := fmt.Sprintf("🏆 РЕЗУЛЬТАТ МАТЧА:\n\nПобедитель: %s\nПроигравший: %s\nСчет: %s\n\nОтправил: %s\nСкриншотов: %d",
+	caption := fmt.Sprintf("РЕЗУЛЬТАТ МАТЧА:\n\nПобедитель: %s\nПроигравший: %s\nСчет: %s\n\nОтправил: %s\nСкриншотов: %d",
 		rep.WinnerTeamName, rep.LoserTeamName, rep.Score, reporterInfo, len(rep.PhotoFileIDs))
 
 	// 1. Forward to all admins

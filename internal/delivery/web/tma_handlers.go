@@ -518,6 +518,22 @@ func (s *AdminServer) handleAdminPingDebtors(w http.ResponseWriter, r *http.Requ
 	var req adminPingRequest
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
+	if s.services.TelegramService != nil {
+		summary, err := s.services.TelegramService.GetCheckInSummary(r.Context())
+		if err == nil && summary != nil {
+			actionableCount := summary.PendingCount + summary.IncompleteCount
+			if actionableCount == 0 {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"ok":      false,
+					"error":   "Все команды уже подтвердили Check-in! Должников нет.",
+					"count":   0,
+				})
+				return
+			}
+		}
+	}
+
 	if s.debtorNotifier != nil {
 		go func() {
 			bgCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -529,7 +545,7 @@ func (s *AdminServer) handleAdminPingDebtors(w http.ResponseWriter, r *http.Requ
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"ok":      true,
-		"message": "Оповещение должников успешно запущено",
+		"message": "Оповещение должников успешно отправлено в Telegram",
 	})
 }
 

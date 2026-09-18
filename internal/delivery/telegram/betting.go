@@ -66,7 +66,7 @@ type BetSettings struct {
 func betFailureMessage(err error) string {
 	switch {
 	case errors.Is(err, domain.ErrBettingClosed):
-		return "⌛️ Ставки заблокированы. Игра перешла в мид-гейм."
+		return "Ставки заблокированы. Игра перешла в мид-гейм."
 	case errors.Is(err, domain.ErrAlreadyBet):
 		return "Вы уже поставили на этот матч. Одна ставка на матч."
 	case errors.Is(err, domain.ErrBettingOnOwnMatch):
@@ -528,7 +528,7 @@ func (bb *BettingBot) NotifyMatchCancelled(matchID int, refundedCount int) {
 		return
 	}
 
-	text := fmt.Sprintf("🚫 *МАТЧ #%d ОТМЕНЕН СУДЬЕЙ!*\n\nВсе сделанные ставки (%d) отменены, очки возвращены на баланс.", matchID, refundedCount)
+	text := fmt.Sprintf("*МАТЧ #%d ОТМЕНЕН СУДЬЕЙ!*\n\nВсе сделанные ставки (%d) отменены, очки возвращены на баланс.", matchID, refundedCount)
 	msg := tgbotapi.NewMessage(channelChatID, text)
 	msg.ParseMode = "Markdown"
 

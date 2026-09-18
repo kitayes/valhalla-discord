@@ -100,7 +100,7 @@ func (b *Bot) handleAdminCommand(ctx context.Context, chatID int64, text string)
 		if err != nil {
 			b.sendMessage(chatID, "Ошибка: "+err.Error(), "main_menu")
 		} else {
-			b.sendMessage(chatID, "📊 Составы и путь по сетке выгружены:\n"+url+
+			b.sendMessage(chatID, "Составы и путь по сетке выгружены:\n"+url+
 				"\n\nЛисты «Teams» и «Matches». Сетка — на момент последней синхронизации с Challonge.", "main_menu")
 		}
 		return
@@ -437,7 +437,7 @@ func (b *Bot) handlePhoto(ctx context.Context, chatID int64, msg *tgbotapi.Messa
 		draft := b.service.GetReportDraft(chatID)
 		if draft != nil && len(draft.PhotoFileIDs) > 0 {
 			n := len(draft.PhotoFileIDs)
-			confirmText := fmt.Sprintf("📸 Загружено скриншотов: %d.\nМатч: %s %s %s\n\nНажмите кнопку ниже для отправки отчета судьям или отправьте еще скриншоты:",
+			confirmText := fmt.Sprintf("Загружено скриншотов: %d.\nМатч: %s %s %s\n\nНажмите кнопку ниже для отправки отчета судьям или отправьте еще скриншоты:",
 				n, draft.WinnerTeamName, draft.Score, draft.LoserTeamName)
 			b.sendMessage(chatID, confirmText, application.KbReportPhotos+":"+strconv.Itoa(n))
 		}
