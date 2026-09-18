@@ -20,9 +20,7 @@ WORKDIR /root/
 
 COPY --from=builder /app/blackwatch-bot .
 COPY --from=builder /app/migrations ./migrations
-COPY wait-for-postgres.sh .
-
-COPY google-credentials.json .
+COPY wait-for-postgres.sh google-credentials.json* ./
 
 RUN chmod +x wait-for-postgres.sh
 
