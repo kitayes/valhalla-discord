@@ -2,3 +2,4 @@
 .env
 *.exe
 google-credentials.json
+.claude
