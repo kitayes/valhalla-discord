@@ -98,6 +98,11 @@ func NewBot(token string, adminIDs []int64, service application.TelegramService,
 	return b, nil
 }
 
+// Username is the bot's @handle without the "@", as reported by Telegram.
+func (b *Bot) Username() string {
+	return b.bot.Self.UserName
+}
+
 // WithWebAppURL sets the public URL for the Telegram Mini App.
 func (b *Bot) WithWebAppURL(url string) *Bot {
 	b.webAppURL = url

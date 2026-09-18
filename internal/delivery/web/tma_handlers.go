@@ -20,6 +20,25 @@ type MeResponse struct {
 	Teammates        []models.TelegramPlayer `json:"teammates,omitempty"`
 	IsAdmin          bool                    `json:"is_admin"`
 	RegistrationOpen bool                    `json:"registration_open"`
+	// BotUsername lets the app build t.me links without hardcoding the bot.
+	BotUsername string `json:"bot_username,omitempty"`
+}
+
+// inviteStartPrefix marks a /start payload that carries an invite token:
+// "/start join_<token>". Shared with the Telegram bot, which completes the
+// join when a player opens such a link.
+const inviteStartPrefix = "join_"
+
+// InviteStartPayload is the /start payload for an invite token.
+func InviteStartPayload(token string) string { return inviteStartPrefix + token }
+
+// InviteTokenFromStart extracts the token from a /start payload, if it is one.
+func InviteTokenFromStart(payload string) (string, bool) {
+	payload = strings.TrimSpace(payload)
+	if !strings.HasPrefix(payload, inviteStartPrefix) || len(payload) == len(inviteStartPrefix) {
+		return "", false
+	}
+	return payload[len(inviteStartPrefix):], true
 }
 
 type RoundScheduleItem struct {
@@ -99,7 +118,7 @@ func (s *AdminServer) handleMe(w http.ResponseWriter, r *http.Request) {
 		regOpen = open
 	}
 
-	resp := MeResponse{User: user, IsAdmin: s.isAdmin(user.ID), RegistrationOpen: regOpen}
+	resp := MeResponse{User: user, IsAdmin: s.isAdmin(user.ID), RegistrationOpen: regOpen, BotUsername: s.botUsername}
 	player, _ := s.services.TelegramService.GetPlayer(r.Context(), user.ID)
 	if player != nil {
 		resp.Player = player
@@ -1106,7 +1125,7 @@ func (s *AdminServer) handleGenerateInvite(w http.ResponseWriter, r *http.Reques
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "token": token})
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "token": token, "link": s.inviteLink(token)})
 }
 
 type joinTeamRequest struct {

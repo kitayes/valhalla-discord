@@ -1278,7 +1278,7 @@
                     Вступить по ссылке
                 </div>
                 <div style="display: flex; gap: 8px;">
-                    <input type="text" id="joinTokenInput" placeholder="Код приглашения (напр. 7-AbCd1234)"
+                    <input type="text" id="joinTokenInput" placeholder="Ссылка или код приглашения"
                         style="flex: 1; background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 8px; padding: 9px 12px; color: var(--text-main); font-size: 13px; outline: none; font-family: monospace;" />
                     <button class="btn btn-blue" id="btnJoinTeam" style="padding: 9px 14px; flex-shrink: 0;" onclick="joinTeam()">
                         Войти
@@ -1309,21 +1309,21 @@
             <!-- Invite Section (captain only) -->
             <div id="inviteSection" style="display: none; margin-top: 14px; border-top: 1px solid var(--card-border); padding-top: 14px;">
                 <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">
-                    Пригласите игроков в команду — поделитесь кодом. Каждая генерация сбрасывает старый.
+                    Отправьте игрокам ссылку — они попадут в команду одним нажатием. Новая ссылка отменяет старую.
                 </div>
-                <div id="inviteTokenBox" style="display: none; background: #1b1d2a; border: 1px solid var(--card-border); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; font-family: monospace; font-size: 13px; color: var(--accent-blue); word-break: break-all;" id="inviteTokenText"></div>
-                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                    <button class="btn-copy" id="btnGenerateInvite" style="flex: 1; min-width: 160px; justify-content: center;" onclick="generateInvite()">
+                <div id="inviteTokenBox" style="display: none; background: #1b1d2a; border: 1px solid var(--card-border); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; font-family: monospace; font-size: 13px; color: var(--accent-blue); word-break: break-all;"></div>
+                <button class="btn btn-blue" id="btnShareInvite" style="display:none; margin-bottom: 8px;" onclick="shareInviteTelegram()" title="Поделиться в Telegram">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                    <span>Отправить в Telegram</span>
+                </button>
+                <div style="display: flex; gap: 8px;">
+                    <button class="btn-copy" id="btnGenerateInvite" style="flex: 1; justify-content: center;" onclick="generateInvite()">
                         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-                        <span id="btnInviteText">Получить код приглашения</span>
+                        <span id="btnInviteText">Создать ссылку-приглашение</span>
                     </button>
-                    <button class="btn-copy" id="btnCopyInvite" style="display:none; padding: 8px 10px;" onclick="copyInviteToken()" title="Скопировать код">
+                    <button class="btn-copy" id="btnCopyInvite" style="display:none; flex: 1; justify-content: center;" onclick="copyInviteToken()" title="Скопировать ссылку">
                         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
                         <span>Копировать</span>
-                    </button>
-                    <button class="btn-copy" id="btnShareInvite" style="display:none; padding: 8px 10px; color: var(--accent-blue);" onclick="shareInviteTelegram()" title="Поделиться в Telegram">
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-                        <span>В Telegram</span>
                     </button>
                 </div>
             </div>
@@ -2209,6 +2209,7 @@
         // ── Пачка 4: In-app registration & roster management ──────────────────
 
         let _currentInviteToken = '';
+        let _currentInviteLink = '';
         let _isCreatingTeam = false;
         let _isJoiningTeam = false;
         let _isGeneratingInvite = false;
@@ -2252,9 +2253,17 @@
             }
         }
 
-        async function joinTeam() {
+        // A pasted invite may be the full t.me link rather than the bare code.
+        function inviteTokenFromInput(raw) {
+            const s = (raw || '').trim();
+            const m = s.match(/[?&]start(?:app)?=join_([^&\s]+)/);
+            if (m) return decodeURIComponent(m[1]);
+            return s.replace(/^join_/, '');
+        }
+
+        async function joinTeam(tokenArg) {
             if (_isJoiningTeam) return;
-            const token = document.getElementById('joinTokenInput').value.trim();
+            const token = tokenArg || inviteTokenFromInput(document.getElementById('joinTokenInput').value);
             const errEl = document.getElementById('joinTeamError');
             errEl.style.display = 'none';
             if (!token) {
@@ -2276,10 +2285,17 @@
                     body: JSON.stringify({ token })
                 });
                 if (res && res.ok) {
-                    showToast('Вы успешно вступили в команду!', true);
-                    loadProfile();
+                    showToast('Вы в команде!', true);
+                    await loadProfile();
+                    switchTab('tabTeam', document.querySelectorAll('.nav-item')[2]);
                 } else {
                     const msg = (res && (res.error || res.message)) || 'Неверный или устаревший код';
+                    if (tokenArg) {
+                        // Arrived via deep link: there is no visible form to
+                        // hang the error on, so say it out loud.
+                        showToast(msg, false);
+                        switchTab('tabTeam', document.querySelectorAll('.nav-item')[2]);
+                    }
                     errEl.textContent = msg;
                     errEl.style.display = 'block';
                 }
@@ -2292,15 +2308,7 @@
         async function generateInvite() {
             if (_isGeneratingInvite) return;
             if (!initData) {
-                const mockToken = '1-MockToken';
-                _currentInviteToken = mockToken;
-                document.getElementById('inviteTokenBox').textContent = mockToken;
-                document.getElementById('inviteTokenBox').style.display = 'block';
-                const copyBtn = document.getElementById('btnCopyInvite');
-                if (copyBtn) copyBtn.style.display = 'inline-flex';
-                const shareBtn = document.getElementById('btnShareInvite');
-                if (shareBtn) shareBtn.style.display = 'inline-flex';
-                document.getElementById('btnInviteText').textContent = 'Обновить код';
+                showInvite('1-MockToken', 'https://t.me/valhalla_demo_bot?start=join_1-MockToken');
                 return;
             }
             const btn = document.getElementById('btnGenerateInvite');
@@ -2309,16 +2317,8 @@
             try {
                 const res = await apiFetch('/api/team/invite', { method: 'POST' });
                 if (res && res.ok && res.token) {
-                    _currentInviteToken = res.token;
-                    const box = document.getElementById('inviteTokenBox');
-                    box.textContent = res.token;
-                    box.style.display = 'block';
-                    const copyBtn = document.getElementById('btnCopyInvite');
-                    if (copyBtn) copyBtn.style.display = 'inline-flex';
-                    const shareBtn = document.getElementById('btnShareInvite');
-                    if (shareBtn) shareBtn.style.display = 'inline-flex';
-                    document.getElementById('btnInviteText').textContent = 'Обновить код';
-                    showToast('Код приглашения сгенерирован', true);
+                    showInvite(res.token, res.link || '');
+                    showToast(res.link ? 'Ссылка-приглашение готова' : 'Код приглашения сгенерирован', true);
                 } else {
                     showToast((res && (res.error || res.message)) || 'Ошибка генерации кода', false);
                 }
@@ -2328,17 +2328,45 @@
             }
         }
 
+        // The link is the primary artefact: one tap in a chat joins the team.
+        // The bare code stays visible as a fallback for manual entry.
+        function showInvite(token, link) {
+            _currentInviteToken = token;
+            _currentInviteLink = link || '';
+            const box = document.getElementById('inviteTokenBox');
+            box.innerHTML = _currentInviteLink
+                ? `<div style="font-size:12px; word-break:break-all;">${escapeHtml(_currentInviteLink)}</div>
+                   <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">Код: ${escapeHtml(token)}</div>`
+                : escapeHtml(token);
+            box.style.display = 'block';
+            const copyBtn = document.getElementById('btnCopyInvite');
+            if (copyBtn) copyBtn.style.display = 'inline-flex';
+            const shareBtn = document.getElementById('btnShareInvite');
+            if (shareBtn) shareBtn.style.display = 'flex';
+            document.getElementById('btnInviteText').textContent = _currentInviteLink ? 'Новая ссылка' : 'Обновить код';
+        }
+
         function copyInviteToken() {
             if (!_currentInviteToken) return;
-            robustCopy(_currentInviteToken);
-            showToast('Код скопирован: ' + _currentInviteToken, true);
+            if (_currentInviteLink) {
+                robustCopy(_currentInviteLink);
+                showToast('Ссылка скопирована', true);
+            } else {
+                robustCopy(_currentInviteToken);
+                showToast('Код скопирован: ' + _currentInviteToken, true);
+            }
         }
 
         function shareInviteTelegram() {
             if (!_currentInviteToken) return;
-            const shareText = `Присоединяйся к моей команде в турнире Valhalla Cup! Код приглашения: ${_currentInviteToken}`;
-            const botUrl = 'https://t.me/Blackwatch_mlbbbot';
-            const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(botUrl)}&text=${encodeURIComponent(shareText)}`;
+            let shareUrl;
+            if (_currentInviteLink) {
+                const shareText = `Заходи в мою команду «${currentMyTeamName || ''}» на Valhalla Cup — одно нажатие по ссылке.`;
+                shareUrl = `https://t.me/share/url?url=${encodeURIComponent(_currentInviteLink)}&text=${encodeURIComponent(shareText)}`;
+            } else {
+                const shareText = `Присоединяйся к моей команде в турнире Valhalla Cup! Код приглашения: ${_currentInviteToken}`;
+                shareUrl = `https://t.me/share/url?text=${encodeURIComponent(shareText)}`;
+            }
             if (window.Telegram?.WebApp?.openTelegramLink) {
                 window.Telegram.WebApp.openTelegramLink(shareUrl);
             } else {
@@ -4207,8 +4235,22 @@
         }
 
         // Initial Boot
+        // A start_param of "join_<token>" means the app was opened from an
+        // invite deep link (t.me/<bot>/<app>?startapp=join_...). Players who
+        // are not in a team yet are joined straight away.
+        async function handleStartParam() {
+            const param = tg?.initDataUnsafe?.start_param || '';
+            if (!param.startsWith('join_') || !initData) return;
+            if (currentMyTeamName) {
+                switchTab('tabTeam', document.querySelectorAll('.nav-item')[2]);
+                return;
+            }
+            await joinTeam(param.slice('join_'.length));
+        }
+
         async function bootApp() {
             await loadProfile();
+            await handleStartParam();
             await loadActiveMatch();
             initSSE();
             startSmartPolling();

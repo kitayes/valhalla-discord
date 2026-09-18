@@ -186,6 +186,7 @@ func main() {
 					return telegramBot.PingDebtors(ctx, adminChatID, msg)
 				})
 				adminServer.WithPhotoUploader(telegramBot.UploadPhoto)
+				adminServer.WithBotUsername(telegramBot.Username())
 			}
 			srv := adminServer
 			go func() {

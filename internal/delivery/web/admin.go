@@ -43,6 +43,9 @@ type AdminServer struct {
 	sseBroker     *SSEBroker
 	srv           *http.Server
 	startedAt     time.Time
+	// botUsername is the bot the mini app is served from; it turns an invite
+	// token into a t.me deep link. Empty means the app hands out bare tokens.
+	botUsername string
 }
 
 // NewAdminServer creates a new web admin server.
@@ -133,6 +136,21 @@ func (s *AdminServer) Start() error {
 // Shutdown gracefully stops the server.
 func (s *AdminServer) Shutdown(ctx context.Context) error {
 	return s.srv.Shutdown(ctx)
+}
+
+// WithBotUsername enables invite deep links of the form t.me/<bot>?start=join_<token>.
+func (s *AdminServer) WithBotUsername(name string) *AdminServer {
+	s.botUsername = strings.TrimPrefix(strings.TrimSpace(name), "@")
+	return s
+}
+
+// inviteLink is the one-tap join link for a token, or "" when the bot's
+// username is unknown.
+func (s *AdminServer) inviteLink(token string) string {
+	if s.botUsername == "" || token == "" {
+		return ""
+	}
+	return "https://t.me/" + s.botUsername + "?start=" + InviteStartPayload(token)
 }
 
 func (s *AdminServer) WithAdminIDs(adminIDs []int64) *AdminServer {

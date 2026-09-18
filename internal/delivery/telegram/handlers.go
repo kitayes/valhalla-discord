@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"blackwatch/internal/application"
+	"blackwatch/internal/delivery/web"
 	"blackwatch/internal/models"
 	"context"
 	"fmt"
@@ -249,9 +250,20 @@ func (b *Bot) handleUserCommand(ctx context.Context, chatID int64, text string, 
 		return
 	}
 
+	// "/start join_<token>" is the invite deep link from the mini app: the
+	// player lands here from a captain's shared link, possibly without ever
+	// having opened the bot, so the join completes right away.
+	if strings.HasPrefix(text, "/start ") {
+		if token, ok := web.InviteTokenFromStart(strings.TrimPrefix(text, "/start ")); ok {
+			go b.EnsureChatMenuButton(chatID)
+			b.handleInviteStart(ctx, chatID, token)
+			return
+		}
+	}
+
 	if strings.HasPrefix(text, "/start") {
 		go b.EnsureChatMenuButton(chatID)
-		welcomeText := "Добро пожаловать в Valhalla Cup Bot!\n\nИспользуйте кнопку ниже для перехода в турнирное приложение или команды меню:"
+		welcomeText :="Добро пожаловать в Valhalla Cup Bot!\n\nИспользуйте кнопку ниже для перехода в турнирное приложение или команды меню:"
 		if b.isAdmin(chatID) {
 			welcomeText += "\n\nВы вошли как Администратор. Используйте команду /admin или кнопку меню для открытия панели управления."
 		}
@@ -355,6 +367,29 @@ func (b *Bot) handleUserCommand(ctx context.Context, chatID int64, text string, 
 	}
 
 	b.sendMessage(chatID, response, kbType)
+}
+
+// handleInviteStart joins the player to the team behind an invite token and
+// points them at the app. JoinTeamByToken's errors are already worded for
+// the player, so they are relayed as is.
+func (b *Bot) handleInviteStart(ctx context.Context, chatID int64, token string) {
+	if err := b.service.JoinTeamByToken(ctx, chatID, token); err != nil {
+		b.SendMatchNotification(chatID, "Не удалось вступить в команду: "+err.Error(), true)
+		return
+	}
+	teamName := ""
+	if team, _, err := b.service.GetTeamForPlayer(ctx, chatID); err == nil && team != nil {
+		teamName = team.Name
+	}
+	text := "Вы в команде."
+	if teamName != "" {
+		text = fmt.Sprintf("Вы в команде «%s».", teamName)
+	}
+	text += "\n\nОткройте приложение: капитан уже видит вас в составе, там же заполняются игровые данные."
+	b.SendMatchNotification(chatID, text, true)
+	if teamName != "" {
+		b.notifyTournamentChat(fmt.Sprintf("ОБНОВЛЕНИЕ СОСТАВА\n\nВ команду «%s» вступил новый игрок.", teamName))
+	}
 }
 
 func (b *Bot) handleProfile(ctx context.Context, chatID int64) (string, string) {

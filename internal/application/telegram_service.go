@@ -6,6 +6,7 @@ import (
 	"blackwatch/pkg/sheets"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/csv"
 	"errors"
 	"fmt"
@@ -459,12 +460,16 @@ func (s *TelegramServiceImpl) GenerateInviteToken(ctx context.Context, captainTg
 		return "", errors.New("приглашения заблокированы: команда уже прошла Check-in")
 	}
 
-	// Generate 8-character alphanumeric token prefixed by team ID for lookup.
+	// 8 random characters prefixed by team ID for lookup. The token is the
+	// whole secret behind a join link, so it comes from crypto/rand: the
+	// previous clock-derived bytes were guessable from the issue time.
 	const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789"
 	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("не удалось сгенерировать токен: %w", err)
+	}
 	for i := range b {
-		b[i] = chars[time.Now().UnixNano()%int64(len(chars))]
-		time.Sleep(time.Nanosecond) // avoid same nanosecond
+		b[i] = chars[int(b[i])%len(chars)]
 	}
 	token := fmt.Sprintf("%d-%s", *p.TeamID, string(b))
 	if err := s.repo.SetSetting(ctx, inviteKey(*p.TeamID), token); err != nil {
