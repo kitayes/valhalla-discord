@@ -249,3 +249,51 @@ func TestDeskServiceUnresolvedDisputeSurvivesReportedResult(t *testing.T) {
 		t.Fatalf("resolved dispute still present: %v %v", notices, err)
 	}
 }
+
+func TestDeskServiceGetMatchDeskDetailProtocolFields(t *testing.T) {
+	s, _, _ := deskServiceFixture(t)
+	ctx := context.Background()
+
+	// 1. Check detail for Team 1 captain (Host / Blue side / First pick)
+	detailA, err := s.GetMatchDeskDetail(ctx, 100)
+	if err != nil || detailA == nil {
+		t.Fatalf("GetMatchDeskDetail(100): %v, %v", detailA, err)
+	}
+	if !detailA.IsHost {
+		t.Errorf("expected team 1 to be host, got IsHost=false")
+	}
+	if detailA.HostTeamName != "Alpha" {
+		t.Errorf("expected host name 'Alpha', got %q", detailA.HostTeamName)
+	}
+	if detailA.MySide != "Blue" {
+		t.Errorf("expected MySide 'Blue', got %q", detailA.MySide)
+	}
+	if detailA.FirstPickTeamName != "Alpha" {
+		t.Errorf("expected first pick 'Alpha', got %q", detailA.FirstPickTeamName)
+	}
+	if detailA.MatchFormat == "" {
+		t.Errorf("expected MatchFormat to be set")
+	}
+	if detailA.RoomRules == "" {
+		t.Errorf("expected RoomRules to be set")
+	}
+
+	// 2. Check detail for Team 2 captain (Guest / Red side)
+	detailB, err := s.GetMatchDeskDetail(ctx, 200)
+	if err != nil || detailB == nil {
+		t.Fatalf("GetMatchDeskDetail(200): %v, %v", detailB, err)
+	}
+	if detailB.IsHost {
+		t.Errorf("expected team 2 to not be host, got IsHost=true")
+	}
+	if detailB.HostTeamName != "Alpha" {
+		t.Errorf("expected host name 'Alpha', got %q", detailB.HostTeamName)
+	}
+	if detailB.MySide != "Red" {
+		t.Errorf("expected MySide 'Red', got %q", detailB.MySide)
+	}
+	if detailB.FirstPickTeamName != "Alpha" {
+		t.Errorf("expected first pick 'Alpha', got %q", detailB.FirstPickTeamName)
+	}
+}
+

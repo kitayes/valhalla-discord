@@ -45,10 +45,15 @@ type DeskButton struct {
 	Text     string        `json:"text"`
 	Data     string        `json:"callback_data,omitempty"`
 	CopyText *DeskCopyText `json:"copy_text,omitempty"`
+	WebApp   *DeskWebApp   `json:"web_app,omitempty"`
 }
 
 type DeskCopyText struct {
 	Text string `json:"text"`
+}
+
+type DeskWebApp struct {
+	URL string `json:"url"`
 }
 
 type DeskNotice struct {

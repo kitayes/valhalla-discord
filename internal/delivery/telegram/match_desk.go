@@ -41,6 +41,9 @@ func (c deskHTTPClient) Do(req *http.Request) (*http.Response, error) {
 }
 
 func (b *Bot) sendDeskNotice(ctx context.Context, n models.DeskNotice) error {
+	if n.ChatID <= 0 {
+		return nil
+	}
 	msg := tgbotapi.NewMessage(n.ChatID, n.Text)
 	if len(n.Buttons) > 0 {
 		// The pinned Telegram SDK predates copy_text, but accepts arbitrary

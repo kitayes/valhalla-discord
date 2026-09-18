@@ -112,6 +112,23 @@ func ValidateInitData(botToken string, rawInitData string, maxAge time.Duration)
 	return &user, nil
 }
 
+// parseUnverifiedInitData parses TelegramUser from initData without HMAC validation (for test/dev use).
+func parseUnverifiedInitData(rawInitData string) (*TelegramUser, error) {
+	values, err := url.ParseQuery(rawInitData)
+	if err != nil {
+		return nil, fmt.Errorf("malformed initData query: %w", err)
+	}
+	userJSON := values.Get("user")
+	if userJSON == "" {
+		return nil, ErrMissingUser
+	}
+	var user TelegramUser
+	if err := json.Unmarshal([]byte(userJSON), &user); err != nil {
+		return nil, fmt.Errorf("failed to decode user json: %w", err)
+	}
+	return &user, nil
+}
+
 // TMAAuthMiddleware verifies Telegram WebApp initData on API endpoints.
 // Checks X-Telegram-Init-Data header, Authorization: tma <initData>, or query param init_data.
 func TMAAuthMiddleware(botToken string, maxAge time.Duration, next http.HandlerFunc) http.HandlerFunc {
@@ -128,11 +145,30 @@ func TMAAuthMiddleware(botToken string, maxAge time.Duration, next http.HandlerF
 		}
 
 		if initData == "" {
+			if botToken == "" {
+				if uidStr := r.Header.Get("X-Telegram-User-ID"); uidStr != "" {
+					uid, _ := strconv.ParseInt(uidStr, 10, 64)
+					u := &TelegramUser{
+						ID:        uid,
+						Username:  r.Header.Get("X-Telegram-Username"),
+						FirstName: r.Header.Get("X-Telegram-First-Name"),
+					}
+					ctx := context.WithValue(r.Context(), userCtxKey, u)
+					next(w, r.WithContext(ctx))
+					return
+				}
+			}
 			http.Error(w, `{"error":"unauthorized: missing initData"}`, http.StatusUnauthorized)
 			return
 		}
 
-		user, err := ValidateInitData(botToken, initData, maxAge)
+		var user *TelegramUser
+		var err error
+		if botToken == "" {
+			user, err = parseUnverifiedInitData(initData)
+		} else {
+			user, err = ValidateInitData(botToken, initData, maxAge)
+		}
 		if err != nil {
 			http.Error(w, fmt.Sprintf(`{"error":"unauthorized: %s"}`, err.Error()), http.StatusUnauthorized)
 			return
@@ -148,3 +184,4 @@ func UserFromContext(ctx context.Context) (*TelegramUser, bool) {
 	u, ok := ctx.Value(userCtxKey).(*TelegramUser)
 	return u, ok && u != nil
 }
+

@@ -2,9 +2,39 @@ package application
 
 import (
 	"fmt"
+	"strings"
+	"time"
 
 	"blackwatch/internal/models"
 )
+
+// FormatRoundTitle provides capitalized, user-friendly round names for UI.
+func FormatRoundTitle(round, total int) string {
+	lbl := StageLabel(round, total)
+	if lbl == "финал" {
+		return "Гранд-Финал"
+	}
+	if lbl == "полуфинал" {
+		return "Полуфинал"
+	}
+	if strings.HasPrefix(lbl, "1/") {
+		return lbl + " Финала"
+	}
+	return fmt.Sprintf("Раунд %d", round)
+}
+
+// FormatScheduledTime formats the estimated start time for a given round based on tournament start.
+func FormatScheduledTime(startsAt time.Time, round int, loc *time.Location) string {
+	if startsAt.IsZero() {
+		return "По готовности"
+	}
+	t := startsAt.Add(time.Duration((round-1)*35) * time.Minute)
+	if loc != nil {
+		t = t.In(loc)
+	}
+	return t.Format("15:04 (МСК)")
+}
+
 
 // StageLabel names a round by how far it is from the final: "финал",
 // "полуфинал", "1/4". The bracket is single elimination, so the distance to

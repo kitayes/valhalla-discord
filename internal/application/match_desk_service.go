@@ -17,10 +17,11 @@ type MatchDeskStore interface {
 }
 
 type MatchDeskService struct {
-	store    MatchDeskStore
-	admins   map[int64]bool
-	location *time.Location
-	now      func() time.Time
+	store     MatchDeskStore
+	admins    map[int64]bool
+	location  *time.Location
+	webAppURL string
+	now       func() time.Time
 }
 
 func NewMatchDeskService(store MatchDeskStore, admins []int64, location *time.Location) *MatchDeskService {
@@ -31,6 +32,11 @@ func NewMatchDeskService(store MatchDeskStore, admins []int64, location *time.Lo
 	for _, id := range admins {
 		s.admins[id] = true
 	}
+	return s
+}
+
+func (s *MatchDeskService) WithWebAppURL(url string) *MatchDeskService {
+	s.webAppURL = url
 	return s
 }
 
@@ -89,7 +95,7 @@ func (s *MatchDeskService) AdminAction(ctx context.Context, actor int64, id int,
 			return nil
 		}
 		m := d.Matches[id]
-		if m == nil || (!m.Active && action != "resolve") || m.Generation != generation {
+		if m == nil || (!m.Active && action != "resolve") || (generation != 0 && m.Generation != generation) {
 			return ErrDeskStale
 		}
 		switch action {
@@ -102,6 +108,16 @@ func (s *MatchDeskService) AdminAction(ctx context.Context, actor int64, id int,
 				m.Issues = [2]string{}
 				deskEvent(m, now, fmt.Sprintf("Администратор %d закрыл обращения", actor))
 			}
+		case "extend_5":
+			m.Deadline = m.Deadline.Add(5 * time.Minute)
+			deskEvent(m, now, "Администратор продлил время лобби (+5 мин)")
+		case "extend_10":
+			m.Deadline = m.Deadline.Add(10 * time.Minute)
+			deskEvent(m, now, "Администратор продлил время лобби (+10 мин)")
+		case "reset_ready":
+			m.Ready = [2]bool{false, false}
+			m.StartedAt = time.Time{}
+			deskEvent(m, now, "Администратор сбросил статус готовности команд")
 		default:
 			return errors.New("неизвестное действие администратора")
 		}
@@ -248,6 +264,9 @@ func (s *MatchDeskService) card(m *models.DeskMatch, side int, c models.DeskCont
 		buttons = append(buttons, []models.DeskButton{{Text: "Мы в лобби / Готовы", Data: DeskCallback(m, "ready")}})
 	}
 	buttons = append(buttons, []models.DeskButton{{Text: "Вызвать судью", Data: DeskCallback(m, "judge")}})
+	if s.webAppURL != "" {
+		buttons = append(buttons, []models.DeskButton{{Text: "🎮 Открыть в приложении", WebApp: &models.DeskWebApp{URL: s.webAppURL}}})
+	}
 	chatID := int64(0)
 	if p := c.Captains[m.Teams[side]]; p.TelegramID != nil {
 		chatID = *p.TelegramID
@@ -294,7 +313,7 @@ func (s *MatchDeskService) queueNotices(d *models.MatchDesk, c models.DeskContex
 			m.Revision++
 		}
 		for side, team := range m.Teams {
-			if p := c.Captains[team]; m.Active && p.TelegramID != nil && m.CardRevision[side] != m.Revision {
+			if p := c.Captains[team]; m.Active && p.TelegramID != nil && *p.TelegramID > 0 && m.CardRevision[side] != m.Revision {
 				enqueue(s.card(m, side, c))
 				m.CardRevision[side] = m.Revision
 			}
@@ -349,6 +368,9 @@ func deskAllProblems(m *models.DeskMatch, c models.DeskContext, now time.Time) [
 type MatchDeskDetail struct {
 	MatchID                 int       `json:"match_id"`
 	Number                  int       `json:"number"`
+	Round                   int       `json:"round"`
+	RoundName               string    `json:"round_name"`
+	ScheduledTime           string    `json:"scheduled_time"`
 	Generation              int64     `json:"generation"`
 	MyTeamName              string    `json:"my_team_name"`
 	MyTeamID                int       `json:"my_team_id"`
@@ -363,6 +385,12 @@ type MatchDeskDetail struct {
 	IsPaused                bool      `json:"is_paused"`
 	CanReady                bool      `json:"can_ready"`
 	Status                  string    `json:"status"`
+	IsHost                  bool      `json:"is_host"`
+	HostTeamName            string    `json:"host_team_name"`
+	MySide                  string    `json:"my_side"`
+	FirstPickTeamName       string    `json:"first_pick_team_name"`
+	MatchFormat             string    `json:"match_format"`
+	RoomRules               string    `json:"room_rules"`
 }
 
 // GetMatchDeskDetail finds the active desk match for a captain.
@@ -395,9 +423,35 @@ func (s *MatchDeskService) GetMatchDeskDetail(ctx context.Context, actor int64) 
 						deadlineSec = int64(m.Deadline.Sub(now).Seconds())
 					}
 
+					isHost := (side == 0)
+					hostTeamName := m.Names[0]
+					mySide := "Blue"
+					if side != 0 {
+						mySide = "Red"
+					}
+					firstPick := m.Names[0]
+					format := "BO1"
+					totalRounds := TotalRounds(c.Matches)
+					round := 1
+					for _, bm := range c.Matches {
+						if bm.ID == m.ID {
+							round = bm.Round
+							if bm.Round >= totalRounds-1 && totalRounds > 1 {
+								format = "BO3"
+							}
+							break
+						}
+					}
+					rName := FormatRoundTitle(round, totalRounds)
+					schedTime := FormatScheduledTime(c.StartsAt, round, s.location)
+					roomRules := "Режим: Custom -> Draft Pick 5v5 | Наблюдатели: Выкл"
+
 					detail = &MatchDeskDetail{
 						MatchID:                 m.ID,
 						Number:                  m.Number,
+						Round:                   round,
+						RoundName:               rName,
+						ScheduledTime:           schedTime,
 						Generation:              m.Generation,
 						MyTeamName:              m.Names[side],
 						MyTeamID:                teamID,
@@ -412,6 +466,12 @@ func (s *MatchDeskService) GetMatchDeskDetail(ctx context.Context, actor int64) 
 						IsPaused:                m.LocalPaused || m.GlobalPaused,
 						CanReady:                !m.Ready[side] && !m.LocalPaused && !m.GlobalPaused,
 						Status:                  deskStatus(m),
+						IsHost:                  isHost,
+						HostTeamName:            hostTeamName,
+						MySide:                  mySide,
+						FirstPickTeamName:       firstPick,
+						MatchFormat:             format,
+						RoomRules:               roomRules,
 					}
 					return nil
 				}
@@ -453,48 +513,87 @@ func (s *MatchDeskService) CallJudgeCaptain(ctx context.Context, actor int64, re
 	return s.CaptainAction(ctx, actor, detail.MatchID, detail.Generation, action)
 }
 
+type AdminArchivedMatchItem struct {
+	MatchID       int                `json:"match_id"`
+	Number        int                `json:"number"`
+	Round         int                `json:"round"`
+	RoundName     string             `json:"round_name"`
+	Team1ID       int                `json:"team1_id"`
+	Team1Name     string             `json:"team1_name"`
+	Team2ID       int                `json:"team2_id"`
+	Team2Name     string             `json:"team2_name"`
+	WinnerID      int                `json:"winner_id"`
+	WinnerName    string             `json:"winner_name"`
+	Score         string             `json:"score"`
+	ScheduledTime string             `json:"scheduled_time"`
+	History       []models.DeskEvent `json:"history,omitempty"`
+}
+
 type AdminMatchItem struct {
-	MatchID           int       `json:"match_id"`
-	Number            int       `json:"number"`
-	Generation        int64     `json:"generation"`
-	Team1ID           int       `json:"team1_id"`
-	Team1Name         string    `json:"team1_name"`
-	Team1Ready        bool      `json:"team1_ready"`
-	Team2ID           int       `json:"team2_id"`
-	Team2Name         string    `json:"team2_name"`
-	Team2Ready        bool      `json:"team2_ready"`
-	IsPaused          bool      `json:"is_paused"`
-	Status            string    `json:"status"`
-	DeadlineFormatted string    `json:"deadline_formatted"`
-	Issues            [2]string `json:"issues"`
-	HasIssues         bool      `json:"has_issues"`
+	MatchID           int                `json:"match_id"`
+	Number            int                `json:"number"`
+	Generation        int64              `json:"generation"`
+	Round             int                `json:"round"`
+	RoundName         string             `json:"round_name"`
+	Team1ID           int                `json:"team1_id"`
+	Team1Name         string             `json:"team1_name"`
+	Team1Ready        bool               `json:"team1_ready"`
+	Team2ID           int                `json:"team2_id"`
+	Team2Name         string             `json:"team2_name"`
+	Team2Ready        bool               `json:"team2_ready"`
+	IsPaused          bool               `json:"is_paused"`
+	Status            string             `json:"status"`
+	DeadlineFormatted string             `json:"deadline_formatted"`
+	DeadlineSeconds   int64              `json:"deadline_seconds"`
+	ScheduledTime     string             `json:"scheduled_time"`
+	Issues            [2]string          `json:"issues"`
+	HasIssues         bool               `json:"has_issues"`
+	History           []models.DeskEvent `json:"history,omitempty"`
 }
 
 func (s *MatchDeskService) IsAdmin(actor int64) bool {
 	return s.admins[actor]
 }
 
-func (s *MatchDeskService) GetAdminMatches(ctx context.Context, actor int64) (bool, []AdminMatchItem, error) {
+func (s *MatchDeskService) GetAdminMatches(ctx context.Context, actor int64) (bool, []AdminMatchItem, []AdminArchivedMatchItem, error) {
 	if !s.admins[actor] {
-		return false, nil, errors.New("действие доступно только администратору")
+		return false, nil, nil, errors.New("действие доступно только администратору")
 	}
 	var matches []AdminMatchItem
+	var archived []AdminArchivedMatchItem
 	var globalPaused bool
+	now := s.now()
 	err := s.update(ctx, func(d *models.MatchDesk, c models.DeskContext) error {
 		globalPaused = d.GlobalPaused
+		totalRounds := TotalRounds(c.Matches)
 		for _, m := range sortedDeskMatches(d) {
 			if !m.Active {
 				continue
 			}
 			dl := ""
+			deadlineSec := int64(0)
 			if !m.Deadline.IsZero() {
 				dl = m.Deadline.In(s.location).Format("15:04")
+				if m.Deadline.After(now) {
+					deadlineSec = int64(m.Deadline.Sub(now).Seconds())
+				}
 			}
 			hasIssues := m.Issues[0] != "" || m.Issues[1] != ""
+			round := 1
+			for _, b := range c.Matches {
+				if b.ID == m.ID {
+					round = b.Round
+					break
+				}
+			}
+			rName := FormatRoundTitle(round, totalRounds)
+			schedTime := FormatScheduledTime(c.StartsAt, round, s.location)
 			matches = append(matches, AdminMatchItem{
 				MatchID:           m.ID,
 				Number:            m.Number,
 				Generation:        m.Generation,
+				Round:             round,
+				RoundName:         rName,
 				Team1ID:           m.Teams[0],
 				Team1Name:         m.Names[0],
 				Team1Ready:        m.Ready[0],
@@ -504,11 +603,57 @@ func (s *MatchDeskService) GetAdminMatches(ctx context.Context, actor int64) (bo
 				IsPaused:          m.LocalPaused || m.GlobalPaused,
 				Status:            deskStatus(m),
 				DeadlineFormatted: dl,
+				DeadlineSeconds:   deadlineSec,
+				ScheduledTime:     schedTime,
 				Issues:            m.Issues,
 				HasIssues:         hasIssues,
+				History:           m.History,
 			})
 		}
+
+		for _, b := range c.Matches {
+			if b.State == models.BracketComplete {
+				wName := ""
+				wID := 0
+				if b.WinnerID != nil {
+					wID = *b.WinnerID
+					if b.Team1ID != nil && *b.Team1ID == wID {
+						wName = b.Team1Name
+					} else if b.Team2ID != nil && *b.Team2ID == wID {
+						wName = b.Team2Name
+					}
+				}
+				var hist []models.DeskEvent
+				if dm := d.Matches[b.ID]; dm != nil {
+					hist = dm.History
+				}
+				t1ID := 0
+				if b.Team1ID != nil {
+					t1ID = *b.Team1ID
+				}
+				t2ID := 0
+				if b.Team2ID != nil {
+					t2ID = *b.Team2ID
+				}
+				archived = append(archived, AdminArchivedMatchItem{
+					MatchID:       b.ID,
+					Number:        b.PlayOrder,
+					Round:         b.Round,
+					RoundName:     FormatRoundTitle(b.Round, totalRounds),
+					Team1ID:       t1ID,
+					Team1Name:     b.Team1Name,
+					Team2ID:       t2ID,
+					Team2Name:     b.Team2Name,
+					WinnerID:      wID,
+					WinnerName:    wName,
+					Score:         b.ScoresCSV,
+					ScheduledTime: FormatScheduledTime(c.StartsAt, b.Round, s.location),
+					History:       hist,
+				})
+			}
+		}
+
 		return nil
 	})
-	return globalPaused, matches, err
+	return globalPaused, matches, archived, err
 }

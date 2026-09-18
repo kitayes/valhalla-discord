@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -150,7 +151,10 @@ type bettingRepoAdapter struct {
 
 func main() {
 	ctx := context.Background()
-	dsn := "host=127.0.0.1 port=5435 user=postgres password=valhalla dbname=valhalla_db sslmode=disable"
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		dsn = "host=127.0.0.1 port=55432 user=postgres password=bwtest dbname=bw_telegram_fixture sslmode=disable"
+	}
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		log.Fatalf("sql.Open: %v", err)
@@ -160,7 +164,7 @@ func main() {
 	if err := db.PingContext(ctx); err != nil {
 		log.Fatalf("db.Ping: %v", err)
 	}
-	log.Println("[PASS] Connected to PostgreSQL on localhost:5435 (valhalla_db)")
+	log.Printf("[PASS] Connected to PostgreSQL (%s)", dsn)
 
 	// 1. Run migrations
 	if err := repository.RunMigrations(db, migrations.FS); err != nil {

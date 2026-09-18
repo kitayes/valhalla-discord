@@ -61,6 +61,7 @@ type ProfileLink interface {
 type Telegram interface {
 	CreateOrUpdatePlayer(ctx context.Context, p *models.TelegramPlayer) error
 	GetPlayerByTelegramID(ctx context.Context, tgID int64) (*models.TelegramPlayer, error)
+	GetPlayerByID(ctx context.Context, playerID int) (*models.TelegramPlayer, error)
 	UpdatePlayerState(ctx context.Context, tgID int64, state string) error
 	UpdatePlayerField(ctx context.Context, tgID int64, column string, value interface{}) error
 	UpdatePlayerFieldByID(ctx context.Context, playerID int, column string, value interface{}) error

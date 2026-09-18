@@ -64,6 +64,25 @@ func (r *TelegramPostgres) GetPlayerByTelegramID(ctx context.Context, tgID int64
 	return &p, nil
 }
 
+func (r *TelegramPostgres) GetPlayerByID(ctx context.Context, playerID int) (*models.TelegramPlayer, error) {
+	var p models.TelegramPlayer
+	err := r.db.QueryRowContext(ctx, `
+		SELECT `+telegramPlayerSelectCols+`
+		FROM telegram_players WHERE id = $1
+	`, playerID).Scan(
+		&p.ID, &p.TelegramID, &p.TelegramUsername, &p.FirstName, &p.GameNickname, &p.GameID, &p.ZoneID,
+		&p.Stars, &p.MainRole, &p.IsCaptain, &p.IsSubstitute, &p.FSMState, &p.TeamID,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+
 func (r *TelegramPostgres) UpdatePlayerState(ctx context.Context, tgID int64, state string) error {
 	_, err := r.db.ExecContext(ctx, `UPDATE telegram_players SET fsm_state = $2, updated_at = NOW() WHERE telegram_id = $1`, tgID, state)
 	return err
