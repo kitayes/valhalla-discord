@@ -83,6 +83,11 @@ type TelegramService interface {
 	UpdateTeamPlayer(ctx context.Context, captainTgID int64, playerID int, nick, gameID, zoneID, role string) error
 	GetCheckInSummary(ctx context.Context) (*models.CheckInSummary, error)
 	ReportMatchDirect(ctx context.Context, reporterTgID int64, matchID int, myScore, oppScore int, photoFileIDs []string) (*models.TelegramMatchReport, error)
+	// Two-sided result confirmation: see telegram_report_confirm.go.
+	GetOpenReportForMatch(ctx context.Context, bracketMatchID int) (*models.TelegramMatchReport, error)
+	ConfirmReport(ctx context.Context, actorTgID int64, reportID int) error
+	DisputeReport(ctx context.Context, actorTgID int64, reportID int) error
+	AutoConfirmExpiredReports(ctx context.Context) ([]models.TelegramMatchReport, error)
 	SetWinnerDirect(ctx context.Context, matchID int, winnerTeamName string, winScore, loseScore int) error
 	RollbackMatch(ctx context.Context, matchID int) error
 	ChangeWinnerDirect(ctx context.Context, matchID int, newWinnerTeamName string, winScore, loseScore int) error
@@ -1107,11 +1112,13 @@ func (s *TelegramServiceImpl) ReportMatchDirect(ctx context.Context, reporterTgI
 	var oppTeam *models.TelegramTeam
 	var bracketMatch *models.BracketMatch
 
-	if s.bracket != nil {
-		ms, err := s.repo.GetBracketMatches(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("ошибка чтения сетки: %w", err)
-		}
+	// The cached bracket is the desk's source of truth whether or not a
+	// Challonge client is configured; the client only matters for syncing.
+	ms, err := s.repo.GetBracketMatches(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка чтения сетки: %w", err)
+	}
+	if len(ms) > 0 {
 		for i := range ms {
 			if (matchID > 0 && ms[i].ID == matchID) || (matchID == 0 && ms[i].Ready() && ms[i].Has(myTeam.ID)) {
 				bracketMatch = &ms[i]
@@ -1168,31 +1175,38 @@ func (s *TelegramServiceImpl) ReportMatchDirect(ctx context.Context, reporterTgI
 		Score:              scoreStr,
 		PhotoFileIDs:       photoIDs,
 	}
-	if bracketMatch != nil {
-		rep.BracketMatchID = &bracketMatch.ID
+	if bracketMatch == nil {
+		// No bracket to move: the report is just a record for the referees.
+		rep.Status = models.ReportConfirmed
+		if err := s.repo.CreateMatchReport(ctx, rep); err != nil {
+			s.logger.Error("telegram: ReportMatchDirect CreateMatchReport: %v", err)
+			return nil, fmt.Errorf("ошибка сохранения отчёта: %w", err)
+		}
+		return rep, nil
 	}
+
+	// One captain's word does not move the bracket. The report waits for the
+	// opposing captain to confirm or dispute it, or for the window to pass.
+	open, err := s.repo.GetOpenReportForMatch(ctx, bracketMatch.ID)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка чтения отчётов: %w", err)
+	}
+	if open != nil {
+		if open.Status == models.ReportDisputed {
+			return nil, errors.New("результат этого матча оспорен — решение примет судья")
+		}
+		return nil, errors.New("результат уже внесён и ждёт подтверждения соперника")
+	}
+	rep.BracketMatchID = &bracketMatch.ID
+	rep.Status = models.ReportPending
+	expires := s.now().Add(ReportConfirmWindow)
+	rep.ExpiresAt = &expires
 
 	if err := s.repo.CreateMatchReport(ctx, rep); err != nil {
 		s.logger.Error("telegram: ReportMatchDirect CreateMatchReport: %v", err)
 		return nil, fmt.Errorf("ошибка сохранения отчёта: %w", err)
 	}
-
-	if bracketMatch != nil {
-		if err := s.propagateBracketResult(ctx, bracketMatch.ID, winnerID, winnerScore, loserScore); err != nil {
-			s.logger.Error("telegram: ReportMatchDirect propagateBracketResult: %v", err)
-		}
-		if s.bracket != nil {
-			_, err := s.bracket.ReportResult(ctx, bracketMatch.ID, winnerID, winnerScore, loserScore)
-			if err != nil {
-				s.logger.Error("telegram: ReportMatchDirect ReportResult: %v", err)
-			} else {
-				now := s.now()
-				_ = s.repo.SetReportSynced(ctx, rep.ID)
-				rep.SyncedAt = &now
-			}
-		}
-	}
-
+	s.notifyPendingReport(ctx, rep, bracketMatch, myTeam.ID)
 	return rep, nil
 }
 
@@ -1201,7 +1215,11 @@ func (s *TelegramServiceImpl) SetWinnerDirect(ctx context.Context, matchID int, 
 	if err != nil || team == nil {
 		return fmt.Errorf("команда '%s' не найдена", winnerTeamName)
 	}
-	return s.propagateBracketResult(ctx, matchID, team.ID, winScore, loseScore)
+	if err := s.propagateBracketResult(ctx, matchID, team.ID, winScore, loseScore); err != nil {
+		return err
+	}
+	s.closeOpenReport(ctx, matchID)
+	return nil
 }
 
 func (s *TelegramServiceImpl) propagateBracketResult(ctx context.Context, matchID int, winnerTeamID int, winScore, loseScore int) error {
@@ -1454,7 +1472,12 @@ func (s *TelegramServiceImpl) RollbackMatch(ctx context.Context, matchID int) er
 	target.State = models.BracketOpen
 	target.ScoresCSV = ""
 
-	return s.repo.ReplaceBracketMatches(ctx, ms)
+	if err := s.repo.ReplaceBracketMatches(ctx, ms); err != nil {
+		return err
+	}
+	// A rollback reopens the match for a fresh report; whatever was pending is void.
+	s.closeOpenReport(ctx, target.ID)
+	return nil
 }
 
 func (s *TelegramServiceImpl) ChangeWinnerDirect(ctx context.Context, matchID int, newWinnerTeamName string, winScore, loseScore int) error {
@@ -1548,6 +1571,7 @@ func (s *TelegramServiceImpl) ChangeWinnerDirect(ctx context.Context, matchID in
 	if s.bracket != nil {
 		_, _ = s.bracket.SetWinner(ctx, target.PlayOrder, newWinnerTeamName, winScore, loseScore)
 	}
+	s.closeOpenReport(ctx, target.ID)
 
 	return nil
 }

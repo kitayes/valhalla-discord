@@ -242,6 +242,27 @@
         }
         .link-btn:active { color: var(--accent-red); }
 
+        /* Pending result card: the score one captain filed, waiting on the other. */
+        .pending-result {
+            margin-top: 14px; padding: 14px; border-radius: 12px;
+            background: rgba(52, 152, 219, 0.08); border: 1px solid rgba(52, 152, 219, 0.3);
+        }
+        .pending-result.disputed {
+            background: rgba(231, 76, 60, 0.08); border-color: rgba(231, 76, 60, 0.35);
+        }
+        .pending-result-head {
+            display: flex; justify-content: space-between; align-items: center;
+            font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px;
+            color: var(--text-muted); margin-bottom: 10px;
+        }
+        .pending-result-score {
+            display: flex; align-items: center; justify-content: center; gap: 10px;
+            font-size: 14px; font-weight: 600; text-align: center;
+        }
+        .pending-result-score span { flex: 1; min-width: 0; font-size: 13px; line-height: 1.25; word-break: break-word; }
+        .pending-result-score strong { font-family: monospace; font-size: 24px; font-weight: 800; color: var(--text-main); }
+        .pending-result-meta { font-size: 12px; color: var(--text-muted); text-align: center; margin-top: 8px; line-height: 1.5; }
+
         /* Status plaque shown where the action button would be when there is
            nothing for this viewer to press. */
         .desk-status {
@@ -1261,6 +1282,31 @@
                     </div>
                 </div>
 
+                <!-- Pending result: filled by renderPendingResult(). Shown to
+                     both captains once a score has been filed; the other side
+                     confirms or disputes, the filer waits. -->
+                <div id="pendingResultBox" class="pending-result" style="display: none;">
+                    <div class="pending-result-head">
+                        <span id="pendingResultTitle">Результат на подтверждении</span>
+                        <span class="status-pill status-waiting" id="pendingResultPill"><span class="status-dot live-pulse"></span> <span id="pendingResultPillText">ЖДЁТ</span></span>
+                    </div>
+                    <div class="pending-result-score">
+                        <span id="pendingWinnerName">—</span>
+                        <strong id="pendingScore">0 : 0</strong>
+                        <span id="pendingLoserName">—</span>
+                    </div>
+                    <div class="pending-result-meta" id="pendingResultMeta"></div>
+                    <div id="pendingResultActions" style="display: none;">
+                        <button class="btn btn-green" id="btnConfirmResult" onclick="decideResult(false)">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                            <span>ПОДТВЕРДИТЬ РЕЗУЛЬТАТ</span>
+                        </button>
+                        <button class="btn btn-red-outline" id="btnDisputeResult" onclick="decideResult(true)">
+                            <span>Оспорить — вызвать судью</span>
+                        </button>
+                    </div>
+                </div>
+
                 <!-- Action area. Inside Telegram the native MainButton carries
                      the primary action and these in-page buttons stay hidden;
                      in a plain browser they are the fallback. -->
@@ -1955,7 +2001,18 @@
                 return;
             }
 
-            if (!m.my_ready && m.can_ready && currentUserIsCaptain) {
+            const pr = currentPendingResult;
+            if (pr && currentUserIsCaptain && pr.status === 'pending' && !pr.reported_by_me) {
+                mainButtonAction = () => decideResult(false);
+                tg.MainButton.setText('ПОДТВЕРДИТЬ РЕЗУЛЬТАТ ' + (pr.score || ''));
+                tg.MainButton.color = '#2ecc71';
+                tg.MainButton.textColor = '#0b1e12';
+                tg.MainButton.enable();
+                tg.MainButton.show();
+            } else if (pr) {
+                mainButtonAction = null;
+                tg.MainButton.hide();
+            } else if (!m.my_ready && m.can_ready && currentUserIsCaptain) {
                 mainButtonAction = confirmReady;
                 tg.MainButton.setText('ПОДТВЕРДИТЬ ГОТОВНОСТЬ');
                 tg.MainButton.color = '#2ecc71';
@@ -2600,6 +2657,25 @@
                 if (b) { b.classList.remove('active', 'done'); }
             });
 
+            if (currentPendingResult) {
+                [b1, b2, b3].forEach(b => { if (b) b.classList.add('done'); });
+                if (b4) b4.classList.add('active');
+                if (pIndicator) pIndicator.textContent = 'Шаг 4 из 4';
+                if (pText) {
+                    const pr = currentPendingResult;
+                    if (pr.status === 'disputed') {
+                        pText.innerHTML = '<strong>Спор по счёту</strong>: судья проверит скриншоты обеих команд и закроет матч.';
+                    } else if (pr.reported_by_me) {
+                        pText.innerHTML = '<strong>Ждём соперника</strong>: результат отправлен на подтверждение капитану ' + escapeHtml(m.opponent_team_name || 'соперника') + '.';
+                    } else if (currentUserIsCaptain) {
+                        pText.innerHTML = '<strong>Подтвердите результат</strong>: соперник внёс счёт. Сверьте со своим скриншотом и подтвердите или оспорьте.';
+                    } else {
+                        pText.innerHTML = '<strong>Результат на подтверждении</strong>: капитан вашей команды сверяет счёт.';
+                    }
+                }
+                return;
+            }
+
             if (m.is_paused) {
                 if (pIndicator) pIndicator.textContent = 'ПАУЗА';
                 if (pText) pText.innerHTML = '<strong>Матч приостановлен</strong>: Судья турнира заморозил таймеры. Следите за указаниями в чате.';
@@ -2646,12 +2722,85 @@
             try { tg?.HapticFeedback?.notificationOccurred(kind); } catch (e) { /* not in Telegram */ }
         }
 
+        // The open report on the current match, from /api/match/active.
+        let currentPendingResult = null;
+
         function matchPhase(m) {
             if (!m) return null;
+            if (currentPendingResult) return 'result';
             if (m.is_paused) return 'paused';
             if (!m.my_ready) return 'ready';
             if (!m.opponent_ready) return 'waiting';
             return 'lobby';
+        }
+
+        function renderPendingResult(pr) {
+            const box = document.getElementById('pendingResultBox');
+            if (!box) return;
+            if (!pr) { box.style.display = 'none'; return; }
+            box.style.display = 'block';
+            const disputed = pr.status === 'disputed';
+            box.classList.toggle('disputed', disputed);
+            document.getElementById('pendingWinnerName').textContent = pr.winner_team_name || '—';
+            document.getElementById('pendingLoserName').textContent = pr.loser_team_name || '—';
+            document.getElementById('pendingScore').textContent = (pr.score || '0:0').replace(':', ' : ');
+            document.getElementById('pendingResultTitle').textContent = disputed ? 'Результат оспорен' : 'Результат на подтверждении';
+            const pill = document.getElementById('pendingResultPill');
+            const pillText = document.getElementById('pendingResultPillText');
+            pill.className = 'status-pill ' + (disputed ? 'status-live' : 'status-waiting');
+            pillText.textContent = disputed ? 'СУДЬЯ' : 'ЖДЁТ';
+
+            const mins = Math.max(1, Math.ceil((pr.expires_in_seconds || 0) / 60));
+            const shots = pr.screenshots_count ? `Скриншотов: ${pr.screenshots_count}. ` : 'Без скриншотов. ';
+            let meta;
+            if (disputed) {
+                meta = 'Капитаны не согласны со счётом. Судья рассмотрит скриншоты и закроет матч — решение придёт сюда и в чат.';
+            } else if (pr.reported_by_me) {
+                meta = shots + `Ждём ответа соперника. Без возражений результат будет принят через ${mins} мин.`;
+            } else {
+                meta = shots + `Соперник внёс этот счёт. Если всё верно — подтвердите; если нет — оспорьте, и матч уйдёт судье. Без ответа счёт примется через ${mins} мин.`;
+            }
+            document.getElementById('pendingResultMeta').textContent = meta;
+
+            const canDecide = !disputed && !pr.reported_by_me && currentUserIsCaptain;
+            const actions = document.getElementById('pendingResultActions');
+            actions.style.display = canDecide ? 'block' : 'none';
+            // Inside Telegram the confirm lives on the MainButton; dispute stays here.
+            const btnConfirm = document.getElementById('btnConfirmResult');
+            if (btnConfirm) btnConfirm.style.display = useNativeMainButton() ? 'none' : 'flex';
+        }
+
+        let _isDecidingResult = false;
+        async function decideResult(dispute) {
+            if (_isDecidingResult || !currentPendingResult) return;
+            if (dispute) {
+                const ok = await appConfirm('Оспорить результат? Матч уйдёт судье, таймеры остановятся до его решения.');
+                if (!ok) return;
+            }
+            if (!initData) {
+                showToast(dispute ? 'Результат оспорен (демо)' : 'Результат подтверждён (демо)', true);
+                window.demoPendingResult = null;
+                loadActiveMatch();
+                return;
+            }
+            _isDecidingResult = true;
+            try {
+                const res = await apiFetch(dispute ? '/api/match/result/dispute' : '/api/match/result/confirm', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ report_id: currentPendingResult.report_id })
+                });
+                if (res && res.ok) {
+                    showToast(res.message || 'Готово', true);
+                    notifyHaptic('success');
+                    await loadActiveMatch();
+                    loadBracket(true);
+                } else {
+                    showToast(res?.error || res?.message || 'Не удалось сохранить решение', false);
+                }
+            } finally {
+                _isDecidingResult = false;
+            }
         }
 
         let lastMatchPhaseKey = '';
@@ -2668,22 +2817,39 @@
             const contact = document.getElementById('oppContactBox');
             const protocol = document.getElementById('matchProtocolBox');
 
-            // Lobby phase: contact first, then who is host, then the teams.
-            // Otherwise: timer, teams, contact, protocol.
-            const order = phase === 'lobby' ? [contact, protocol, vs, timer] : [timer, vs, contact, protocol];
-            order.forEach(el => { if (el) body.appendChild(el); });
-            // Rules toggle + box always trail the protocol row.
+            const pending = document.getElementById('pendingResultBox');
             const rt = document.getElementById('rulesToggle');
             const rb = document.getElementById('roomRulesBox');
-            if (rt) body.appendChild(rt);
-            if (rb) body.appendChild(rb);
-            if (timer) timer.style.marginTop = phase === 'lobby' ? '12px' : '0';
+
+            // Result phase: the score card leads and the lobby details (who
+            // hosts, Game ID, rules) are over and hidden. Lobby phase: contact
+            // first, then protocol, then teams. Otherwise: timer, teams,
+            // contact, protocol.
+            let order;
+            if (phase === 'result') {
+                order = [pending, vs];
+            } else if (phase === 'lobby') {
+                order = [contact, protocol, rt, rb, vs, timer, pending];
+            } else {
+                order = [timer, vs, contact, protocol, rt, rb, pending];
+            }
+            order.forEach(el => { if (el) body.appendChild(el); });
+            const lobbyDetails = phase !== 'result';
+            [contact, protocol, rt].forEach(el => { if (el) el.style.display = lobbyDetails ? '' : 'none'; });
+            if (timer) {
+                timer.style.display = lobbyDetails ? '' : 'none';
+                timer.style.marginTop = phase === 'lobby' ? '12px' : '0';
+            }
+            if (rb && !lobbyDetails) { rb.style.display = 'none'; if (rt) rt.classList.remove('open'); }
+            if (pending) pending.style.marginTop = phase === 'result' ? '0' : '14px';
 
             const native = useNativeMainButton();
             const btnReady = document.getElementById('btnReady');
             const btnReport = document.getElementById('btnReportResult');
             const status = document.getElementById('deskStatus');
             const subtext = document.getElementById('btnReadySubtext');
+
+            renderPendingResult(currentPendingResult);
 
             const captainCanReady = currentUserIsCaptain && phase === 'ready' && m.can_ready;
             const captainCanReport = currentUserIsCaptain && phase === 'lobby';
@@ -2693,7 +2859,10 @@
             // Anyone without a button to press gets a one-line status instead.
             let statusText = '';
             let ok = false;
-            if (phase === 'paused') {
+            if (phase === 'result') {
+                // The pending-result card carries its own explanation.
+                statusText = '';
+            } else if (phase === 'paused') {
                 statusText = 'Матч на паузе — действия заморожены судьёй.';
             } else if (!currentUserIsCaptain) {
                 statusText = phase === 'ready' ? 'Готовность подтверждает капитан вашей команды.'
@@ -2715,9 +2884,14 @@
             }
             if (subtext) subtext.style.display = 'none';
 
-            const key = (m.match_id || 0) + ':' + phase;
-            if (lastMatchPhaseKey && lastMatchPhaseKey !== key && phase === 'lobby') {
-                notifyHaptic('success');
+            const key = (m.match_id || 0) + ':' + phase + (currentPendingResult ? ':' + currentPendingResult.status : '');
+            if (lastMatchPhaseKey && lastMatchPhaseKey !== key) {
+                if (phase === 'lobby') notifyHaptic('success');
+                // A score just landed on us to confirm, or ours got contested.
+                if (phase === 'result' && currentPendingResult && currentUserIsCaptain
+                    && (!currentPendingResult.reported_by_me || currentPendingResult.status === 'disputed')) {
+                    notifyHaptic('warning');
+                }
             }
             lastMatchPhaseKey = key;
         }
@@ -2929,6 +3103,7 @@
                 if (btnReport) btnReport.style.display = currentUserIsCaptain ? 'flex' : 'none';
 
                 isMatchPaused = false;
+                currentPendingResult = window.demoPendingResult || null;
                 currentActiveMatchData = {
                     match_id: 1,
                     my_ready: demoMyReady,
@@ -2979,6 +3154,7 @@
 
             if (!data || !data.has_match || !data.match) {
                 currentActiveMatchData = null;
+                currentPendingResult = null;
                 matchCard.style.display = 'none';
                 clearDeadlineTimer();
                 updateMainButton(null);
@@ -3042,6 +3218,7 @@
 
             const m = data.match;
             currentActiveMatchData = m;
+            currentPendingResult = data.pending_result || null;
             currentActiveMatchID = m.match_id;
             currentMatchGeneration = m.generation;
             currentMyTeamName = m.my_team_name;
@@ -3489,7 +3666,7 @@
 
             if (res && res.ok) {
                 closeReportModal();
-                showToast(res.message || 'Результат матча зафиксирован!', true);
+                showToast(res.message || 'Результат отправлен сопернику на подтверждение', true);
                 loadActiveMatch();
                 loadBracket();
             } else {

@@ -417,18 +417,94 @@ func (r *TelegramPostgres) CreateMatchReport(ctx context.Context, report *models
 	if photoIDs == nil {
 		photoIDs = []string{}
 	}
+	status := report.Status
+	if status == "" {
+		status = models.ReportConfirmed
+	}
 	err := r.db.QueryRowContext(ctx, `
 		INSERT INTO telegram_match_reports
-			(reporter_telegram_id, winner_team_id, loser_team_id, score, photo_file_ids, bracket_match_id)
-		VALUES ($1, $2, $3, $4, $5, $6)
+			(reporter_telegram_id, winner_team_id, loser_team_id, score, photo_file_ids, bracket_match_id, status, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id, created_at
-	`, report.ReporterTelegramID, report.WinnerTeamID, report.LoserTeamID, report.Score, pq.Array(photoIDs), report.BracketMatchID).Scan(&id, &createdAt)
+	`, report.ReporterTelegramID, report.WinnerTeamID, report.LoserTeamID, report.Score, pq.Array(photoIDs), report.BracketMatchID, status, report.ExpiresAt).Scan(&id, &createdAt)
 	if err != nil {
 		return err
 	}
 	report.ID = id
 	report.CreatedAt = createdAt
+	report.Status = status
 	return nil
+}
+
+// reportColumns is the SELECT list scanReport expects, with team names joined.
+const reportColumns = `
+	mr.id, mr.reporter_telegram_id,
+	mr.winner_team_id, COALESCE(wt.name, ''),
+	mr.loser_team_id, COALESCE(lt.name, ''),
+	mr.score, mr.photo_file_ids, mr.bracket_match_id, mr.synced_at, mr.created_at,
+	mr.status, mr.expires_at, mr.resolved_at
+	FROM telegram_match_reports mr
+	LEFT JOIN telegram_teams wt ON mr.winner_team_id = wt.id
+	LEFT JOIN telegram_teams lt ON mr.loser_team_id = lt.id`
+
+func scanReport(row interface{ Scan(dest ...any) error }) (*models.TelegramMatchReport, error) {
+	var rep models.TelegramMatchReport
+	var winner, loser sql.NullInt64
+	if err := row.Scan(&rep.ID, &rep.ReporterTelegramID,
+		&winner, &rep.WinnerTeamName, &loser, &rep.LoserTeamName,
+		&rep.Score, pq.Array(&rep.PhotoFileIDs), &rep.BracketMatchID, &rep.SyncedAt, &rep.CreatedAt,
+		&rep.Status, &rep.ExpiresAt, &rep.ResolvedAt); err != nil {
+		return nil, err
+	}
+	rep.WinnerTeamID = int(winner.Int64)
+	rep.LoserTeamID = int(loser.Int64)
+	return &rep, nil
+}
+
+func (r *TelegramPostgres) GetMatchReport(ctx context.Context, id int) (*models.TelegramMatchReport, error) {
+	rep, err := scanReport(r.db.QueryRowContext(ctx, `SELECT `+reportColumns+` WHERE mr.id = $1`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return rep, err
+}
+
+func (r *TelegramPostgres) GetOpenReportForMatch(ctx context.Context, bracketMatchID int) (*models.TelegramMatchReport, error) {
+	rep, err := scanReport(r.db.QueryRowContext(ctx, `SELECT `+reportColumns+`
+		WHERE mr.bracket_match_id = $1 AND mr.status IN ($2, $3)
+		ORDER BY mr.id DESC LIMIT 1`, bracketMatchID, models.ReportPending, models.ReportDisputed))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return rep, err
+}
+
+func (r *TelegramPostgres) GetExpiredPendingReports(ctx context.Context, now time.Time) ([]models.TelegramMatchReport, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT `+reportColumns+`
+		WHERE mr.status = $1 AND mr.expires_at IS NOT NULL AND mr.expires_at <= $2
+		ORDER BY mr.id`, models.ReportPending, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck // best-effort cleanup
+	var out []models.TelegramMatchReport
+	for rows.Next() {
+		rep, err := scanReport(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan expired report: %w", err)
+		}
+		out = append(out, *rep)
+	}
+	return out, rows.Err()
+}
+
+func (r *TelegramPostgres) SetReportStatus(ctx context.Context, id int, status string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE telegram_match_reports
+		SET status = $2,
+		    resolved_at = CASE WHEN $2 = $3 THEN NULL ELSE NOW() END
+		WHERE id = $1`, id, status, models.ReportPending)
+	return err
 }
 
 func (r *TelegramPostgres) GetRecentMatchReports(ctx context.Context, limit int) ([]models.TelegramMatchReport, error) {
@@ -573,6 +649,7 @@ func (r *TelegramPostgres) GetUnsyncedReports(ctx context.Context) ([]models.Tel
 		SELECT id, reporter_telegram_id, winner_team_id, loser_team_id, score, photo_file_ids, created_at, bracket_match_id
 		FROM telegram_match_reports
 		WHERE bracket_match_id IS NOT NULL AND synced_at IS NULL
+		  AND status IN ('confirmed', 'auto_confirmed')
 		ORDER BY id
 	`)
 	if err != nil {

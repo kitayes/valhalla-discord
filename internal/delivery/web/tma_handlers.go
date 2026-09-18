@@ -70,6 +70,51 @@ type ActiveMatchResponse struct {
 	HasMatch         bool                  `json:"has_match"`
 	Match            *MatchDeskDetail      `json:"match,omitempty"`
 	TournamentStatus *TeamTournamentStatus `json:"tournament_status,omitempty"`
+	// PendingResult is set while a reported score awaits the other captain.
+	PendingResult *PendingResult `json:"pending_result,omitempty"`
+}
+
+// PendingResult is the open report on the viewer's match, from their side.
+type PendingResult struct {
+	ReportID         int    `json:"report_id"`
+	Status           string `json:"status"` // pending | disputed
+	WinnerTeamName   string `json:"winner_team_name"`
+	LoserTeamName    string `json:"loser_team_name"`
+	Score            string `json:"score"`
+	ScreenshotsCount int    `json:"screenshots_count"`
+	// ReportedByMe is true for the team that filed it; the other team is the
+	// one asked to confirm or dispute.
+	ReportedByMe     bool  `json:"reported_by_me"`
+	IWon             bool  `json:"i_won"`
+	ExpiresInSeconds int64 `json:"expires_in_seconds"`
+}
+
+func (s *AdminServer) pendingResultFor(ctx context.Context, matchID, myTeamID int) *PendingResult {
+	if s.services.TelegramService == nil || matchID == 0 {
+		return nil
+	}
+	rep, err := s.services.TelegramService.GetOpenReportForMatch(ctx, matchID)
+	if err != nil || rep == nil {
+		return nil
+	}
+	out := &PendingResult{
+		ReportID:         rep.ID,
+		Status:           rep.Status,
+		WinnerTeamName:   rep.WinnerTeamName,
+		LoserTeamName:    rep.LoserTeamName,
+		Score:            rep.Score,
+		ScreenshotsCount: len(rep.PhotoFileIDs),
+		IWon:             rep.WinnerTeamID == myTeamID,
+	}
+	if reporter, _ := s.services.TelegramService.GetPlayer(ctx, rep.ReporterTelegramID); reporter != nil && reporter.TeamID != nil {
+		out.ReportedByMe = *reporter.TeamID == myTeamID
+	}
+	if rep.ExpiresAt != nil {
+		if left := time.Until(*rep.ExpiresAt); left > 0 {
+			out.ExpiresInSeconds = int64(left.Seconds())
+		}
+	}
+	return out
 }
 
 type MatchDeskDetail = struct {
@@ -226,6 +271,7 @@ func (s *AdminServer) handleActiveMatch(w http.ResponseWriter, r *http.Request) 
 			LastRound:     detail.Round,
 			LastRoundName: detail.RoundName,
 		},
+		PendingResult: s.pendingResultFor(r.Context(), detail.MatchID, detail.MyTeamID),
 		Match: &MatchDeskDetail{
 			MatchID:                 detail.MatchID,
 			Number:                  detail.Number,
@@ -653,12 +699,82 @@ func (s *AdminServer) handleMatchReport(w http.ResponseWriter, r *http.Request) 
 		})
 	}
 
+	message := "Результат матча (" + rep.Score + ") сохранён и зафиксирован в сетке."
+	if rep.Status == models.ReportPending {
+		message = fmt.Sprintf("Результат %s отправлен сопернику на подтверждение. Без ответа он будет принят через %d минут.",
+			rep.Score, int(application.ReportConfirmWindow.Minutes()))
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"ok":      true,
-		"message": "Результат матча (" + rep.Score + ") успешно сохранён и зафиксирован в сетке!",
+		"message": message,
 		"report":  rep,
 	})
+}
+
+type reportDecisionRequest struct {
+	ReportID int `json:"report_id"`
+}
+
+// handleReportConfirm is the opposing captain accepting a reported score.
+func (s *AdminServer) handleReportConfirm(w http.ResponseWriter, r *http.Request) {
+	s.handleReportDecision(w, r, false)
+}
+
+// handleReportDispute is the opposing captain contesting it; the match goes to
+// the referee queue with the score disagreement as the reason.
+func (s *AdminServer) handleReportDispute(w http.ResponseWriter, r *http.Request) {
+	s.handleReportDecision(w, r, true)
+}
+
+func (s *AdminServer) handleReportDecision(w http.ResponseWriter, r *http.Request, dispute bool) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	user, ok := UserFromContext(r.Context())
+	if !ok || user == nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+	var req reportDecisionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ReportID <= 0 {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	var err error
+	var message string
+	if dispute {
+		err = s.services.TelegramService.DisputeReport(r.Context(), user.ID, req.ReportID)
+		message = "Результат оспорен. Матч передан судье — ожидайте решения в приложении."
+	} else {
+		err = s.services.TelegramService.ConfirmReport(r.Context(), user.ID, req.ReportID)
+		message = "Результат подтверждён. Сетка обновлена."
+	}
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": err.Error()})
+		return
+	}
+	if dispute && s.services.MatchDesk != nil {
+		// Route it through the existing referee call so the desk pauses the
+		// match and the admin queue lights up the way it does for any dispute.
+		if err := s.services.MatchDesk.CallJudgeCaptain(r.Context(), user.ID, "score"); err != nil {
+			s.logger.Warn("web: dispute %d: CallJudgeCaptain: %v", req.ReportID, err)
+		}
+	}
+	if s.services.MatchDesk != nil {
+		_ = s.services.MatchDesk.Tick(r.Context())
+	}
+	if s.sseBroker != nil {
+		s.sseBroker.Broadcast("match_update", map[string]interface{}{"type": "report_decision", "report_id": req.ReportID})
+		if !dispute {
+			s.sseBroker.Broadcast("bracket_update", map[string]interface{}{"report_id": req.ReportID})
+		}
+	}
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "message": message})
 }
 
 type AdminDeskResponse struct {

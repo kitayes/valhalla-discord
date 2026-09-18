@@ -231,11 +231,53 @@ func (r *fakeTelegramRepo) SetSetting(_ context.Context, k, v string) error {
 func (r *fakeTelegramRepo) CreateMatchReport(_ context.Context, rep *models.TelegramMatchReport) error {
 	rep.ID = r.nextID
 	r.nextID++
+	if rep.Status == "" {
+		rep.Status = models.ReportConfirmed
+	}
 	r.reports = append(r.reports, *rep)
 	return nil
 }
 func (r *fakeTelegramRepo) GetRecentMatchReports(_ context.Context, limit int) ([]models.TelegramMatchReport, error) {
 	return r.reports, nil
+}
+func (r *fakeTelegramRepo) GetMatchReport(_ context.Context, id int) (*models.TelegramMatchReport, error) {
+	for i := range r.reports {
+		if r.reports[i].ID == id {
+			rep := r.reports[i]
+			return &rep, nil
+		}
+	}
+	return nil, nil
+}
+func (r *fakeTelegramRepo) GetOpenReportForMatch(_ context.Context, matchID int) (*models.TelegramMatchReport, error) {
+	for i := len(r.reports) - 1; i >= 0; i-- {
+		rep := r.reports[i]
+		if rep.BracketMatchID != nil && *rep.BracketMatchID == matchID && rep.Open() {
+			return &rep, nil
+		}
+	}
+	return nil, nil
+}
+func (r *fakeTelegramRepo) GetExpiredPendingReports(_ context.Context, now time.Time) ([]models.TelegramMatchReport, error) {
+	var out []models.TelegramMatchReport
+	for _, rep := range r.reports {
+		if rep.Status == models.ReportPending && rep.ExpiresAt != nil && !rep.ExpiresAt.After(now) {
+			out = append(out, rep)
+		}
+	}
+	return out, nil
+}
+func (r *fakeTelegramRepo) SetReportStatus(_ context.Context, id int, status string) error {
+	for i := range r.reports {
+		if r.reports[i].ID == id {
+			r.reports[i].Status = status
+			if status != models.ReportPending {
+				now := time.Now()
+				r.reports[i].ResolvedAt = &now
+			}
+		}
+	}
+	return nil
 }
 
 func (r *fakeTelegramRepo) ReplaceBracketMatches(_ context.Context, ms []models.BracketMatch) error {
@@ -316,7 +358,7 @@ func (r *fakeTelegramRepo) SetReportSynced(_ context.Context, id int) error {
 func (r *fakeTelegramRepo) GetUnsyncedReports(context.Context) ([]models.TelegramMatchReport, error) {
 	var out []models.TelegramMatchReport
 	for _, rep := range r.reports {
-		if rep.BracketMatchID != nil && rep.SyncedAt == nil {
+		if rep.BracketMatchID != nil && rep.SyncedAt == nil && (rep.Status == models.ReportConfirmed || rep.Status == models.ReportAutoConfirmed) {
 			out = append(out, rep)
 		}
 	}

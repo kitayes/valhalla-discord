@@ -367,6 +367,8 @@ func (b *Bot) startBackgroundWorker(ctx context.Context) {
 // skipped the event entirely if a tick was late. Now each deadline is compared
 // as a full timestamp and remembered once it has fired.
 func (b *Bot) runScheduledChecks(ctx context.Context) {
+	b.autoConfirmReports(ctx)
+
 	tTime := b.service.GetTournamentTime(ctx)
 	if tTime.IsZero() {
 		return
@@ -383,6 +385,25 @@ func (b *Bot) runScheduledChecks(ctx context.Context) {
 	}
 
 	b.runBracketChecks(ctx, tTime, now)
+}
+
+// autoConfirmReports applies match results the opposing captain never
+// answered, so an absent opponent cannot hold the bracket. Runs every tick,
+// independent of the tournament clock.
+func (b *Bot) autoConfirmReports(ctx context.Context) {
+	done, err := b.service.AutoConfirmExpiredReports(ctx)
+	if err != nil {
+		b.logger.Error("telegram: auto-confirm sweep failed: %v", err)
+		return
+	}
+	for _, rep := range done {
+		b.logger.Info("telegram: report %d auto-confirmed (%s %s %s)", rep.ID, rep.WinnerTeamName, rep.Score, rep.LoserTeamName)
+		b.notifyTournamentChat(fmt.Sprintf("РЕЗУЛЬТАТ МАТЧА\n\n%s %s %s — принят автоматически (соперник не возразил).",
+			rep.WinnerTeamName, rep.Score, rep.LoserTeamName))
+	}
+	if len(done) > 0 && b.matchDesk != nil {
+		b.wakeMatchDesk()
+	}
 }
 
 // shouldFire reports whether a deadline has passed and has not been handled yet

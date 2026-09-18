@@ -102,6 +102,8 @@ func NewAdminServer(services *application.Service, logger application.Logger, po
 	mux.HandleFunc("/api/match/ready", tmaAuth(s.handleMatchReady))
 	mux.HandleFunc("/api/match/referee", tmaAuth(s.handleMatchReferee))
 	mux.HandleFunc("/api/match/report", tmaAuth(s.handleMatchReport))
+	mux.HandleFunc("/api/match/result/confirm", tmaAuth(s.handleReportConfirm))
+	mux.HandleFunc("/api/match/result/dispute", tmaAuth(s.handleReportDispute))
 	mux.HandleFunc("/api/team/checkin", tmaAuth(s.handleCheckIn))
 	mux.HandleFunc("/api/team/player", tmaAuth(s.handleUpdateTeamPlayer))
 	mux.HandleFunc("/api/team/create", tmaAuth(s.handleCreateTeam))

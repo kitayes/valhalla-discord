@@ -76,6 +76,26 @@ type TelegramMatchReport struct {
 	// SyncedAt is when the result reached Challonge; nil means still queued.
 	SyncedAt  *time.Time `json:"synced_at"`
 	CreatedAt time.Time  `json:"created_at"`
+	// Status is one of the Report* constants. A report filed from the mini
+	// app starts pending and moves the bracket only once the other captain
+	// confirms it or ExpiresAt passes.
+	Status     string     `json:"status"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
+}
+
+// Match report statuses.
+const (
+	ReportPending       = "pending"        // waiting for the opposing captain
+	ReportConfirmed     = "confirmed"      // opposing captain agreed (or legacy direct report)
+	ReportAutoConfirmed = "auto_confirmed" // confirmation window passed
+	ReportDisputed      = "disputed"       // opposing captain objected; referee decides
+	ReportOverridden    = "overridden"     // closed by a referee's decision
+)
+
+// Open reports whether the report still awaits an outcome.
+func (r TelegramMatchReport) Open() bool {
+	return r.Status == ReportPending || r.Status == ReportDisputed
 }
 
 // Bracket match states, as Challonge reports them.

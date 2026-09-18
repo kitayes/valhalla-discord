@@ -42,6 +42,32 @@ type mockTelegramSvc struct {
 	// report, so tests can assert Telegram file IDs arrive here rather than
 	// the raw base64 the browser sent.
 	reportedPhotoIDs []string
+	// openReport is what GetOpenReportForMatch answers; decisions record here.
+	openReport *models.TelegramMatchReport
+	confirmed  []int
+	disputed   []int
+}
+
+func (m *mockTelegramSvc) GetOpenReportForMatch(context.Context, int) (*models.TelegramMatchReport, error) {
+	return m.openReport, nil
+}
+
+func (m *mockTelegramSvc) ConfirmReport(_ context.Context, _ int64, id int) error {
+	if m.openReport == nil || m.openReport.ID != id {
+		return errors.New("отчёт не найден")
+	}
+	m.confirmed = append(m.confirmed, id)
+	m.openReport = nil
+	return nil
+}
+
+func (m *mockTelegramSvc) DisputeReport(_ context.Context, _ int64, id int) error {
+	if m.openReport == nil || m.openReport.ID != id {
+		return errors.New("отчёт не найден")
+	}
+	m.disputed = append(m.disputed, id)
+	m.openReport.Status = models.ReportDisputed
+	return nil
 }
 
 func (m *mockTelegramSvc) GetBracket(ctx context.Context) ([]models.BracketMatch, error) {
@@ -553,6 +579,86 @@ func TestTMAHandlers(t *testing.T) {
 		if resp.TournamentStatus == nil || resp.TournamentStatus.Status != "playing" {
 			t.Errorf("expected TournamentStatus.Status: playing, got %+v", resp.TournamentStatus)
 		}
+		if resp.PendingResult != nil {
+			t.Errorf("no report filed, yet pending_result = %+v", resp.PendingResult)
+		}
+
+		// A report filed by the opposing captain shows up for this captain to
+		// act on, with the window still counting down.
+		teamID := 1
+		tgSvc.player.TeamID = &teamID
+		exp := time.Now().Add(4 * time.Minute)
+		bmID := 1
+		tgSvc.openReport = &models.TelegramMatchReport{
+			ID: 7, ReporterTelegramID: 777, WinnerTeamID: 2, LoserTeamID: 1,
+			WinnerTeamName: "Beta", LoserTeamName: "Alpha", Score: "2:0",
+			PhotoFileIDs: []string{"a", "b"}, BracketMatchID: &bmID,
+			Status: models.ReportPending, ExpiresAt: &exp,
+		}
+		t.Cleanup(func() { tgSvc.openReport = nil; tgSvc.player.TeamID = nil })
+
+		rec = httptest.NewRecorder()
+		server.handleActiveMatch(rec, httptest.NewRequest(http.MethodGet, "/api/match/active", nil).WithContext(ctx))
+		resp = ActiveMatchResponse{}
+		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		pr := resp.PendingResult
+		if pr == nil {
+			t.Fatalf("pending_result missing")
+		}
+		if pr.ReportID != 7 || pr.Score != "2:0" || pr.ScreenshotsCount != 2 || pr.Status != models.ReportPending {
+			t.Errorf("pending_result = %+v", pr)
+		}
+		// GetPlayer in the mock returns the viewer's own player row for any id,
+		// so the reporter resolves to the viewer's team: reported_by_me is true
+		// here and exercises that branch; i_won reflects the winner side.
+		if !pr.ReportedByMe || pr.IWon {
+			t.Errorf("sides wrong: %+v", pr)
+		}
+		if pr.ExpiresInSeconds < 200 || pr.ExpiresInSeconds > 240 {
+			t.Errorf("expires_in_seconds = %d", pr.ExpiresInSeconds)
+		}
+	})
+
+	t.Run("POST /api/match/result/confirm and dispute", func(t *testing.T) {
+		user := &TelegramUser{ID: 12345}
+		ctx := context.WithValue(context.Background(), userCtxKey, user)
+		post := func(path string, body string) (int, map[string]interface{}) {
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)).WithContext(ctx)
+			rec := httptest.NewRecorder()
+			if strings.HasSuffix(path, "confirm") {
+				server.handleReportConfirm(rec, req)
+			} else {
+				server.handleReportDispute(rec, req)
+			}
+			var out map[string]interface{}
+			_ = json.NewDecoder(rec.Body).Decode(&out)
+			return rec.Code, out
+		}
+
+		if code, _ := post("/api/match/result/confirm", `{"report_id":0}`); code != http.StatusBadRequest {
+			t.Errorf("empty id: %d", code)
+		}
+		tgSvc.openReport = &models.TelegramMatchReport{ID: 7, Status: models.ReportPending}
+		if code, out := post("/api/match/result/confirm", `{"report_id":8}`); code != http.StatusBadRequest || out["ok"] != false {
+			t.Errorf("wrong id accepted: %d %+v", code, out)
+		}
+		if code, out := post("/api/match/result/confirm", `{"report_id":7}`); code != http.StatusOK || out["ok"] != true {
+			t.Errorf("confirm: %d %+v", code, out)
+		}
+		if len(tgSvc.confirmed) != 1 || tgSvc.confirmed[0] != 7 {
+			t.Errorf("confirmed = %v", tgSvc.confirmed)
+		}
+
+		tgSvc.openReport = &models.TelegramMatchReport{ID: 9, Status: models.ReportPending}
+		if code, out := post("/api/match/result/dispute", `{"report_id":9}`); code != http.StatusOK || out["ok"] != true {
+			t.Errorf("dispute: %d %+v", code, out)
+		}
+		if len(tgSvc.disputed) != 1 || tgSvc.disputed[0] != 9 {
+			t.Errorf("disputed = %v", tgSvc.disputed)
+		}
+		tgSvc.openReport = nil
 	})
 
 	t.Run("GET /api/match/active returns eliminated when team lost match", func(t *testing.T) {

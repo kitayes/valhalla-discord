@@ -89,6 +89,16 @@ type Telegram interface {
 
 	CreateMatchReport(ctx context.Context, report *models.TelegramMatchReport) error
 	GetRecentMatchReports(ctx context.Context, limit int) ([]models.TelegramMatchReport, error)
+	GetMatchReport(ctx context.Context, id int) (*models.TelegramMatchReport, error)
+	// GetOpenReportForMatch returns the pending or disputed report on a bracket
+	// match, if any; at most one exists at a time.
+	GetOpenReportForMatch(ctx context.Context, bracketMatchID int) (*models.TelegramMatchReport, error)
+	// GetExpiredPendingReports lists pending reports whose expires_at is at or
+	// before now.
+	GetExpiredPendingReports(ctx context.Context, now time.Time) ([]models.TelegramMatchReport, error)
+	// SetReportStatus closes or reopens a report; anything but pending also
+	// stamps resolved_at.
+	SetReportStatus(ctx context.Context, id int, status string) error
 
 	// Bracket cache. ReplaceBracketMatches rewrites the table in one
 	// transaction; both_notified survives for rows whose team pair is unchanged.
