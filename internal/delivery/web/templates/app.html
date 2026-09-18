@@ -663,6 +663,131 @@
             color: var(--accent-red);
             border: 1px solid rgba(231, 76, 60, 0.3);
         }
+
+        /* ── UX Enhancement 1: Toast at the bottom ── */
+        .app-toast {
+            bottom: calc(75px + env(safe-area-inset-bottom, 0px) + 10px);
+            top: auto;
+            transform: translateX(-50%) translateY(20px);
+            opacity: 0;
+        }
+        .app-toast.show {
+            transform: translateX(-50%) translateY(0);
+            opacity: 1;
+        }
+
+        /* ── UX Enhancement 2: Match card left-border status ── */
+        .card.match-live {
+            border-left: 4px solid var(--accent-red);
+            animation: borderPulse 1.5s infinite ease-in-out;
+        }
+        .card.match-waiting {
+            border-left: 4px solid var(--accent-gold);
+        }
+        .card.match-ready {
+            border-left: 4px solid var(--accent-green);
+        }
+        @keyframes borderPulse {
+            0%, 100% { border-left-color: var(--accent-red); }
+            50% { border-left-color: rgba(231, 76, 60, 0.25); }
+        }
+
+        /* ── UX Enhancement 3: Player avatars ── */
+        .player-avatar {
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            font-size: 13px;
+            flex-shrink: 0;
+            margin-right: 10px;
+            letter-spacing: 0.5px;
+        }
+
+        /* ── UX Enhancement 4: Round filter chips in Bracket ── */
+        .round-filter {
+            display: flex;
+            gap: 8px;
+            overflow-x: auto;
+            padding: 0 0 12px 0;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
+        .round-filter::-webkit-scrollbar { display: none; }
+        .round-chip {
+            flex-shrink: 0;
+            padding: 6px 14px;
+            border-radius: 20px;
+            border: 1px solid var(--card-border);
+            background: var(--card-bg);
+            color: var(--text-muted);
+            font-size: 11px;
+            font-weight: 700;
+            cursor: pointer;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            transition: all 0.15s;
+        }
+        .round-chip.active {
+            background: rgba(231, 76, 60, 0.15);
+            border-color: var(--accent-red);
+            color: var(--accent-red);
+        }
+        .round-chip:active { opacity: 0.75; }
+
+        /* ── UX Enhancement 5: Admin disputes empty state ── */
+        .admin-empty-state {
+            text-align: center;
+            padding: 24px 16px;
+            color: var(--text-muted);
+            font-size: 12px;
+            line-height: 1.6;
+        }
+        .admin-empty-state svg { margin-bottom: 10px; opacity: 0.5; }
+
+        /* ── UX Enhancement 6: Bo1/Bo3 toggle ── */
+        .bo-toggle {
+            display: flex;
+            background: #101118;
+            border-radius: 8px;
+            padding: 3px;
+            margin-bottom: 12px;
+            gap: 3px;
+        }
+        .bo-btn {
+            flex: 1;
+            padding: 7px;
+            border-radius: 6px;
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            font-size: 12px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.15s;
+            letter-spacing: 0.5px;
+        }
+        .bo-btn.active {
+            background: var(--card-bg);
+            color: var(--text-main);
+            border: 1px solid var(--card-border);
+        }
+
+        /* ── UX Enhancement 7: Bracket live badge ── */
+        .bracket-live-count {
+            color: var(--accent-red);
+            font-size: 11px;
+            font-weight: 700;
+            margin-left: 6px;
+            animation: fadeInOut 2s infinite;
+        }
+        @keyframes fadeInOut {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
     </style>
 </head>
 <body>
@@ -771,12 +896,18 @@
 
     <!-- Tab 2: Tournament Bracket -->
     <main id="tabBracket" class="tab-content">
-        <div class="card-header">
-            <span class="card-title">Турнирная сетка</span>
+        <div class="card-header" style="margin-bottom: 10px;">
+            <span class="card-title">
+                Турнирная сетка
+                <span class="bracket-live-count" id="bracketLiveCount" style="display:none;"></span>
+            </span>
             <button class="btn-copy" onclick="loadBracket()">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg>
                 <span>Обновить</span>
             </button>
+        </div>
+        <div class="round-filter" id="roundFilter" style="display:none;">
+            <!-- Round chips generated by JS -->
         </div>
         <div id="bracketList" class="bracket-tree">
             <!-- Dynamically populated -->
@@ -900,6 +1031,13 @@
         </div>
         <div id="adminDisputesList">
             <!-- Dynamically populated -->
+            <div id="adminDisputesEmpty" class="admin-empty-state">
+                <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                    <path d="m9 12 2 2 4-4"/>
+                </svg>
+                <div>Вызовов судьи нет — всё тихо</div>
+            </div>
         </div>
 
         <!-- Section 2: Active Matches -->
@@ -1045,11 +1183,17 @@
         <div class="modal-content" style="max-height: 90vh; overflow-y: auto;">
             <div class="modal-title">Внести счёт матча</div>
             
-            <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
-                Выберите быстрый счёт или укажите счёт вручную:
+            <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 10px;">
+                Выберите формат серии и быстрый счёт:
             </p>
 
-            <div class="score-selector">
+            <div class="bo-toggle">
+                <button class="bo-btn active" id="boBtnBo3" onclick="switchBoFormat('bo3', this)">Bo3</button>
+                <button class="bo-btn" id="boBtnBo1" onclick="switchBoFormat('bo1', this)">Bo1</button>
+                <button class="bo-btn" id="boBtnBo5" onclick="switchBoFormat('bo5', this)">Bo5</button>
+            </div>
+
+            <div class="score-selector" id="scoreSelector">
                 <div class="score-btn active" onclick="selectScore(2, 0, this)">2 : 0</div>
                 <div class="score-btn" onclick="selectScore(2, 1, this)">2 : 1</div>
                 <div class="score-btn" onclick="selectScore(1, 2, this)">1 : 2</div>
@@ -1325,6 +1469,19 @@
             }
         }
 
+        function nickToColor(nick) {
+            let hash = 0;
+            for (let i = 0; i < nick.length; i++) hash = nick.charCodeAt(i) + ((hash << 5) - hash);
+            const hue = Math.abs(hash) % 360;
+            return `hsl(${hue}, 50%, 30%)`;
+        }
+
+        function nickInitials(nick) {
+            const parts = nick.trim().split(/[\s_-]+/);
+            if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+            return nick.substring(0, 2).toUpperCase();
+        }
+
         function renderRoster(players, canEdit) {
             const list = document.getElementById('rosterList');
             list.innerHTML = "";
@@ -1340,6 +1497,8 @@
                 const pRole = p.role || p.main_role || (p.is_captain ? 'Капитан' : 'Основа');
                 const pGameId = p.game_id || '';
                 const pZoneId = p.zone_id || '';
+                const avatarBg = nickToColor(pNick);
+                const avatarText = nickInitials(pNick);
 
                 const editBtn = canEdit ? `
                     <button class="btn-edit-player" onclick="openEditModal(${p.id}, '${escapeAttr(pNick)}', '${escapeAttr(pGameId)}', '${escapeAttr(pZoneId)}', '${escapeAttr(pRole)}')" title="Редактировать игрока">
@@ -1350,14 +1509,17 @@
                 ` : '';
 
                 item.innerHTML = `
-                    <div class="player-info">
-                        <div class="player-nick">
-                            <span>${escapeHtml(pNick)}</span>
-                            ${capBadge}
+                    <div style="display:flex; align-items:center; flex:1; min-width:0;">
+                        <div class="player-avatar" style="background:${avatarBg}; color:#fff;">${avatarText}</div>
+                        <div class="player-info" style="min-width:0;">
+                            <div class="player-nick">
+                                <span>${escapeHtml(pNick)}</span>
+                                ${capBadge}
+                            </div>
+                            <div class="player-meta">ID: ${pGameId || '—'} ${pZoneId ? '(' + pZoneId + ')' : ''}</div>
                         </div>
-                        <div class="player-meta">ID: ${pGameId || '—'} ${pZoneId ? '(' + pZoneId + ')' : ''}</div>
                     </div>
-                    <div style="display:flex; align-items:center;">
+                    <div style="display:flex; align-items:center; flex-shrink:0;">
                         <div class="badge-role">${escapeHtml(pRole)}</div>
                         ${editBtn}
                     </div>
@@ -1724,6 +1886,31 @@
             document.getElementById('reportOppScore').value = opp;
         }
 
+        const boFormats = {
+            bo1: [[1, 0], [0, 1]],
+            bo3: [[2, 0], [2, 1], [1, 2], [0, 2]],
+            bo5: [[3, 0], [3, 1], [3, 2], [2, 3], [1, 3], [0, 3]],
+        };
+
+        function switchBoFormat(fmt, el) {
+            haptic('light');
+            document.querySelectorAll('.bo-btn').forEach(b => b.classList.remove('active'));
+            if (el) el.classList.add('active');
+            const scores = boFormats[fmt] || boFormats.bo3;
+            const sel = document.getElementById('scoreSelector');
+            sel.innerHTML = '';
+            scores.forEach((s, i) => {
+                const btn = document.createElement('div');
+                btn.className = 'score-btn' + (i === 0 ? ' active' : '');
+                btn.textContent = `${s[0]} : ${s[1]}`;
+                btn.onclick = function() { selectScore(s[0], s[1], btn); };
+                sel.appendChild(btn);
+            });
+            // Set initial values from first option
+            document.getElementById('reportMyScore').value = scores[0][0];
+            document.getElementById('reportOppScore').value = scores[0][1];
+        }
+
         function handleScreenshotSelected(e) {
             const file = e.target.files?.[0];
             if (!file) return;
@@ -1794,6 +1981,9 @@
         }
 
         // Bracket View
+        let bracketAllMatches = [];
+        let bracketActiveRound = 'all';
+
         async function loadBracket() {
             const list = document.getElementById('bracketList');
             list.innerHTML = `<div style="text-align:center; color:var(--text-muted); padding:20px; font-size:13px;">Загрузка сетки...</div>`;
@@ -1801,18 +1991,77 @@
             list.innerHTML = "";
             if (!data || !data.matches || !data.matches.length) {
                 list.innerHTML = `<div class="card" style="text-align:center; color:var(--text-muted); font-size:13px;">Сетка ещё не сформирована</div>`;
+                document.getElementById('roundFilter').style.display = 'none';
+                document.getElementById('bracketLiveCount').style.display = 'none';
                 return;
             }
 
-            data.matches.forEach(m => {
+            bracketAllMatches = data.matches;
+
+            // Live count badge
+            const liveCount = data.matches.filter(m => m.state === 'open').length;
+            const liveCountEl = document.getElementById('bracketLiveCount');
+            if (liveCount > 0) {
+                liveCountEl.textContent = `• ${liveCount} идут`;
+                liveCountEl.style.display = 'inline';
+            } else {
+                liveCountEl.style.display = 'none';
+            }
+
+            // Build round filter chips
+            const rounds = [...new Set(data.matches.map(m => m.round))].sort((a, b) => a - b);
+            const filterEl = document.getElementById('roundFilter');
+            filterEl.style.display = 'flex';
+            filterEl.innerHTML = '';
+
+            const allChip = document.createElement('div');
+            allChip.className = 'round-chip' + (bracketActiveRound === 'all' ? ' active' : '');
+            allChip.textContent = 'Все раунды';
+            allChip.onclick = () => { bracketActiveRound = 'all'; renderBracketMatches(); setActiveChip(allChip); };
+            filterEl.appendChild(allChip);
+
+            rounds.forEach(r => {
+                const chip = document.createElement('div');
+                const label = r === Math.max(...rounds) ? `Финал` : `Раунд ${r}`;
+                chip.className = 'round-chip' + (bracketActiveRound === r ? ' active' : '');
+                chip.textContent = label;
+                chip.onclick = () => { bracketActiveRound = r; renderBracketMatches(); setActiveChip(chip); };
+                filterEl.appendChild(chip);
+            });
+
+            renderBracketMatches();
+        }
+
+        function setActiveChip(el) {
+            document.querySelectorAll('.round-chip').forEach(c => c.classList.remove('active'));
+            el.classList.add('active');
+        }
+
+        function renderBracketMatches() {
+            const list = document.getElementById('bracketList');
+            list.innerHTML = '';
+            const matches = bracketActiveRound === 'all'
+                ? bracketAllMatches
+                : bracketAllMatches.filter(m => m.round === bracketActiveRound);
+
+            if (!matches.length) {
+                list.innerHTML = `<div class="card" style="text-align:center; color:var(--text-muted); font-size:13px; padding:20px;">Матчей в этом раунде нет</div>`;
+                return;
+            }
+
+            matches.forEach(m => {
                 const card = document.createElement('div');
-                card.className = 'bracket-match';
+                // UX Enhancement 2: left-border color by state
+                let borderClass = '';
                 let statusBadge = `<span class="bracket-status status-pending">ОЖИДАНИЕ</span>`;
                 if (m.state === 'complete') {
+                    borderClass = 'match-ready';
                     statusBadge = `<span class="bracket-status status-complete">ЗАВЕРШЁН</span>`;
                 } else if (m.state === 'open') {
+                    borderClass = 'match-live';
                     statusBadge = `<span class="bracket-status status-live"><span class="status-dot live-pulse"></span> LIVE</span>`;
                 }
+                card.className = `bracket-match ${borderClass}`;
                 card.innerHTML = `
                     <div class="bracket-match-header">
                         <span>Раунд ${m.round} // Матч #${m.play_order}</span>
@@ -1875,17 +2124,14 @@
 
             // Section 1: Disputes Queue
             const disputesList = document.getElementById('adminDisputesList');
+            const disputesEmpty = document.getElementById('adminDisputesEmpty');
             if (!data.disputes || data.disputes.length === 0) {
-                disputesList.innerHTML = `
-                    <div class="card" style="text-align: center; color: var(--text-muted); padding: 18px; font-size: 13px;">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 4px; display: inline-block;">
-                            <polyline points="20 6 9 17 4 12"/>
-                        </svg>
-                        <div>Активных споров и вызовов судей нет</div>
-                    </div>
-                `;
+                // Keep only empty state
+                disputesList.querySelectorAll('.admin-dispute-card').forEach(el => el.remove());
+                if (disputesEmpty) disputesEmpty.style.display = 'block';
             } else {
-                disputesList.innerHTML = '';
+                if (disputesEmpty) disputesEmpty.style.display = 'none';
+                disputesList.querySelectorAll('.admin-dispute-card').forEach(el => el.remove());
                 data.disputes.forEach(d => {
                     const card = document.createElement('div');
                     card.className = 'admin-dispute-card';
@@ -1911,7 +2157,7 @@
                             </button>
                         </div>
                     `;
-                    disputesList.appendChild(card);
+                    disputesList.insertBefore(card, disputesEmpty);
                 });
             }
 
