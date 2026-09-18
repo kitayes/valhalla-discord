@@ -127,7 +127,7 @@ func (b *Bot) SendMatchNotification(chatID int64, text string, hasWebAppBtn bool
 			}{
 				{
 					{
-						Text: "🎮 Открыть в приложении",
+						Text: "Открыть в приложении",
 						WebApp: struct {
 							URL string `json:"url"`
 						}{URL: b.webAppURL},
@@ -467,7 +467,7 @@ func (b *Bot) EnsureChatMenuButton(chatID int64) {
 	payload := map[string]interface{}{
 		"menu_button": map[string]interface{}{
 			"type": "web_app",
-			"text": "🎮 Турнир",
+			"text": "Турнир",
 			"web_app": map[string]string{
 				"url": b.webAppURL,
 			},
