@@ -56,9 +56,7 @@ func uniqueName(t *testing.T, prefix string) string {
 
 func newMatchRepo(t *testing.T, db *sql.DB) *MatchPostgres {
 	t.Helper()
-	// nil embedding client: the constructor only warms the name cache, and the
-	// tests below never take the fuzzy-match path that would use it.
-	repo, err := NewMatchPostgres(context.Background(), db, 1000, nil)
+	repo, err := NewMatchPostgres(context.Background(), db, 1000)
 	if err != nil {
 		t.Fatalf("NewMatchPostgres: %v", err)
 	}

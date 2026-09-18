@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"blackwatch/internal/ai"
 	"blackwatch/internal/domain"
 	"blackwatch/internal/models"
 
@@ -26,26 +25,22 @@ var ErrDiscordIDTaken = errors.New("this Discord account is already linked to an
 var ErrTelegramIDTaken = errors.New("this Telegram account is already linked to another player")
 
 const (
-	cosineSimilarityThreshold = 0.28
-	defaultSeasonStartYear    = 2025
-	defaultSeasonStartMonth   = 1
-	defaultSeasonStartDay     = 1
-	minDeathsForKDA           = 1
+	defaultSeasonStartYear  = 2025
+	defaultSeasonStartMonth = 1
+	defaultSeasonStartDay   = 1
+	minDeathsForKDA         = 1
 )
 
 type MatchPostgres struct {
-	db              *sql.DB
-	playerCache     *PlayerCache
-	embeddingClient *ai.EmbeddingClient
+	db          *sql.DB
+	playerCache *PlayerCache
 }
 
 // NewMatchPostgres builds the repository and warms the player-name cache.
-//
-// A failed warm-up is now an error rather than a silent empty cache: every
-// player lookup falls back to a query plus an Ollama embedding round trip on a
-// cache miss, so starting cold and never knowing it is exactly the failure that
-// hides until the matching path is slow for everyone.
-func NewMatchPostgres(ctx context.Context, db *sql.DB, cacheSize int, embeddingClient *ai.EmbeddingClient) (*MatchPostgres, error) {
+// Warming is bounded by a fresh startup context so a hung database does not
+// stall the entire process: if the warm query times out, it logs a warning
+// and falls back to an empty cache (every player lookup will hit Postgres).
+func NewMatchPostgres(ctx context.Context, db *sql.DB, cacheSize int) (*MatchPostgres, error) {
 	cache, err := NewPlayerCache(cacheSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create player cache: %w", err)
@@ -71,9 +66,8 @@ func NewMatchPostgres(ctx context.Context, db *sql.DB, cacheSize int, embeddingC
 	cache.LoadAll(players)
 
 	return &MatchPostgres{
-		db:              db,
-		playerCache:     cache,
-		embeddingClient: embeddingClient,
+		db:          db,
+		playerCache: cache,
 	}, nil
 }
 
@@ -456,29 +450,7 @@ func (r *MatchPostgres) EnsurePlayerExists(ctx context.Context, name string) (in
 		return id, nil
 	}
 
-	// Vector-based cosine similarity search via Ollama embeddings
-	if r.embeddingClient != nil {
-		embedding, embErr := r.embeddingClient.GetEmbedding(ctx, name)
-		if embErr == nil && len(embedding) > 0 {
-			embeddingStr := ai.FormatEmbeddingForPG(embedding)
-			vectorQuery := `
-				SELECT id, name FROM players 
-				WHERE name_embedding IS NOT NULL AND is_deleted = FALSE
-				  AND name_embedding <=> $1 < $2
-				ORDER BY name_embedding <=> $1
-				LIMIT 1
-			`
-			var candidateID int
-			var candidateName string
-			err := r.db.QueryRowContext(ctx, vectorQuery, embeddingStr, cosineSimilarityThreshold).Scan(&candidateID, &candidateName)
-			if err == nil {
-				r.playerCache.Set(normalizedInput, candidateID)
-				return candidateID, nil
-			}
-		}
-	}
-
-	// Fallback: fuzzy Levenshtein search for cases where embedding is not yet generated
+	// Fuzzy Levenshtein search
 	fuzzyQuery := `
 		SELECT id, name FROM players 
 		WHERE LOWER(TRIM(name)) LIKE $1 AND is_deleted = FALSE
@@ -511,26 +483,10 @@ func (r *MatchPostgres) EnsurePlayerExists(ctx context.Context, name string) (in
 		}
 	}
 
-	// Generate embedding for the new player
-	var embeddingStr string
-	if r.embeddingClient != nil {
-		embedding, embErr := r.embeddingClient.GetEmbedding(ctx, name)
-		if embErr == nil && len(embedding) > 0 {
-			embeddingStr = ai.FormatEmbeddingForPG(embedding)
-		}
-	}
-
-	if embeddingStr != "" {
-		err = r.db.QueryRowContext(ctx, `
-			INSERT INTO players (name, name_embedding) VALUES ($1, $2)
-			ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
-			RETURNING id`, name, embeddingStr).Scan(&id)
-	} else {
-		err = r.db.QueryRowContext(ctx, `
-			INSERT INTO players (name) VALUES ($1)
-			ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
-			RETURNING id`, name).Scan(&id)
-	}
+	err = r.db.QueryRowContext(ctx, `
+		INSERT INTO players (name) VALUES ($1)
+		ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+		RETURNING id`, name).Scan(&id)
 
 	if err != nil {
 		return 0, fmt.Errorf("failed to ensure player exists: %w", err)
@@ -779,16 +735,6 @@ func (r *MatchPostgres) RenamePlayer(ctx context.Context, id int, newName string
 	if err != nil {
 		return fmt.Errorf("failed to get player name: %w", err)
 	}
-
-	// Generate embedding for the new name
-	var embeddingStr string
-	if r.embeddingClient != nil {
-		embedding, embErr := r.embeddingClient.GetEmbedding(ctx, newName)
-		if embErr == nil && len(embedding) > 0 {
-			embeddingStr = ai.FormatEmbeddingForPG(embedding)
-		}
-	}
-
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
@@ -805,19 +751,11 @@ func (r *MatchPostgres) RenamePlayer(ctx context.Context, id int, newName string
 		return fmt.Errorf("failed to log nickname history: %w", err)
 	}
 
-	// Update player name and embedding
-	var playerResult sql.Result
-	if embeddingStr != "" {
-		playerResult, err = tx.ExecContext(ctx,
-			"UPDATE players SET name = $1, name_embedding = $2 WHERE id = $3 AND is_deleted = FALSE",
-			newName, embeddingStr, id,
-		)
-	} else {
-		playerResult, err = tx.ExecContext(ctx,
-			"UPDATE players SET name = $1 WHERE id = $2 AND is_deleted = FALSE",
-			newName, id,
-		)
-	}
+	// Update player name
+	playerResult, err := tx.ExecContext(ctx,
+		"UPDATE players SET name = $1 WHERE id = $2 AND is_deleted = FALSE",
+		newName, id,
+	)
 	if err != nil {
 		return fmt.Errorf("failed to rename player: %w", err)
 	}

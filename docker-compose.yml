@@ -7,7 +7,6 @@ services:
     restart: always
     depends_on:
       - db
-      - ollama
     env_file:
       - .env
     ports:
@@ -41,27 +40,5 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
 
-  ollama:
-    image: ollama/ollama:latest
-    container_name: blackwatch_ollama
-    restart: always
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        ollama serve &
-        sleep 5
-        ollama pull nomic-embed-text
-        wait
-    volumes:
-      - ollama_data:/root/.ollama
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-
 volumes:
   pgdata:
-  ollama_data:

@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"time"
 
-	"blackwatch/internal/ai"
 	"blackwatch/internal/models"
 )
 
@@ -158,8 +157,8 @@ type Repository struct {
 	db *sql.DB
 }
 
-func NewRepository(ctx context.Context, cfg *Config, db *sql.DB, cacheSize int, embeddingClient *ai.EmbeddingClient) (*Repository, error) {
-	matchRepo, err := NewMatchPostgres(ctx, db, cacheSize, embeddingClient)
+func NewRepository(ctx context.Context, cfg *Config, db *sql.DB, cacheSize int) (*Repository, error) {
+	matchRepo, err := NewMatchPostgres(ctx, db, cacheSize)
 	if err != nil {
 		return nil, err
 	}

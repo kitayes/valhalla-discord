@@ -64,10 +64,7 @@ func main() {
 	}
 	log.Info("Migrations applied successfully")
 
-	embeddingClient := ai.NewEmbeddingClient()
-	log.Info("Ollama embedding client initialized")
-
-	repos, err := repository.NewRepository(startupCtx, &cfg.Repo, db, cfg.PlayerCacheSize, embeddingClient)
+	repos, err := repository.NewRepository(startupCtx, &cfg.Repo, db, cfg.PlayerCacheSize)
 	if err != nil {
 		log.Error("failed to init repository: %s", err.Error())
 		return
