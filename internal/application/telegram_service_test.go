@@ -50,6 +50,14 @@ func (r *fakeTelegramRepo) CreateOrUpdatePlayer(context.Context, *models.Telegra
 func (r *fakeTelegramRepo) GetPlayerByTelegramID(_ context.Context, tgID int64) (*models.TelegramPlayer, error) {
 	return r.players[tgID], nil
 }
+func (r *fakeTelegramRepo) GetPlayerByID(_ context.Context, playerID int) (*models.TelegramPlayer, error) {
+	for _, p := range r.players {
+		if p != nil && p.ID == playerID {
+			return p, nil
+		}
+	}
+	return nil, nil
+}
 func (r *fakeTelegramRepo) UpdatePlayerState(_ context.Context, tgID int64, s string) error {
 	if p := r.players[tgID]; p != nil {
 		p.FSMState = s
@@ -545,3 +553,101 @@ func TestGetCheckInStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateTeamPlayerRosterLock(t *testing.T) {
+	svc, repo := newTelegramSvc()
+	ctx := context.Background()
+
+	teamID := 1
+	repo.teams[teamID] = &models.TelegramTeam{ID: teamID, Name: "LockTest", IsCheckedIn: false}
+	c := repo.addPlayer(100, &teamID, true, models.StateIdle)
+	c.IsCaptain = true
+	p := repo.addPlayer(101, &teamID, false, models.StateIdle)
+
+	// 1. Success when registration is open and not checked in
+	err := svc.UpdateTeamPlayer(ctx, 100, p.ID, "NewNick", "12345", "1001", "Mid")
+	if err != nil {
+		t.Fatalf("expected update to succeed, got: %v", err)
+	}
+
+	// 2. Blocked when checked in
+	repo.teams[teamID].IsCheckedIn = true
+	err = svc.UpdateTeamPlayer(ctx, 100, p.ID, "AnotherNick", "12345", "1001", "Mid")
+	if err == nil || !strings.Contains(err.Error(), "Check-in") {
+		t.Fatalf("expected error containing 'Check-in', got: %v", err)
+	}
+
+	// 3. Blocked when registration is closed
+	repo.teams[teamID].IsCheckedIn = false
+	svc.SetRegistrationOpen(ctx, false)
+	err = svc.UpdateTeamPlayer(ctx, 100, p.ID, "AnotherNick", "12345", "1001", "Mid")
+	if err == nil || !strings.Contains(err.Error(), "регистрация на турнир закрыта") {
+		t.Fatalf("expected error containing 'регистрация на турнир закрыта', got: %v", err)
+	}
+}
+
+func TestSetWinnerRollbackAndChangeWinner(t *testing.T) {
+	svc, repo := newTelegramSvc()
+	ctx := context.Background()
+
+	t1ID, t2ID, t3ID, t4ID := 1, 2, 3, 4
+	repo.teams[t1ID] = &models.TelegramTeam{ID: t1ID, Name: "TeamAlpha"}
+	repo.teams[t2ID] = &models.TelegramTeam{ID: t2ID, Name: "TeamBeta"}
+	repo.teams[t3ID] = &models.TelegramTeam{ID: t3ID, Name: "TeamGamma"}
+	repo.teams[t4ID] = &models.TelegramTeam{ID: t4ID, Name: "TeamDelta"}
+
+	// Single elimination 4-team bracket:
+	// Round 1: Match 1 (Alpha vs Beta), Match 2 (Gamma vs Delta)
+	// Round 2: Match 3 (Winner M1 vs Winner M2)
+	repo.bracket = []models.BracketMatch{
+		{ID: 1, Round: 1, PlayOrder: 1, Team1ID: &t1ID, Team2ID: &t2ID, Team1Name: "TeamAlpha", Team2Name: "TeamBeta", State: models.BracketOpen},
+		{ID: 2, Round: 1, PlayOrder: 2, Team1ID: &t3ID, Team2ID: &t4ID, Team1Name: "TeamGamma", Team2Name: "TeamDelta", State: models.BracketOpen},
+		{ID: 3, Round: 2, PlayOrder: 3, State: models.BracketPending},
+	}
+
+	// 1. SetWinnerDirect: TeamAlpha wins Match 1
+	err := svc.SetWinnerDirect(ctx, 1, "TeamAlpha", 2, 0)
+	if err != nil {
+		t.Fatalf("SetWinnerDirect failed: %v", err)
+	}
+	if repo.bracket[0].State != models.BracketComplete || *repo.bracket[0].WinnerID != t1ID {
+		t.Fatalf("expected Match 1 complete with Alpha winner, got state %s, winner %v", repo.bracket[0].State, repo.bracket[0].WinnerID)
+	}
+	if repo.bracket[2].Team1ID == nil || *repo.bracket[2].Team1ID != t1ID {
+		t.Fatalf("expected Alpha propagated to Match 3 Team1ID, got: %v", repo.bracket[2].Team1ID)
+	}
+
+	// 2. ChangeWinnerDirect: Admin realized TeamBeta actually won (e.g. dispute / misclick)
+	err = svc.ChangeWinnerDirect(ctx, 1, "TeamBeta", 2, 1)
+	if err != nil {
+		t.Fatalf("ChangeWinnerDirect failed: %v", err)
+	}
+	if *repo.bracket[0].WinnerID != t2ID || repo.bracket[0].ScoresCSV != "2-1" {
+		t.Fatalf("expected Match 1 updated to TeamBeta winner (2-1), got %v (%s)", repo.bracket[0].WinnerID, repo.bracket[0].ScoresCSV)
+	}
+	if repo.bracket[2].Team1ID == nil || *repo.bracket[2].Team1ID != t2ID {
+		t.Fatalf("expected Match 3 Team1ID safely swapped to TeamBeta, got: %v", repo.bracket[2].Team1ID)
+	}
+
+	// 3. RollbackMatch: Admin resets Match 1
+	err = svc.RollbackMatch(ctx, 1)
+	if err != nil {
+		t.Fatalf("RollbackMatch failed: %v", err)
+	}
+	if repo.bracket[0].State != models.BracketOpen || repo.bracket[0].WinnerID != nil || repo.bracket[0].ScoresCSV != "" {
+		t.Fatalf("expected Match 1 reset to BracketOpen without winner/score, got: %+v", repo.bracket[0])
+	}
+	if repo.bracket[2].Team1ID != nil {
+		t.Fatalf("expected Match 3 Team1ID revoked back to nil, got: %v", repo.bracket[2].Team1ID)
+	}
+
+	// 4. Downstream safety check: if next round match is already complete, rollback must be rejected
+	_ = svc.SetWinnerDirect(ctx, 1, "TeamAlpha", 2, 0)
+	repo.bracket[2].State = models.BracketComplete
+	err = svc.RollbackMatch(ctx, 1)
+	if err == nil || !strings.Contains(err.Error(), "следующего раунда уже завершён") {
+		t.Fatalf("expected rollback error when downstream match complete, got: %v", err)
+	}
+}
+
+

@@ -153,6 +153,8 @@
         }
         .status-ready { background: rgba(46, 204, 113, 0.15); color: var(--accent-green); border: 1px solid rgba(46, 204, 113, 0.3); }
         .status-waiting { background: rgba(243, 156, 18, 0.15); color: var(--accent-gold); border: 1px solid rgba(243, 156, 18, 0.3); }
+        .status-danger { background: rgba(231, 76, 60, 0.15); color: var(--accent-red); border: 1px solid rgba(231, 76, 60, 0.3); }
+        .status-blue { background: rgba(52, 152, 219, 0.15); color: #3498db; border: 1px solid rgba(52, 152, 219, 0.3); }
 
         .status-dot {
             display: inline-block;
@@ -169,6 +171,14 @@
         .status-waiting .status-dot {
             background: var(--accent-gold);
             box-shadow: 0 0 6px var(--accent-gold);
+        }
+        .status-danger .status-dot {
+            background: var(--accent-red);
+            box-shadow: 0 0 6px var(--accent-red);
+        }
+        .status-blue .status-dot {
+            background: #3498db;
+            box-shadow: 0 0 6px #3498db;
         }
 
         .vs-divider {
@@ -277,6 +287,16 @@
             border: 1px solid var(--card-border);
             border-radius: 12px;
             padding: 12px;
+            cursor: pointer;
+            transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+        }
+        .bracket-match:hover {
+            border-color: rgba(52, 152, 219, 0.45);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+        }
+        .bracket-match:active {
+            transform: translateY(0);
         }
         .bracket-match-header {
             display: flex;
@@ -322,6 +342,69 @@
             background: rgba(255, 255, 255, 0.05);
             color: var(--text-muted);
             border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .bracket-match.my-bracket-match {
+            border: 1px solid var(--accent-blue) !important;
+            background: linear-gradient(135deg, rgba(52, 152, 219, 0.08), rgba(26, 28, 40, 0.95)) !important;
+            box-shadow: 0 0 14px rgba(52, 152, 219, 0.2) !important;
+        }
+        .timer-box.timer-paused {
+            background: linear-gradient(135deg, rgba(243, 156, 18, 0.12), rgba(243, 156, 18, 0.05)) !important;
+            border-color: rgba(243, 156, 18, 0.4) !important;
+        }
+        /* Match Step Badges */
+        .match-step-badge {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 8px;
+            padding: 6px 2px;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 3px;
+            transition: all 0.2s ease;
+        }
+        .match-step-badge .step-num {
+            font-size: 10px;
+            font-weight: 800;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--text-muted);
+        }
+        .match-step-badge .step-name {
+            font-size: 9px;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+        .match-step-badge.done {
+            background: rgba(46, 204, 113, 0.08);
+            border-color: rgba(46, 204, 113, 0.25);
+        }
+        .match-step-badge.done .step-num {
+            background: var(--accent-green);
+            color: #0b1e12;
+        }
+        .match-step-badge.done .step-name {
+            color: var(--accent-green);
+        }
+        .match-step-badge.active {
+            background: rgba(52, 152, 219, 0.15);
+            border-color: var(--accent-blue);
+            box-shadow: 0 0 10px rgba(52, 152, 219, 0.2);
+        }
+        .match-step-badge.active .step-num {
+            background: var(--accent-blue);
+            color: #fff;
+        }
+        .match-step-badge.active .step-name {
+            color: #fff;
+            font-weight: 700;
         }
         @keyframes pulseGlow {
             0% { transform: scale(0.9); opacity: 0.7; }
@@ -658,6 +741,73 @@
             object-fit: contain;
         }
 
+        /* Multi-screenshot picker */
+        .shot-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+        .shot-thumb {
+            position: relative;
+            aspect-ratio: 1 / 1;
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid var(--card-border);
+            background: #0f1017;
+        }
+        .shot-thumb img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+        .shot-remove {
+            position: absolute;
+            top: 3px;
+            right: 3px;
+            /* 30px, not the 22px this started at: a thumbnail is deleted with a
+               thumb on a phone, and a near-miss wipes the wrong screenshot. */
+            width: 30px;
+            height: 30px;
+            border: none;
+            border-radius: 50%;
+            background: rgba(10, 11, 16, 0.85);
+            color: #fff;
+            font-size: 18px;
+            line-height: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            padding: 0;
+        }
+        .shot-remove:active { background: var(--accent-red); }
+        .shot-index {
+            position: absolute;
+            bottom: 4px;
+            left: 4px;
+            background: rgba(10, 11, 16, 0.85);
+            color: var(--text-muted);
+            font-size: 10px;
+            font-weight: 700;
+            padding: 1px 5px;
+            border-radius: 4px;
+        }
+        .shot-counter {
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--text-muted);
+            font-family: monospace;
+        }
+        .shot-hint {
+            font-size: 11px;
+            color: var(--accent-gold);
+            margin-bottom: 10px;
+            display: none;
+        }
+        .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
         .status-disqualified {
             background: rgba(231, 76, 60, 0.15);
             color: var(--accent-red);
@@ -686,6 +836,15 @@
 
     <!-- Tab 1: Match Desk -->
     <main id="tabMatch" class="tab-content active">
+        <!-- Network Disconnect Warning Banner -->
+        <div id="networkWarningBanner" style="display: none; background: rgba(231, 76, 60, 0.15); border: 1px solid rgba(231, 76, 60, 0.35); border-radius: 12px; padding: 10px 14px; margin-bottom: 12px; font-size: 12px; color: #ff6b6b; align-items: center; justify-content: space-between;">
+            <span style="display:flex; align-items:center; gap:8px;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                <span id="networkWarningText">Проблема со связью. Повтор...</span>
+            </span>
+            <button class="btn-copy" onclick="loadActiveMatch()" style="padding: 4px 8px; font-size: 11px;">Повторить</button>
+        </div>
+
         <div id="matchLoading" class="card" style="text-align: center; color: var(--text-muted);">
             Загрузка данных матча...
         </div>
@@ -697,24 +856,182 @@
                     <circle cx="12" cy="11" r="3"/>
                 </svg>
             </div>
-            <h3 style="margin-bottom: 8px; font-size: 16px;">Нет активного матча</h3>
-            <p style="font-size: 13px; color: var(--text-muted);">
+            <h3 id="noMatchTitle" style="margin-bottom: 8px; font-size: 16px;">Нет активного матча</h3>
+            <div id="noMatchDesc" style="font-size: 13px; color: var(--text-muted); line-height: 1.5;">
                 Матч появится здесь, как только стартует ваш раунд турнирной сетки.
+            </div>
+        </div>
+
+        <!-- Advanced to Next Round Screen -->
+        <div id="matchAdvancedCard" class="card" style="display: none; text-align: center; padding: 28px 20px; border: 1px solid rgba(46, 204, 113, 0.35); background: linear-gradient(180deg, rgba(46, 204, 113, 0.08) 0%, rgba(18, 20, 29, 0.95) 100%);">
+            <div style="width: 56px; height: 56px; margin: 0 auto 14px; border-radius: 50%; background: rgba(46, 204, 113, 0.15); display: flex; align-items: center; justify-content: center; border: 1px solid rgba(46, 204, 113, 0.4);">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#2ecc71" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/>
+                    <path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/>
+                    <path d="M4 22h16"/>
+                    <path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/>
+                </svg>
+            </div>
+            <div style="display: inline-block; padding: 3px 10px; border-radius: 12px; background: rgba(46, 204, 113, 0.2); color: #2ecc71; font-size: 11px; font-weight: 700; text-transform: uppercase; margin-bottom: 8px;" id="advBadge">
+                ПОБЕДА В РАУНДЕ
+            </div>
+            <h3 style="font-size: 18px; font-weight: 800; color: #fff; margin-bottom: 6px;" id="advTitle">
+                Вы прошли в следующий раунд!
+            </h3>
+            <div style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;" id="advSubtitle">
+                Матч завершён со счётом 2-0
+            </div>
+
+            <div style="background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; padding: 14px; margin-bottom: 16px; text-align: left;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <span style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">Следующий этап</span>
+                    <span class="status-pill status-waiting" style="font-size: 10px;"><span class="status-dot live-pulse"></span> ОЖИДАНИЕ</span>
+                </div>
+                <div style="font-size: 14px; font-weight: 700; color: var(--accent-blue); margin-bottom: 6px;" id="advNextRound">
+                    1/32 Финала
+                </div>
+                <div style="font-size: 12px; color: #c8cfe0; line-height: 1.4;" id="advOpponentInfo">
+                    Ожидаем завершения параллельного матча. Как только определится победитель пары, комната лобби откроется автоматически.
+                </div>
+                <div id="advSchedTimeRow" style="margin-top: 8px; font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 6px;">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                    <span>Ориентировочное время старта: <strong style="color:#fff;" id="advSchedTimeVal">—</strong></span>
+                </div>
+            </div>
+
+            <button class="btn btn-blue" onclick="switchTab('bracket')">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="M15 9h6"/><path d="M15 15h6"/></svg>
+                <span>Смотреть турнирную сетку</span>
+            </button>
+        </div>
+
+        <!-- Eliminated from Tournament Screen -->
+        <div id="matchEliminatedCard" class="card" style="display: none; text-align: center; padding: 28px 20px; border: 1px solid rgba(231, 76, 60, 0.25); background: linear-gradient(180deg, rgba(231, 76, 60, 0.06) 0%, rgba(18, 20, 29, 0.95) 100%);">
+            <div style="width: 56px; height: 56px; margin: 0 auto 14px; border-radius: 50%; background: rgba(231, 76, 60, 0.12); display: flex; align-items: center; justify-content: center; border: 1px solid rgba(231, 76, 60, 0.3);">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#e74c3c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="15" y1="9" x2="9" y2="15"/>
+                    <line x1="9" y1="9" x2="15" y2="15"/>
+                </svg>
+            </div>
+            <div style="display: inline-block; padding: 3px 10px; border-radius: 12px; background: rgba(231, 76, 60, 0.15); color: #e74c3c; font-size: 11px; font-weight: 700; text-transform: uppercase; margin-bottom: 8px;">
+                ТУРНИР ЗАВЕРШЁН
+            </div>
+            <h3 style="font-size: 18px; font-weight: 800; color: #fff; margin-bottom: 6px;" id="elimTitle">
+                Поражение в матче
+            </h3>
+            <div style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;" id="elimSubtitle">
+                Счёт 0-2
+            </div>
+
+            <p style="font-size: 13px; color: #a0a6b8; line-height: 1.5; margin-bottom: 20px;">
+                Ваша команда выбывает из турнирной сетки. Спасибо за участие и достойную игру! Вы можете продолжить следить за ходом турнира.
             </p>
+
+            <button class="btn btn-blue" onclick="switchTab('bracket')">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="M15 9h6"/><path d="M15 15h6"/></svg>
+                <span>Смотреть турнирную сетку</span>
+            </button>
+        </div>
+
+        <!-- Tournament Champion Screen -->
+        <div id="matchChampionCard" class="card" style="display: none; text-align: center; padding: 32px 20px; border: 1px solid rgba(243, 156, 18, 0.4); background: linear-gradient(180deg, rgba(243, 156, 18, 0.12) 0%, rgba(18, 20, 29, 0.95) 100%);">
+            <div style="display: inline-block; padding: 3px 12px; border-radius: 12px; background: rgba(243, 156, 18, 0.2); color: #f39c12; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;">
+                ЧЕМПИОНЫ ТУРНИРА
+            </div>
+            <h3 style="font-size: 22px; font-weight: 900; color: #fff; margin-bottom: 6px;">
+                ТРИУМФ И ПОБЕДА!
+            </h3>
+            <div style="font-size: 13px; color: var(--text-muted); margin-bottom: 20px;" id="champSubtitle">
+                Победа в Гранд-Финале
+            </div>
+
+            <button class="btn btn-gold" onclick="switchTab('bracket')">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>
+                <span>Итоговая сетка турнира</span>
+            </button>
         </div>
 
         <div id="matchCard" style="display: none;">
             <div class="card">
                 <div class="card-header">
-                    <span class="card-title" id="matchHeader">Матч #1</span>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span class="card-title" id="matchHeader">Матч #1</span>
+                        <span id="matchRoundHeader" class="badge-role" style="background: rgba(52, 152, 219, 0.15); color: #3498db; font-size: 11px;">1/4 Финала</span>
+                    </div>
                     <span class="status-pill status-ready" id="matchStatusPill">
                         <span class="status-dot"></span> <span id="matchStatusText">ИДЁТ</span>
                     </span>
                 </div>
 
+                <!-- Match Paused Banner -->
+                <div id="matchPauseBanner" style="display: none; background: rgba(243, 156, 18, 0.15); border: 1px solid rgba(243, 156, 18, 0.4); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; font-size: 12px; color: #f39c12;">
+                    <div style="display: flex; align-items: center; gap: 8px; font-weight: 700; margin-bottom: 2px;">
+                        <span>МАТЧ ПРИОСТАНОВЛЕН СУДЬЁЙ</span>
+                    </div>
+                    <div style="font-size: 11px; color: rgba(255, 255, 255, 0.8);">
+                        Таймеры заморожены. Администратор рассматривает обращение. Ожидайте инструкций.
+                    </div>
+                </div>
+
+                <!-- Match Scheduled Time Notice -->
+                <div id="matchScheduleNotice" style="background: rgba(52, 152, 219, 0.08); border: 1px solid rgba(52, 152, 219, 0.2); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; font-size: 12px; color: #3498db; display: flex; align-items: center; justify-content: space-between;">
+                    <span style="display: flex; align-items: center; gap: 6px;">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                        <span>Время начала матча:</span>
+                    </span>
+                    <strong id="matchScheduledTimeVal" style="color: #fff;">18:00 (МСК)</strong>
+                </div>
+
+                <!-- Step Guidance Banner: Что делать прямо сейчас -->
+                <div id="matchStepGuide" style="background: #13151f; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; padding: 12px; margin-bottom: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">Что делать сейчас</span>
+                        <span id="stepProgressIndicator" style="font-size: 11px; color: var(--accent-blue); font-weight: 700;">Шаг 1 из 4</span>
+                    </div>
+                    <div id="stepInstructionText" style="font-size: 12px; font-weight: 600; color: #fff; line-height: 1.4; margin-bottom: 10px;">
+                        Подтвердите готовность к матчу до истечения таймера.
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px;">
+                        <div class="match-step-badge active" id="stepBadge1">
+                            <span class="step-num">1</span>
+                            <span class="step-name">Готовность</span>
+                        </div>
+                        <div class="match-step-badge" id="stepBadge2">
+                            <span class="step-num">2</span>
+                            <span class="step-name">Ожидание</span>
+                        </div>
+                        <div class="match-step-badge" id="stepBadge3">
+                            <span class="step-num">3</span>
+                            <span class="step-name">Лобби</span>
+                        </div>
+                        <div class="match-step-badge" id="stepBadge4">
+                            <span class="step-num">4</span>
+                            <span class="step-name">Результат</span>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="timer-box" id="timerBox">
-                    <div class="timer-label">Дедлайн подтверждения</div>
+                    <div class="timer-label" id="timerLabel">Дедлайн подтверждения</div>
                     <div class="timer-value" id="timerValue">10:00</div>
+                </div>
+
+                <!-- Match Protocol Badges -->
+                <div id="matchProtocolBox" style="display: flex; gap: 6px; margin: 10px 0; flex-wrap: wrap;">
+                    <span class="status-pill" id="matchFormatPill" style="background: rgba(52, 152, 219, 0.15); color: #3498db; border: 1px solid rgba(52, 152, 219, 0.3);">
+                        <span id="matchFormatText">BO1</span>
+                    </span>
+                    <span class="status-pill" id="matchSidePill" style="background: rgba(46, 204, 113, 0.15); color: #2ecc71; border: 1px solid rgba(46, 204, 113, 0.3);">
+                        <span id="matchSideText">Синяя сторона (1st Pick)</span>
+                    </span>
+                    <span class="status-pill" id="matchHostPill" style="background: rgba(243, 156, 18, 0.15); color: #f39c12; border: 1px solid rgba(243, 156, 18, 0.3);">
+                        <span id="matchHostText">Вы создаете лобби</span>
+                    </span>
+                </div>
+
+                <div id="roomRulesBox" style="background: #11131c; border: 1px dashed var(--card-border); border-radius: 8px; padding: 8px 10px; margin-bottom: 12px; font-size: 11px; color: var(--text-muted);">
+                    <span id="roomRulesText">Режим: Custom → Draft Pick 5v5 | Наблюдатели: Выкл</span>
                 </div>
 
                 <div class="vs-container">
@@ -735,7 +1052,13 @@
 
                 <div class="info-row">
                     <span class="info-label">Капитан соперника</span>
-                    <span class="info-val" id="oppCaptain">@rival</span>
+                    <span class="info-val" style="display: flex; align-items: center; gap: 6px;">
+                        <span id="oppCaptain">@rival</span>
+                        <button id="btnOppCaptainChat" class="btn-copy" onclick="openOpponentChat()" style="display: none; color: var(--accent-blue); border-color: rgba(52, 152, 219, 0.3); padding: 3px 8px; font-size: 11px;">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                            <span>Написать</span>
+                        </button>
+                    </span>
                 </div>
                 <div class="info-row">
                     <span class="info-label">Game ID соперника</span>
@@ -752,6 +1075,8 @@
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
                     <span id="btnReadyText">ПОДТВЕРДИТЬ ГОТОВНОСТЬ</span>
                 </button>
+                <div id="btnReadySubtext" style="display: none; text-align: center; font-size: 11px; color: var(--text-muted); margin-top: 5px; margin-bottom: 6px;"></div>
+
                 <button class="btn btn-blue" id="btnReportResult" onclick="openReportModal()" style="display: none;">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/>
@@ -778,6 +1103,10 @@
                 <span>Обновить</span>
             </button>
         </div>
+        <div style="margin-bottom: 12px; position: relative;">
+            <input type="text" id="bracketSearchInput" class="form-input" placeholder="🔍 Поиск команды или матча (#12)..." oninput="filterBracket(this.value)" style="padding-left: 36px;">
+            <svg style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none;" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        </div>
         <div id="bracketList" class="bracket-tree">
             <!-- Dynamically populated -->
         </div>
@@ -786,24 +1115,45 @@
     <!-- Tab 3: Team Roster -->
     <main id="tabTeam" class="tab-content">
         <!-- Empty / No Team State -->
-        <div id="noTeamCard" class="card" style="display: none; text-align: center; padding: 34px 20px;">
-            <div class="empty-icon-box">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
-                    <circle cx="9" cy="7" r="4"/>
-                    <line x1="17" y1="8" x2="23" y2="14"/>
-                    <line x1="23" y1="8" x2="17" y2="14"/>
-                </svg>
+        <div id="noTeamCard" class="card" style="display: none; padding: 20px 16px;">
+            <h3 style="font-size: 16px; margin-bottom: 4px; text-align: center;">Вы не состоите в команде</h3>
+            <p style="font-size: 12px; color: var(--text-muted); text-align: center; margin-bottom: 20px;">Создайте новую команду или вступите по ссылке-приглашению</p>
+
+            <!-- Create Team Section -->
+            <div style="background: #1b1d2a; border: 1px solid var(--card-border); border-radius: 10px; padding: 14px; margin-bottom: 14px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <div style="font-size: 13px; font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 6px;">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="16" y1="11" x2="22" y2="11"/></svg>
+                        Создать команду
+                    </div>
+                    <span id="createTeamCharCount" style="font-size: 11px; color: var(--text-muted);">0 / 64</span>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                    <input type="text" id="createTeamNameInput" placeholder="Название команды"
+                        style="flex: 1; background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 8px; padding: 9px 12px; color: var(--text-main); font-size: 13px; outline: none;"
+                        maxlength="64"
+                        oninput="document.getElementById('createTeamCharCount').textContent = this.value.length + ' / 64'" />
+                    <button class="btn btn-green" id="btnCreateTeam" style="padding: 9px 14px; flex-shrink: 0;" onclick="createTeam()">
+                        Создать
+                    </button>
+                </div>
+                <div id="createTeamError" style="display:none; font-size:11px; color:var(--accent-red); margin-top:6px;"></div>
             </div>
-            <h3 style="margin-bottom: 8px; font-size: 16px;">Вы не состоите в команде</h3>
-            <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">
-                Для участия в турнире капитан должен зарегистрировать команду.
-            </p>
-            <div style="background: #1b1d2a; border: 1px solid var(--card-border); border-radius: 10px; padding: 12px; font-size: 12px; text-align: left; color: var(--text-muted); line-height: 1.6;">
-                <strong style="color: var(--text-main); display: block; margin-bottom: 4px;">Как зарегистрироваться:</strong>
-                1. Перейдите в чат с ботом <span style="color: var(--text-main);">@Blackwatch_mlbbbot</span><br>
-                2. Отправьте команду <code style="color: var(--accent-blue); font-weight: bold;">/reg_team</code><br>
-                3. Укажите название и добавьте 5 игроков
+
+            <!-- Join Team Section -->
+            <div style="background: #1b1d2a; border: 1px solid var(--card-border); border-radius: 10px; padding: 14px;">
+                <div style="font-size: 13px; font-weight: 700; color: var(--text-main); margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+                    Вступить по ссылке
+                </div>
+                <div style="display: flex; gap: 8px;">
+                    <input type="text" id="joinTokenInput" placeholder="Код приглашения (напр. 7-AbCd1234)"
+                        style="flex: 1; background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 8px; padding: 9px 12px; color: var(--text-main); font-size: 13px; outline: none; font-family: monospace;" />
+                    <button class="btn btn-blue" id="btnJoinTeam" style="padding: 9px 14px; flex-shrink: 0;" onclick="joinTeam()">
+                        Войти
+                    </button>
+                </div>
+                <div id="joinTeamError" style="display:none; font-size:11px; color:var(--accent-red); margin-top:6px;"></div>
             </div>
         </div>
 
@@ -824,21 +1174,44 @@
             <div id="checkInNotice" style="display: none; font-size: 11px; color: var(--text-muted); margin-top: 8px; text-align: center;">
                 Только капитан команды может подтвердить или снять Check-in.
             </div>
+
+            <!-- Invite Section (captain only) -->
+            <div id="inviteSection" style="display: none; margin-top: 14px; border-top: 1px solid var(--card-border); padding-top: 14px;">
+                <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">
+                    Пригласите игроков в команду — поделитесь кодом. Каждая генерация сбрасывает старый.
+                </div>
+                <div id="inviteTokenBox" style="display: none; background: #1b1d2a; border: 1px solid var(--card-border); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; font-family: monospace; font-size: 13px; color: var(--accent-blue); word-break: break-all;" id="inviteTokenText"></div>
+                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                    <button class="btn-copy" id="btnGenerateInvite" style="flex: 1; min-width: 160px; justify-content: center;" onclick="generateInvite()">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+                        <span id="btnInviteText">Получить код приглашения</span>
+                    </button>
+                    <button class="btn-copy" id="btnCopyInvite" style="display:none; padding: 8px 10px;" onclick="copyInviteToken()" title="Скопировать код">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                        <span>Копировать</span>
+                    </button>
+                    <button class="btn-copy" id="btnShareInvite" style="display:none; padding: 8px 10px; color: var(--accent-blue);" onclick="shareInviteTelegram()" title="Поделиться в Telegram">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                        <span>В Telegram</span>
+                    </button>
+                </div>
+            </div>
         </div>
 
         <!-- Roster Card -->
         <div id="rosterCard" class="card" style="display: none;">
             <div class="card-header">
                 <span class="card-title">Состав игроков</span>
+                <span id="rosterSlotsBadge" style="font-size: 11px; color: var(--text-muted);"></span>
             </div>
             
-            <!-- Roster Lock Notice (Shown when Checked In) -->
+            <!-- Roster Lock Notice (Shown when Checked In or Registration Closed) -->
             <div id="rosterLockedNotice" style="display: none; background: rgba(243, 156, 18, 0.1); border: 1px solid rgba(243, 156, 18, 0.25); border-radius: 8px; padding: 10px 12px; font-size: 12px; color: var(--accent-gold); margin-bottom: 12px; align-items: center; gap: 8px;">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;">
                     <rect width="18" height="11" x="3" y="11" rx="2" ry="2"/>
                     <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
                 </svg>
-                <span>Состав зафиксирован (Check-in пройден). Чтобы изменить данные или состав игроков, сначала отмените Check-in.</span>
+                <span id="rosterLockedText">Состав зафиксирован (Roster Lock). Изменение состава заблокировано.</span>
             </div>
 
             <div id="rosterList">
@@ -874,7 +1247,7 @@
         <div class="admin-stats-grid">
             <div class="stat-card">
                 <div class="stat-value" id="statActiveMatches" style="color: var(--accent-blue);">0</div>
-                <div class="stat-label">Матчей идёт</div>
+                <div class="stat-label">Активных пар</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" id="statDisputes" style="color: var(--accent-red);">0</div>
@@ -905,6 +1278,11 @@
         <!-- Section 2: Active Matches -->
         <div class="admin-section-header">
             <span>Активные матчи турнира</span>
+            <span id="adminMatchesCount" style="font-size: 11px; color: var(--text-muted);"></span>
+        </div>
+        <div style="margin-bottom: 12px; position: relative;">
+            <input type="text" id="adminMatchesSearch" class="form-input" placeholder="🔍 Поиск по команде или номеру матча (#26)..." oninput="filterAdminMatches(this.value)" style="padding-left: 36px;">
+            <svg style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none;" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
         </div>
         <div id="adminMatchesList">
             <!-- Dynamically populated -->
@@ -927,7 +1305,15 @@
             </div>
             <div id="adminDebtorsList">
                 <!-- Dynamically populated -->
-            </div>
+        </div>
+
+        <!-- Section 4: Match Archive -->
+        <div class="admin-section-header">
+            <span>Архив матчей (Завершённые)</span>
+            <span id="statArchivedBadge" class="badge-role" style="background: rgba(46, 204, 113, 0.2); color: var(--accent-green);">0</span>
+        </div>
+        <div id="adminArchivedMatchesList">
+            <!-- Dynamically populated -->
         </div>
     </main>
 
@@ -1015,11 +1401,11 @@
             </div>
             <div class="form-group">
                 <label class="form-label">Game ID</label>
-                <input type="text" id="editPlayerGameID" class="form-input" placeholder="Например: 12345678">
+                <input type="text" id="editPlayerGameID" class="form-input" placeholder="Например: 12345678" inputmode="numeric" pattern="[0-9]*">
             </div>
             <div class="form-group">
                 <label class="form-label">Zone ID (Сервер)</label>
-                <input type="text" id="editPlayerZoneID" class="form-input" placeholder="Например: 1001">
+                <input type="text" id="editPlayerZoneID" class="form-input" placeholder="Например: 1001" inputmode="numeric" pattern="[0-9]*">
             </div>
             <div class="form-group">
                 <label class="form-label">Основная роль</label>
@@ -1059,30 +1445,38 @@
             <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 14px;">
                 <div style="flex: 1;">
                     <label class="form-label" id="myTeamScoreLabel" style="font-size: 11px;">Моя команда</label>
-                    <input type="number" class="form-input" id="reportMyScore" value="2" min="0" max="10" style="text-align: center; font-size: 18px; font-weight: bold; font-family: monospace;">
+                    <input type="number" class="form-input" id="reportMyScore" value="2" min="0" max="10" inputmode="numeric" style="text-align: center; font-size: 18px; font-weight: bold; font-family: monospace;">
                 </div>
                 <div style="font-size: 20px; font-weight: bold; color: var(--accent-red); padding-top: 14px;">:</div>
                 <div style="flex: 1;">
                     <label class="form-label" id="oppTeamScoreLabel" style="font-size: 11px;">Соперник</label>
-                    <input type="number" class="form-input" id="reportOppScore" value="0" min="0" max="10" style="text-align: center; font-size: 18px; font-weight: bold; font-family: monospace;">
+                    <input type="number" class="form-input" id="reportOppScore" value="0" min="0" max="10" inputmode="numeric" style="text-align: center; font-size: 18px; font-weight: bold; font-family: monospace;">
                 </div>
             </div>
 
             <div class="form-group">
-                <label class="form-label">Скриншот победы (пруф):</label>
-                <div class="screenshot-preview-box" onclick="document.getElementById('reportScreenshotInput').click()">
-                    <input type="file" id="reportScreenshotInput" accept="image/*" style="display: none;" onchange="handleScreenshotSelected(event)">
-                    <div id="screenshotPrompt" style="display: flex; flex-direction: column; align-items: center; gap: 6px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                    <label class="form-label" style="margin-bottom: 0;">Скриншоты победы (пруф):</label>
+                    <span class="shot-counter" id="shotCounter">0 / 5</span>
+                </div>
+
+                <div class="shot-grid" id="shotGrid" style="display: none;"></div>
+
+                <input type="file" id="reportScreenshotInput" accept="image/*" multiple style="display: none;" onchange="handleScreenshotSelected(event)">
+                <div class="screenshot-preview-box" id="shotAddBox" onclick="document.getElementById('reportScreenshotInput').click()">
+                    <div style="display: flex; flex-direction: column; align-items: center; gap: 6px;">
                         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent-blue)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>
                             <circle cx="9" cy="9" r="2"/>
                             <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>
                         </svg>
-                        <span style="font-size: 12px; color: var(--text-muted);">Нажмите, чтобы прикрепить скриншот</span>
+                        <span style="font-size: 12px; color: var(--text-muted);" id="shotAddLabel">Нажмите, чтобы прикрепить скриншоты</span>
+                        <span style="font-size: 11px; color: var(--text-muted); opacity: 0.7;">можно выбрать сразу несколько, до 5</span>
                     </div>
-                    <img id="screenshotPreviewImg" class="screenshot-preview-img" alt="Скриншот матча">
                 </div>
             </div>
+
+            <div class="shot-hint" id="shotHint">Приложите хотя бы один скриншот — без него результат не примут.</div>
 
             <button class="btn btn-blue" id="btnSubmitReport" onclick="submitMatchReport()">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
@@ -1113,8 +1507,9 @@
             </div>
 
             <div class="form-group">
-                <label class="form-label">Счёт матча:</label>
-                <input type="text" id="techWinScore" class="form-input" value="2:0" style="text-align: center; font-family: monospace; font-weight: bold;">
+                <label class="form-label">Счёт матча (необязательно):</label>
+                <input type="text" id="techWinScore" class="form-input" placeholder="Авто: 1:0 (BO1) / 2:0 (BO3)" style="text-align: center; font-family: monospace; font-weight: bold;">
+                <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px; text-align: center;">При ТП счёт подставится автоматически</div>
             </div>
 
             <button class="btn btn-gold" id="btnConfirmTechWin" onclick="confirmTechWinSubmit()">
@@ -1144,6 +1539,113 @@
         </div>
     </div>
 
+    <!-- Admin Rollback Modal -->
+    <div class="modal" id="rollbackModal">
+        <div class="modal-content">
+            <div class="modal-title" style="color: var(--accent-red);">Откат результата матча</div>
+            <p style="font-size: 13px; color: var(--text-main); margin-bottom: 12px; line-height: 1.5;">
+                Вы уверены, что хотите сбросить результат матча <strong id="rollbackMatchInfo" style="color: var(--accent-gold);"></strong>?
+            </p>
+            <div style="background: rgba(231, 76, 60, 0.1); border: 1px solid rgba(231, 76, 60, 0.25); border-radius: 8px; padding: 10px; font-size: 11px; color: var(--accent-red); margin-bottom: 14px; line-height: 1.4;">
+                <strong>Что произойдёт:</strong><br>
+                1. Победитель будет отозван из слота следующего раунда (сетка очистится обратно в TBD).<br>
+                2. Матч вернётся в статус активного со свежим 10-минутным дедлайном подготовки.<br>
+                3. Капитаны снова смогут зайти в лобби и подтвердить результат.
+            </div>
+            <button class="btn btn-red-outline" onclick="confirmRollbackSubmit()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
+                <span>Подтвердить откат матча</span>
+            </button>
+            <button class="btn btn-copy" style="width: 100%; justify-content: center; padding: 11px; margin-top: 8px;" onclick="closeRollbackModal()">Отмена</button>
+        </div>
+    </div>
+
+    <!-- Admin Change Winner Modal -->
+    <div class="modal" id="changeWinnerModal">
+        <div class="modal-content">
+            <div class="modal-title">Сменить победителя матча</div>
+            <div class="form-group">
+                <label class="form-label">Выберите нового победителя:</label>
+                <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 6px;">
+                    <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
+                        <input type="radio" name="changeWinnerTeam" id="changeWinnerTeam1" value="">
+                        <span id="changeWinnerTeam1Label">Team 1</span>
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
+                        <input type="radio" name="changeWinnerTeam" id="changeWinnerTeam2" value="">
+                        <span id="changeWinnerTeam2Label">Team 2</span>
+                    </label>
+                </div>
+            </div>
+            <div class="form-group" style="margin-top: 10px;">
+                <label class="form-label">Итоговый счёт (необязательно):</label>
+                <input type="text" id="changeWinnerScore" class="form-input" placeholder="Авто: 1:0 (BO1) / 2:0 (BO3)">
+            </div>
+            <div style="background: rgba(52, 152, 219, 0.08); border: 1px solid rgba(52, 152, 219, 0.2); border-radius: 8px; padding: 8px 10px; font-size: 11px; color: #3498db; margin-bottom: 12px;">
+                Победитель автоматически заменит предыдущую команду в следующем раунде сетки.
+            </div>
+            <button class="btn btn-green" onclick="confirmChangeWinnerSubmit()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Сохранить победителя</span>
+            </button>
+            <button class="btn btn-red-outline" onclick="closeChangeWinnerModal()">Отмена</button>
+        </div>
+    </div>
+
+    <!-- Match Audit Log Modal -->
+    <div class="modal" id="auditLogModal">
+        <div class="modal-content" style="max-height: 80vh; display: flex; flex-direction: column;">
+            <div class="modal-title" id="auditLogTitle">Журнал событий матча</div>
+            <div id="auditLogEventsList" style="flex: 1; overflow-y: auto; margin: 12px 0; display: flex; flex-direction: column; gap: 8px;">
+                <!-- Dynamically populated -->
+            </div>
+            <button class="btn btn-copy" style="width: 100%; justify-content: center; padding: 11px;" onclick="closeAuditLogModal()">Закрыть</button>
+        </div>
+    </div>
+
+    <!-- Bracket Match & Roster Details Modal -->
+    <div class="modal" id="bracketMatchModal">
+        <div class="modal-content" style="max-height: 88vh; display: flex; flex-direction: column; padding: 18px 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
+                <div>
+                    <div class="modal-title" id="bmModalTitle" style="margin-bottom: 2px;">Матч #...</div>
+                    <div id="bmModalSubtitle" style="font-size: 11px; color: var(--text-muted);">Раунд // Время // Формат</div>
+                </div>
+                <div id="bmModalStatus"></div>
+            </div>
+
+            <!-- Score / Header -->
+            <div style="background: rgba(0,0,0,0.3); border: 1px solid var(--card-border); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+                <div style="flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                    <div id="bmTeam1Header" style="font-weight: 700; font-size: 13px;">Команда 1</div>
+                </div>
+                <div id="bmScoreHeader" style="font-family: monospace; font-size: 16px; font-weight: 800; padding: 0 10px; color: var(--accent-gold); white-space: nowrap;">
+                    — : —
+                </div>
+                <div style="flex: 1; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                    <div id="bmTeam2Header" style="font-weight: 700; font-size: 13px;">Команда 2</div>
+                </div>
+            </div>
+
+            <!-- Team Tabs Switcher -->
+            <div style="display: flex; gap: 6px; margin-bottom: 10px;">
+                <button id="bmTabBtn1" class="btn btn-copy active" style="flex: 1; justify-content: center; font-size: 12px;" onclick="switchBMTeam(1)">
+                    <span id="bmTabLabel1" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Команда 1</span>
+                </button>
+                <button id="bmTabBtn2" class="btn btn-copy" style="flex: 1; justify-content: center; font-size: 12px;" onclick="switchBMTeam(2)">
+                    <span id="bmTabLabel2" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Команда 2</span>
+                </button>
+            </div>
+
+            <!-- Roster Content Area -->
+            <div id="bmRosterContainer" style="flex: 1; overflow-y: auto; margin-bottom: 12px; min-height: 140px;">
+                <!-- Dynamically populated roster list -->
+            </div>
+
+            <button class="btn btn-copy" style="width: 100%; justify-content: center; padding: 11px;" onclick="closeBracketMatchModal()">Закрыть</button>
+        </div>
+    </div>
+
     <script>
         const tg = window.Telegram?.WebApp;
         let initData = "";
@@ -1160,7 +1662,11 @@
         let currentMatchGeneration = 0;
         let currentMyTeamName = "";
         let currentOppTeamName = "";
-        let selectedScreenshotBase64 = "";
+        // Screenshots attached to the pending match report, as data URLs.
+        // Kept in attach order: the referee reads them the way the captain
+        // stacked them.
+        let selectedScreenshots = [];
+        const MAX_SCREENSHOTS = 5;
 
         // Admin State Tracking
         let adminDeskData = null;
@@ -1205,15 +1711,58 @@
             }, 3000);
         }
 
-        // Native Telegram Back Button integration for Android/iOS
+        let currentActiveMatchData = null;
+        let mainButtonAction = null;
+
+        function onMainButtonClick() {
+            if (typeof mainButtonAction === 'function') {
+                mainButtonAction();
+            }
+        }
+        if (tg?.MainButton) {
+            tg.MainButton.onClick(onMainButtonClick);
+        }
+
+        // Native Telegram Back Button & Main Button integration
         function updateBackButton() {
-            if (!tg?.BackButton) return;
+            if (tg?.BackButton) {
+                const anyModalActive = document.querySelector('.modal.active');
+                const activeTab = document.querySelector('.tab-content.active');
+                if (anyModalActive || (activeTab && activeTab.id !== 'tabMatch')) {
+                    tg.BackButton.show();
+                } else {
+                    tg.BackButton.hide();
+                }
+            }
+            updateMainButton();
+        }
+
+        function updateMainButton(m = currentActiveMatchData) {
+            if (!tg?.MainButton) return;
             const anyModalActive = document.querySelector('.modal.active');
-            const activeTab = document.querySelector('.tab-content.active');
-            if (anyModalActive || (activeTab && activeTab.id !== 'tabMatch')) {
-                tg.BackButton.show();
+            if (anyModalActive || currentTab !== 'tabMatch' || !m || m.is_paused) {
+                mainButtonAction = null;
+                tg.MainButton.hide();
+                return;
+            }
+
+            if (!m.my_ready && m.can_ready && currentUserIsCaptain) {
+                mainButtonAction = confirmReady;
+                tg.MainButton.setText('ПОДТВЕРДИТЬ ГОТОВНОСТЬ');
+                tg.MainButton.color = '#2ecc71';
+                tg.MainButton.textColor = '#0b1e12';
+                tg.MainButton.enable();
+                tg.MainButton.show();
+            } else if (m.my_ready && m.opponent_ready && currentUserIsCaptain) {
+                mainButtonAction = openReportModal;
+                tg.MainButton.setText('ВНЕСТИ РЕЗУЛЬТАТ МАТЧА');
+                tg.MainButton.color = '#3498db';
+                tg.MainButton.textColor = '#ffffff';
+                tg.MainButton.enable();
+                tg.MainButton.show();
             } else {
-                tg.BackButton.hide();
+                mainButtonAction = null;
+                tg.MainButton.hide();
             }
         }
 
@@ -1239,21 +1788,49 @@
                 const res = await fetch(url, options);
                 const data = await res.json();
                 if (!res.ok) {
-                    return { ok: false, error: data.error || data.message || 'Ошибка сервера' };
+                    return {
+                        ok: false,
+                        is_auth_error: res.status === 401,
+                        status: res.status,
+                        error: data.error || data.message || 'Ошибка сервера'
+                    };
                 }
                 return data;
             } catch (err) {
                 console.error("API error:", err);
-                return { ok: false, error: 'Ошибка соединения с сервером' };
+                return {
+                    ok: false,
+                    is_network_error: true,
+                    error: 'Ошибка соединения с сервером'
+                };
             }
         }
 
         function haptic(type = 'light') {
-            if (tg?.HapticFeedback) {
-                if (type === 'success') tg.HapticFeedback.notificationOccurred('success');
-                else if (type === 'warning') tg.HapticFeedback.notificationOccurred('warning');
-                else tg.HapticFeedback.impactOccurred('light');
-            }
+            // Haptic feedback disabled per user preference
+        }
+
+        function appConfirm(message) {
+            return new Promise((resolve) => {
+                if (window.Telegram?.WebApp?.showConfirm) {
+                    window.Telegram.WebApp.showConfirm(message, (confirmed) => {
+                        resolve(Boolean(confirmed));
+                    });
+                } else {
+                    resolve(window.confirm(message));
+                }
+            });
+        }
+
+        function appAlert(message) {
+            return new Promise((resolve) => {
+                if (window.Telegram?.WebApp?.showAlert) {
+                    window.Telegram.WebApp.showAlert(message, () => resolve());
+                } else {
+                    window.alert(message);
+                    resolve();
+                }
+            });
         }
 
         function switchTab(tabId, el) {
@@ -1311,12 +1888,24 @@
                     document.getElementById('teamProfileCard').style.display = 'block';
                     document.getElementById('rosterCard').style.display = 'block';
                     document.getElementById('teamProfileName').textContent = data.team.name;
+                    currentMyTeamName = data.team.name;
                     cachedTeammates = data.teammates || [];
                     const isCaptain = data.player ? data.player.is_captain : false;
                     currentUserIsCaptain = isCaptain;
-                    updateCheckInStatus(data.team.is_checked_in, isCaptain);
-                    const canEdit = isCaptain && !data.team.is_checked_in;
+                    const regOpen = data.registration_open !== false;
+                    updateCheckInStatus(data.team.is_checked_in, isCaptain, regOpen);
+                    const canEdit = isCaptain && !data.team.is_checked_in && regOpen;
                     renderRoster(cachedTeammates, canEdit);
+
+                    // Sync captain action buttons if active match is loaded
+                    const btnReport = document.getElementById('btnReportResult');
+                    if (btnReport) btnReport.style.display = currentUserIsCaptain ? 'flex' : 'none';
+                    if (currentActiveMatchData) {
+                        updateMainButton(currentActiveMatchData);
+                        if (typeof updateMatchStepGuide === 'function') {
+                            updateMatchStepGuide(currentActiveMatchData);
+                        }
+                    }
                 } else {
                     document.getElementById('noTeamCard').style.display = 'block';
                     document.getElementById('teamProfileCard').style.display = 'none';
@@ -1328,8 +1917,13 @@
         function renderRoster(players, canEdit) {
             const list = document.getElementById('rosterList');
             list.innerHTML = "";
+
+            // Update slots badge
+            const slotsBadge = document.getElementById('rosterSlotsBadge');
+            if (slotsBadge) slotsBadge.textContent = `${players.length} / 7 игроков`;
+
             if (!players.length) {
-                list.innerHTML = `<div style="color:var(--text-muted); font-size:13px; text-align:center; padding:10px;">Состав не заполнен</div>`;
+                list.innerHTML = `<div style="color:var(--text-muted); font-size:13px; text-align:center; padding:10px;">Состав не заполнен — пригласите игроков по ссылке</div>`;
                 return;
             }
             players.forEach((p, idx) => {
@@ -1342,10 +1936,20 @@
                 const pZoneId = p.zone_id || '';
 
                 const editBtn = canEdit ? `
-                    <button class="btn-edit-player" onclick="openEditModal(${p.id}, '${escapeAttr(pNick)}', '${escapeAttr(pGameId)}', '${escapeAttr(pZoneId)}', '${escapeAttr(pRole)}')" title="Редактировать игрока">
+                    <button class="btn-edit-player" onclick="openEditModal(${p.id}, '${escapeAttr(pNick)}', '${escapeAttr(pGameId)}', '${escapeAttr(pZoneId)}', '${escapeAttr(pRole)}')\" title="Редактировать игрока">
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
                         </svg>
+                    </button>
+                ` : '';
+
+                // Kick and transfer captain: only captain can do it, and not on themselves
+                const captainActions = (canEdit && currentUserIsCaptain && !p.is_captain) ? `
+                    <button class="btn-edit-player" onclick="kickPlayer(${p.id}, '${escapeAttr(pNick)}')" title="Исключить из команды" style="color: var(--accent-red); margin-left:2px;">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                    <button class="btn-edit-player" onclick="transferCaptain(${p.id}, '${escapeAttr(pNick)}')" title="Назначить капитаном" style="color: var(--accent-gold); margin-left:2px;">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7zm3 16h14"/></svg>
                     </button>
                 ` : '';
 
@@ -1360,6 +1964,7 @@
                     <div style="display:flex; align-items:center;">
                         <div class="badge-role">${escapeHtml(pRole)}</div>
                         ${editBtn}
+                        ${captainActions}
                     </div>
                 `;
                 list.appendChild(item);
@@ -1367,7 +1972,7 @@
         }
 
         let demoCheckedIn = false;
-        function updateCheckInStatus(isChecked, isCaptain = true) {
+        function updateCheckInStatus(isChecked, isCaptain = true, regOpen = true) {
             demoCheckedIn = isChecked;
             currentTeamCheckedIn = isChecked;
             currentUserIsCaptain = isCaptain;
@@ -1378,6 +1983,8 @@
             const btnText = document.getElementById('btnCheckInText');
             const notice = document.getElementById('checkInNotice');
             const lockedNotice = document.getElementById('rosterLockedNotice');
+            const lockedText = document.getElementById('rosterLockedText');
+            const inviteSection = document.getElementById('inviteSection');
 
             if (isChecked) {
                 badge.className = 'status-pill status-ready';
@@ -1385,6 +1992,14 @@
                 btnText.textContent = 'Отменить Check-in';
                 btn.className = 'btn btn-red-outline';
                 lockedNotice.style.display = 'flex';
+                if (lockedText) lockedText.textContent = 'Состав зафиксирован (Check-in пройден). Чтобы изменить данные игроков, сначала отмените Check-in.';
+            } else if (!regOpen) {
+                badge.className = 'status-pill status-waiting';
+                badgeText.textContent = 'НЕ ПОДТВЕРЖДЕНО';
+                btnText.textContent = 'Подтвердить участие (Check-in)';
+                btn.className = 'btn btn-green';
+                lockedNotice.style.display = 'flex';
+                if (lockedText) lockedText.textContent = 'Состав зафиксирован (Roster Lock). Регистрация на турнир закрыта, изменение состава заблокировано.';
             } else {
                 badge.className = 'status-pill status-waiting';
                 badgeText.textContent = 'НЕ ПОДТВЕРЖДЕНО';
@@ -1398,11 +2013,14 @@
                 btn.style.opacity = '0.5';
                 btn.style.cursor = 'not-allowed';
                 notice.style.display = 'block';
+                if (inviteSection) inviteSection.style.display = 'none';
             } else {
                 btn.disabled = false;
                 btn.style.opacity = '1';
                 btn.style.cursor = 'pointer';
                 notice.style.display = 'none';
+                // Show invite section if not checked-in and reg is open
+                if (inviteSection) inviteSection.style.display = (!isChecked && regOpen) ? 'block' : 'none';
             }
         }
 
@@ -1425,6 +2043,200 @@
                 showToast('Ошибка при выполнении чек-ина', false);
             }
         }
+
+        // ── Пачка 4: In-app registration & roster management ──────────────────
+
+        let _currentInviteToken = '';
+        let _isCreatingTeam = false;
+        let _isJoiningTeam = false;
+        let _isGeneratingInvite = false;
+        let _isKickingPlayer = false;
+        let _isTransferringCaptain = false;
+
+        async function createTeam() {
+            if (_isCreatingTeam) return;
+            const name = document.getElementById('createTeamNameInput').value.trim();
+            const errEl = document.getElementById('createTeamError');
+            errEl.style.display = 'none';
+            if (!name) {
+                errEl.textContent = 'Введите название команды';
+                errEl.style.display = 'block';
+                return;
+            }
+            if (!initData) {
+                showToast('Создание команды доступно только в Telegram', false);
+                return;
+            }
+            const btn = document.getElementById('btnCreateTeam');
+            if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
+            _isCreatingTeam = true;
+            try {
+                const res = await apiFetch('/api/team/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name })
+                });
+                if (res && res.ok) {
+                    showToast('Команда «' + name + '» создана!', true);
+                    loadProfile();
+                } else {
+                    const msg = (res && (res.error || res.message)) || 'Ошибка при создании команды';
+                    errEl.textContent = msg;
+                    errEl.style.display = 'block';
+                }
+            } finally {
+                _isCreatingTeam = false;
+                if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+            }
+        }
+
+        async function joinTeam() {
+            if (_isJoiningTeam) return;
+            const token = document.getElementById('joinTokenInput').value.trim();
+            const errEl = document.getElementById('joinTeamError');
+            errEl.style.display = 'none';
+            if (!token) {
+                errEl.textContent = 'Введите код приглашения';
+                errEl.style.display = 'block';
+                return;
+            }
+            if (!initData) {
+                showToast('Вступление доступно только в Telegram', false);
+                return;
+            }
+            const btn = document.getElementById('btnJoinTeam');
+            if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
+            _isJoiningTeam = true;
+            try {
+                const res = await apiFetch('/api/team/join', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token })
+                });
+                if (res && res.ok) {
+                    showToast('Вы успешно вступили в команду!', true);
+                    loadProfile();
+                } else {
+                    const msg = (res && (res.error || res.message)) || 'Неверный или устаревший код';
+                    errEl.textContent = msg;
+                    errEl.style.display = 'block';
+                }
+            } finally {
+                _isJoiningTeam = false;
+                if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+            }
+        }
+
+        async function generateInvite() {
+            if (_isGeneratingInvite) return;
+            if (!initData) {
+                const mockToken = '1-MockToken';
+                _currentInviteToken = mockToken;
+                document.getElementById('inviteTokenBox').textContent = mockToken;
+                document.getElementById('inviteTokenBox').style.display = 'block';
+                const copyBtn = document.getElementById('btnCopyInvite');
+                if (copyBtn) copyBtn.style.display = 'inline-flex';
+                const shareBtn = document.getElementById('btnShareInvite');
+                if (shareBtn) shareBtn.style.display = 'inline-flex';
+                document.getElementById('btnInviteText').textContent = 'Обновить код';
+                return;
+            }
+            const btn = document.getElementById('btnGenerateInvite');
+            if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
+            _isGeneratingInvite = true;
+            try {
+                const res = await apiFetch('/api/team/invite', { method: 'POST' });
+                if (res && res.ok && res.token) {
+                    _currentInviteToken = res.token;
+                    const box = document.getElementById('inviteTokenBox');
+                    box.textContent = res.token;
+                    box.style.display = 'block';
+                    const copyBtn = document.getElementById('btnCopyInvite');
+                    if (copyBtn) copyBtn.style.display = 'inline-flex';
+                    const shareBtn = document.getElementById('btnShareInvite');
+                    if (shareBtn) shareBtn.style.display = 'inline-flex';
+                    document.getElementById('btnInviteText').textContent = 'Обновить код';
+                    showToast('Код приглашения сгенерирован', true);
+                } else {
+                    showToast((res && (res.error || res.message)) || 'Ошибка генерации кода', false);
+                }
+            } finally {
+                _isGeneratingInvite = false;
+                if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+            }
+        }
+
+        function copyInviteToken() {
+            if (!_currentInviteToken) return;
+            robustCopy(_currentInviteToken);
+            showToast('Код скопирован: ' + _currentInviteToken, true);
+        }
+
+        function shareInviteTelegram() {
+            if (!_currentInviteToken) return;
+            const shareText = `Присоединяйся к моей команде в турнире Valhalla Cup! Код приглашения: ${_currentInviteToken}`;
+            const botUrl = 'https://t.me/Blackwatch_mlbbbot';
+            const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(botUrl)}&text=${encodeURIComponent(shareText)}`;
+            if (window.Telegram?.WebApp?.openTelegramLink) {
+                window.Telegram.WebApp.openTelegramLink(shareUrl);
+            } else {
+                window.open(shareUrl, '_blank');
+            }
+        }
+
+        async function kickPlayer(playerId, playerNick) {
+            if (_isKickingPlayer) return;
+            const confirmed = await appConfirm(`Исключить игрока «${playerNick}» из команды?`);
+            if (!confirmed) return;
+            if (!initData) {
+                showToast('Исключение доступно только в Telegram', false);
+                return;
+            }
+            _isKickingPlayer = true;
+            try {
+                const res = await apiFetch('/api/team/kick', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ player_id: playerId })
+                });
+                if (res && res.ok) {
+                    showToast('Игрок «' + playerNick + '» исключён', true);
+                    loadProfile();
+                } else {
+                    showToast((res && (res.error || res.message)) || 'Ошибка при исключении', false);
+                }
+            } finally {
+                _isKickingPlayer = false;
+            }
+        }
+
+        async function transferCaptain(playerId, playerNick) {
+            if (_isTransferringCaptain) return;
+            const confirmed = await appConfirm(`Передать капитанство игроку «${playerNick}»? Вы потеряете права капитана.`);
+            if (!confirmed) return;
+            if (!initData) {
+                showToast('Передача капитанства доступна только в Telegram', false);
+                return;
+            }
+            _isTransferringCaptain = true;
+            try {
+                const res = await apiFetch('/api/team/transfer', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ player_id: playerId })
+                });
+                if (res && res.ok) {
+                    showToast('Капитанство передано «' + playerNick + '»', true);
+                    loadProfile();
+                } else {
+                    showToast((res && (res.error || res.message)) || 'Ошибка передачи капитанства', false);
+                }
+            } finally {
+                _isTransferringCaptain = false;
+            }
+        }
+
+        // ── End Пачка 4 ────────────────────────────────────────────────────────
 
         // Edit Player Modal Functions
         function openEditModal(id, nick, gameId, zoneId, role) {
@@ -1510,16 +2322,187 @@
             }
         }
 
+        // Match Step Guide
+        function updateMatchStepGuide(m) {
+            const guide = document.getElementById('matchStepGuide');
+            if (!guide) return;
+            if (!m) {
+                guide.style.display = 'none';
+                return;
+            }
+            guide.style.display = 'block';
+
+            const pIndicator = document.getElementById('stepProgressIndicator');
+            const pText = document.getElementById('stepInstructionText');
+            const b1 = document.getElementById('stepBadge1');
+            const b2 = document.getElementById('stepBadge2');
+            const b3 = document.getElementById('stepBadge3');
+            const b4 = document.getElementById('stepBadge4');
+
+            [b1, b2, b3, b4].forEach(b => {
+                if (b) { b.classList.remove('active', 'done'); }
+            });
+
+            if (m.is_paused) {
+                if (pIndicator) pIndicator.textContent = 'ПАУЗА';
+                if (pText) pText.innerHTML = '<strong>Матч приостановлен</strong>: Судья турнира заморозил таймеры. Следите за указаниями в чате.';
+                if (m.my_ready && b1) b1.classList.add('done');
+                return;
+            }
+
+            if (!m.my_ready) {
+                if (pIndicator) pIndicator.textContent = 'Шаг 1 из 4';
+                if (pText) {
+                    if (currentUserIsCaptain) {
+                        pText.innerHTML = '<strong>Подтвердите готовность</strong>: Нажмите кнопку «ПОДТВЕРДИТЬ ГОТОВНОСТЬ» до истечения таймера.';
+                    } else {
+                        pText.innerHTML = '<strong>Ожидание капитана</strong>: Капитан вашей команды должен подтвердить готовность к матчу.';
+                    }
+                }
+                if (b1) b1.classList.add('active');
+            } else if (!m.opponent_ready) {
+                if (pIndicator) pIndicator.textContent = 'Шаг 2 из 4';
+                if (pText) pText.innerHTML = '<strong>Ожидание соперника</strong>: Ваша готовность подтверждена. Ждём команду ' + escapeHtml(m.opponent_team_name || 'соперника') + '.';
+                if (b1) b1.classList.add('done');
+                if (b2) b2.classList.add('active');
+            } else {
+                if (b1) b1.classList.add('done');
+                if (b2) b2.classList.add('done');
+                if (b3) b3.classList.add('active');
+                if (pIndicator) pIndicator.textContent = 'Шаг 3 из 4';
+                if (m.is_host) {
+                    pText.innerHTML = '<strong>Вы создаёте лобби</strong>: Откройте MLBB → Custom → Draft Pick 5v5 → Пригласите соперника по Game ID (кнопка копирования ниже).';
+                } else {
+                    pText.innerHTML = '<strong>Ожидайте инвайт</strong>: Капитан ' + escapeHtml(m.host_team_name || 'соперника') + ' создаёт лобби в игре. Примите инвайт в MLBB!';
+                }
+            }
+        }
+
+        function openOpponentChat() {
+            haptic('light');
+            const oppEl = document.getElementById('oppCaptain');
+            const capText = oppEl ? oppEl.textContent.trim() : '';
+            if (!capText || capText === '—') {
+                showToast('Username капитана соперника не указан', false);
+                return;
+            }
+            const username = capText.replace(/^@/, '');
+            const tgUrl = 'https://t.me/' + username;
+            if (tg?.openTelegramLink) {
+                tg.openTelegramLink(tgUrl);
+            } else {
+                window.open(tgUrl, '_blank');
+            }
+        }
+
+        async function robustCopy(text) {
+            if (!text) return false;
+            if (navigator.clipboard && window.isSecureContext) {
+                try {
+                    await navigator.clipboard.writeText(text);
+                    return true;
+                } catch (e) {
+                    console.warn("navigator.clipboard failed:", e);
+                }
+            }
+            try {
+                const textArea = document.createElement("textarea");
+                textArea.value = text;
+                textArea.style.position = "fixed";
+                textArea.style.left = "-999999px";
+                textArea.style.top = "-999999px";
+                textArea.setAttribute("readonly", "");
+                document.body.appendChild(textArea);
+                textArea.focus();
+                textArea.select();
+                const successful = document.execCommand('copy');
+                document.body.removeChild(textArea);
+                return successful;
+            } catch (err) {
+                console.error("execCommand fallback failed:", err);
+                return false;
+            }
+        }
+
+        let isMatchPaused = false;
+
+        function clearDeadlineTimer() {
+            if (deadlineTimer) {
+                clearInterval(deadlineTimer);
+                deadlineTimer = null;
+            }
+        }
+
+        function startCountdown() {
+            clearDeadlineTimer();
+            updateTimerDisplay();
+            if (isMatchPaused || remainingSeconds <= 0) {
+                return;
+            }
+            deadlineTimer = setInterval(() => {
+                if (remainingSeconds > 0) {
+                    remainingSeconds--;
+                    updateTimerDisplay();
+                } else {
+                    clearDeadlineTimer();
+                    updateTimerDisplay();
+                }
+            }, 1000);
+        }
+
+        function updateTimerDisplay() {
+            const timerBox = document.getElementById('timerBox');
+            const timerVal = document.getElementById('timerValue');
+            const timerLabel = document.getElementById('timerLabel');
+            if (!timerBox || !timerVal) return;
+
+            if (isMatchPaused) {
+                timerBox.classList.add('timer-paused');
+                timerVal.textContent = 'ПАУЗА';
+                timerVal.style.color = 'var(--accent-gold)';
+                if (timerLabel) timerLabel.textContent = 'ТАЙМЕР ЗАМОРОЖЕН СУДЬЁЙ';
+                return;
+            }
+
+            if (currentActiveMatchData && currentActiveMatchData.my_ready && currentActiveMatchData.opponent_ready) {
+                timerBox.classList.remove('timer-paused');
+                timerVal.textContent = 'В ИГРЕ';
+                timerVal.style.color = 'var(--accent-green)';
+                if (timerLabel) timerLabel.textContent = 'ОБЕ КОМАНДЫ ГОТОВЫ';
+                return;
+            }
+
+            timerBox.classList.remove('timer-paused');
+            if (timerLabel) timerLabel.textContent = 'Дедлайн подтверждения';
+            const mins = Math.floor(Math.max(0, remainingSeconds) / 60);
+            const secs = Math.max(0, remainingSeconds) % 60;
+            timerVal.textContent = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+            if (remainingSeconds <= 60 && remainingSeconds > 0) {
+                timerVal.style.color = 'var(--accent-red)';
+            } else if (remainingSeconds <= 0) {
+                timerVal.style.color = 'var(--text-muted)';
+            } else {
+                timerVal.style.color = 'var(--accent-red)';
+            }
+        }
+
         // Load Active Match Desk
         let demoMyReady = false;
         async function loadActiveMatch(silent = false) {
-            if (!silent) {
-                document.getElementById('matchLoading').style.display = 'none';
+            const loadingEl = document.getElementById('matchLoading');
+            const netWarning = document.getElementById('networkWarningBanner');
+            const matchCard = document.getElementById('matchCard');
+            const noMatchCard = document.getElementById('noMatchCard');
+
+            if (!silent && matchCard.style.display !== 'block' && noMatchCard.style.display !== 'block') {
+                if (loadingEl) loadingEl.style.display = 'block';
             }
 
             if (!initData) {
-                document.getElementById('noMatchCard').style.display = 'none';
-                document.getElementById('matchCard').style.display = 'block';
+                if (loadingEl) loadingEl.style.display = 'none';
+                if (netWarning) netWarning.style.display = 'none';
+                noMatchCard.style.display = 'none';
+                matchCard.style.display = 'block';
 
                 document.getElementById('matchHeader').textContent = 'РАУНД 1 // МАТЧ #1';
                 currentMyTeamName = 'Valhalla Tigers';
@@ -1538,23 +2521,46 @@
                 oppPill.className = 'status-pill status-ready';
 
                 document.getElementById('oppCaptain').textContent = '@shadow_cap';
+                const chatBtn = document.getElementById('btnOppCaptainChat');
+                if (chatBtn) chatBtn.style.display = 'inline-flex';
                 currentOpponentID = '98765432 (1001)';
                 document.getElementById('oppGameID').textContent = currentOpponentID;
 
                 const btnReady = document.getElementById('btnReady');
                 const btnReadyText = document.getElementById('btnReadyText');
+                const btnReadySubtext = document.getElementById('btnReadySubtext');
                 if (demoMyReady) {
                     btnReadyText.textContent = 'ГОТОВНОСТЬ ПОДТВЕРЖДЕНА';
                     btnReady.disabled = true;
-                    btnReady.style.opacity = '0.6';
+                    btnReady.style.opacity = '0.7';
+                    btnReady.style.cursor = 'default';
+                    if (btnReadySubtext) {
+                        btnReadySubtext.textContent = 'Обе команды готовы. Начинайте лобби в MLBB!';
+                        btnReadySubtext.style.display = 'block';
+                    }
                 } else {
                     btnReadyText.textContent = 'ПОДТВЕРДИТЬ ГОТОВНОСТЬ';
                     btnReady.disabled = false;
                     btnReady.style.opacity = '1';
+                    btnReady.style.cursor = 'pointer';
+                    if (btnReadySubtext) btnReadySubtext.style.display = 'none';
                 }
 
                 const btnReport = document.getElementById('btnReportResult');
-                if (btnReport) btnReport.style.display = 'flex';
+                if (btnReport) btnReport.style.display = currentUserIsCaptain ? 'flex' : 'none';
+
+                isMatchPaused = false;
+                currentActiveMatchData = {
+                    match_id: 1,
+                    my_ready: demoMyReady,
+                    can_ready: !demoMyReady,
+                    opponent_ready: true,
+                    is_paused: false,
+                    is_host: true,
+                    opponent_team_name: 'Shadow Ravens'
+                };
+                updateMatchStepGuide(currentActiveMatchData);
+                updateMainButton(currentActiveMatchData);
 
                 if (!deadlineTimer) {
                     remainingSeconds = 582;
@@ -1564,22 +2570,111 @@
             }
 
             const data = await apiFetch('/api/match/active');
+            if (loadingEl) loadingEl.style.display = 'none';
+
+            if (!data || data.ok === false) {
+                if (data && (data.is_network_error || data.is_auth_error)) {
+                    if (netWarning) {
+                        netWarning.style.display = 'flex';
+                        document.getElementById('networkWarningText').textContent = data.error || 'Ошибка соединения с сервером';
+                    }
+                    if (matchCard.style.display === 'block') {
+                        return; // Keep existing match desk visible on transient network error
+                    }
+                    noMatchCard.style.display = 'block';
+                    document.getElementById('noMatchTitle').textContent = 'Связь потеряна';
+                    document.getElementById('noMatchDesc').innerHTML = 'Не удалось загрузить данные матча.<br><button class="btn btn-copy btn-sm" onclick="loadActiveMatch()" style="margin-top:10px;">Повторить попытку</button>';
+                    return;
+                }
+            }
+
+            if (netWarning) netWarning.style.display = 'none';
+
+            const advCard = document.getElementById('matchAdvancedCard');
+            const elimCard = document.getElementById('matchEliminatedCard');
+            const champCard = document.getElementById('matchChampionCard');
+            if (advCard) advCard.style.display = 'none';
+            if (elimCard) elimCard.style.display = 'none';
+            if (champCard) champCard.style.display = 'none';
+
             if (!data || !data.has_match || !data.match) {
-                document.getElementById('noMatchCard').style.display = 'block';
-                document.getElementById('matchCard').style.display = 'none';
+                currentActiveMatchData = null;
+                matchCard.style.display = 'none';
+                clearDeadlineTimer();
+                updateMainButton(null);
+
+                const tStatus = data ? data.tournament_status : null;
+                if (tStatus && tStatus.status === 'champion') {
+                    noMatchCard.style.display = 'none';
+                    if (champCard) {
+                        champCard.style.display = 'block';
+                        const cSub = document.getElementById('champSubtitle');
+                        if (cSub) cSub.textContent = `Победа в Гранд-Финале (${tStatus.score || '1-0'}) против ${tStatus.opponent_name || 'соперника'}`;
+                    }
+                    return;
+                } else if (tStatus && tStatus.status === 'advanced') {
+                    noMatchCard.style.display = 'none';
+                    if (advCard) {
+                        advCard.style.display = 'block';
+                        const aTitle = document.getElementById('advTitle');
+                        if (aTitle) aTitle.textContent = `Вы прошли в ${tStatus.next_round_name || 'следующий раунд'}!`;
+                        const aSub = document.getElementById('advSubtitle');
+                        if (aSub) aSub.textContent = `${tStatus.last_round_name || 'Предыдущий раунд'}: победа со счётом ${tStatus.score || '—'} против ${tStatus.opponent_name || 'соперника'}`;
+                        const aNext = document.getElementById('advNextRound');
+                        if (aNext) aNext.textContent = `Этап: ${tStatus.next_round_name || 'Следующий раунд'}`;
+                        const aOpp = document.getElementById('advOpponentInfo');
+                        if (aOpp) {
+                            if (tStatus.waiting_opponents) {
+                                aOpp.innerHTML = `Ожидаем завершения параллельного матча: <strong>${escapeHtml(tStatus.waiting_opponents)}</strong>. Как только определится победитель пары, комната лобби откроется автоматически.`;
+                            } else {
+                                aOpp.textContent = 'Ожидаем завершения параллельных матчей сетки. Как только определится соперник, деск откроется автоматически.';
+                            }
+                        }
+                        const aTimeRow = document.getElementById('advSchedTimeRow');
+                        const aTimeVal = document.getElementById('advSchedTimeVal');
+                        if (aTimeRow && aTimeVal) {
+                            if (tStatus.next_scheduled_time) {
+                                aTimeRow.style.display = 'flex';
+                                aTimeVal.textContent = tStatus.next_scheduled_time;
+                            } else {
+                                aTimeRow.style.display = 'none';
+                            }
+                        }
+                    }
+                    return;
+                } else if (tStatus && tStatus.status === 'eliminated') {
+                    noMatchCard.style.display = 'none';
+                    if (elimCard) {
+                        elimCard.style.display = 'block';
+                        const eTitle = document.getElementById('elimTitle');
+                        if (eTitle) eTitle.textContent = `Поражение в ${tStatus.last_round_name || 'матче'}`;
+                        const eSub = document.getElementById('elimSubtitle');
+                        if (eSub) eSub.textContent = `Счёт ${tStatus.score || '—'} против ${tStatus.opponent_name || 'соперника'}`;
+                    }
+                    return;
+                }
+
+                noMatchCard.style.display = 'block';
+                document.getElementById('noMatchTitle').textContent = 'Нет активного матча';
+                document.getElementById('noMatchDesc').textContent = 'Матч появится здесь, как только стартует ваш раунд турнирной сетки.';
                 return;
             }
 
             const m = data.match;
+            currentActiveMatchData = m;
             currentActiveMatchID = m.match_id;
             currentMatchGeneration = m.generation;
             currentMyTeamName = m.my_team_name;
             currentOppTeamName = m.opponent_team_name;
 
-            document.getElementById('noMatchCard').style.display = 'none';
-            document.getElementById('matchCard').style.display = 'block';
+            noMatchCard.style.display = 'none';
+            matchCard.style.display = 'block';
 
             document.getElementById('matchHeader').textContent = `МАТЧ #${m.number}`;
+            const roundHeaderEl = document.getElementById('matchRoundHeader');
+            if (roundHeaderEl) roundHeaderEl.textContent = m.round_name || `Раунд ${m.round || 1}`;
+            const schedTimeEl = document.getElementById('matchScheduledTimeVal');
+            if (schedTimeEl) schedTimeEl.textContent = m.scheduled_time || 'По готовности';
             document.getElementById('myTeamName').textContent = m.my_team_name;
             document.getElementById('oppTeamName').textContent = m.opponent_team_name;
 
@@ -1594,19 +2689,98 @@
             oppPill.className = 'status-pill ' + (m.opponent_ready ? 'status-ready' : 'status-waiting');
 
             document.getElementById('oppCaptain').textContent = m.opponent_captain_username || '—';
+            const chatBtn = document.getElementById('btnOppCaptainChat');
+            if (chatBtn) {
+                chatBtn.style.display = (m.opponent_captain_username && m.opponent_captain_username !== '—') ? 'inline-flex' : 'none';
+            }
+
             currentOpponentID = m.opponent_captain_game_id || '—';
             document.getElementById('oppGameID').textContent = currentOpponentID;
 
+            // Pause Banner
+            const pauseBanner = document.getElementById('matchPauseBanner');
+            if (pauseBanner) {
+                pauseBanner.style.display = m.is_paused ? 'block' : 'none';
+            }
+            isMatchPaused = !!m.is_paused;
+
+            // Protocol badges
+            const formatText = document.getElementById('matchFormatText');
+            if (formatText) formatText.textContent = m.match_format || 'BO1';
+
+            const sideText = document.getElementById('matchSideText');
+            const sidePill = document.getElementById('matchSidePill');
+            if (sideText && sidePill) {
+                const isBlue = m.my_side === 'Blue';
+                sideText.textContent = isBlue ? 'Синяя сторона (1st Pick)' : 'Красная сторона (2nd Pick)';
+                sidePill.style.color = isBlue ? '#3498db' : '#e74c3c';
+                sidePill.style.background = isBlue ? 'rgba(52, 152, 219, 0.15)' : 'rgba(231, 76, 60, 0.15)';
+                sidePill.style.borderColor = isBlue ? 'rgba(52, 152, 219, 0.3)' : 'rgba(231, 76, 60, 0.3)';
+            }
+
+            const hostText = document.getElementById('matchHostText');
+            const hostPill = document.getElementById('matchHostPill');
+            if (hostText && hostPill) {
+                if (m.is_host) {
+                    hostText.textContent = 'Вы создаете лобби';
+                    hostPill.style.color = '#f39c12';
+                    hostPill.style.background = 'rgba(243, 156, 18, 0.15)';
+                } else {
+                    hostText.textContent = 'Ожидайте инвайт от ' + (m.host_team_name || 'соперника');
+                    hostPill.style.color = '#838a9e';
+                    hostPill.style.background = 'rgba(131, 138, 158, 0.15)';
+                }
+            }
+
+            const rulesText = document.getElementById('roomRulesText');
+            if (rulesText && m.room_rules) {
+                rulesText.textContent = m.room_rules;
+            }
+
+            // Ready Button with honest states and feedback
             const btnReady = document.getElementById('btnReady');
             const btnReadyText = document.getElementById('btnReadyText');
-            if (m.my_ready) {
+            const btnReadySubtext = document.getElementById('btnReadySubtext');
+
+            if (m.is_paused) {
+                btnReadyText.textContent = 'МАТЧ НА ПАУЗЕ';
+                btnReady.disabled = true;
+                btnReady.style.opacity = '0.5';
+                btnReady.style.cursor = 'not-allowed';
+                if (btnReadySubtext) {
+                    btnReadySubtext.textContent = 'Действия заморожены судьей на время паузы';
+                    btnReadySubtext.style.display = 'block';
+                }
+            } else if (m.my_ready) {
                 btnReadyText.textContent = 'ГОТОВНОСТЬ ПОДТВЕРЖДЕНА';
                 btnReady.disabled = true;
-                btnReady.style.opacity = '0.6';
-            } else {
+                btnReady.style.opacity = '0.7';
+                btnReady.style.cursor = 'default';
+                if (btnReadySubtext) {
+                    btnReadySubtext.textContent = m.opponent_ready ? 'Обе команды готовы. Начинайте матч в лобби MLBB!' : 'Ожидаем подтверждения от соперника...';
+                    btnReadySubtext.style.display = 'block';
+                }
+            } else if (!currentUserIsCaptain) {
+                btnReadyText.textContent = 'ОЖИДАНИЕ ГОТОВНОСТИ (КАПИТАН)';
+                btnReady.disabled = true;
+                btnReady.style.opacity = '0.5';
+                btnReady.style.cursor = 'not-allowed';
+                if (btnReadySubtext) {
+                    btnReadySubtext.textContent = 'Подтвердить готовность может только капитан команды';
+                    btnReadySubtext.style.display = 'block';
+                }
+            } else if (m.can_ready) {
                 btnReadyText.textContent = 'ПОДТВЕРДИТЬ ГОТОВНОСТЬ';
-                btnReady.disabled = !m.can_ready;
+                btnReady.disabled = false;
                 btnReady.style.opacity = '1';
+                btnReady.style.cursor = 'pointer';
+                if (btnReadySubtext) btnReadySubtext.style.display = 'none';
+            } else {
+                btnReadyText.textContent = 'ОЖИДАНИЕ СТАРТА';
+                btnReady.disabled = true;
+                btnReady.style.opacity = '0.5';
+                btnReady.style.cursor = 'not-allowed';
+                if (btnReadySubtext) btnReadySubtext.style.display = 'none';
             }
 
             const btnReport = document.getElementById('btnReportResult');
@@ -1614,30 +2788,28 @@
                 btnReport.style.display = currentUserIsCaptain ? 'flex' : 'none';
             }
 
-            remainingSeconds = m.deadline_seconds;
-            if (!deadlineTimer) {
-                startCountdown();
-            }
-        }
+            // Step guidance and Telegram MainButton
+            updateMatchStepGuide(m);
+            updateMainButton(m);
 
-        function startCountdown() {
-            if (deadlineTimer) clearInterval(deadlineTimer);
-            updateTimerDisplay();
-            deadlineTimer = setInterval(() => {
-                if (remainingSeconds > 0) {
-                    remainingSeconds--;
-                    updateTimerDisplay();
+            // Timer synchronization
+            const newSeconds = m.deadline_seconds || 0;
+            const drift = Math.abs(remainingSeconds - newSeconds);
+            remainingSeconds = newSeconds;
+
+            if (isMatchPaused) {
+                clearDeadlineTimer();
+                updateTimerDisplay();
+            } else if (remainingSeconds > 0) {
+                if (!deadlineTimer || drift > 2) {
+                    startCountdown();
                 } else {
-                    clearInterval(deadlineTimer);
+                    updateTimerDisplay();
                 }
-            }, 1000);
-        }
-
-        function updateTimerDisplay() {
-            const mins = Math.floor(remainingSeconds / 60);
-            const secs = remainingSeconds % 60;
-            document.getElementById('timerValue').textContent = 
-                `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+            } else {
+                clearDeadlineTimer();
+                updateTimerDisplay();
+            }
         }
 
         async function confirmReady() {
@@ -1657,12 +2829,18 @@
             }
         }
 
-        function copyGameID() {
-            haptic('light');
-            if (navigator.clipboard && currentOpponentID) {
-                const cleanID = currentOpponentID.split(' ')[0];
-                navigator.clipboard.writeText(cleanID);
+        async function copyGameID() {
+            if (!currentOpponentID || currentOpponentID === '—') {
+                showToast('Game ID соперника не указан', false);
+                return;
+            }
+            const cleanID = currentOpponentID.split(' ')[0];
+            const copied = await robustCopy(cleanID);
+            if (copied) {
+                haptic('light');
                 showToast(`Game ID ${cleanID} скопирован`, true);
+            } else {
+                showToast(`ID: ${cleanID} (скопируйте вручную)`, false);
             }
         }
 
@@ -1704,9 +2882,8 @@
             document.getElementById('oppTeamScoreLabel').textContent = currentOppTeamName || 'Соперник';
             selectScore(2, 0, document.querySelector('.score-btn'));
             document.getElementById('reportScreenshotInput').value = '';
-            document.getElementById('screenshotPreviewImg').style.display = 'none';
-            document.getElementById('screenshotPrompt').style.display = 'flex';
-            selectedScreenshotBase64 = '';
+            selectedScreenshots = [];
+            renderScreenshots();
             document.getElementById('reportModal').classList.add('active');
             updateBackButton();
         }
@@ -1724,23 +2901,140 @@
             document.getElementById('reportOppScore').value = opp;
         }
 
-        function handleScreenshotSelected(e) {
-            const file = e.target.files?.[0];
-            if (!file) return;
-            if (file.size > 10 * 1024 * 1024) {
-                showToast('Размер файла превышает 10 МБ', false);
+        // Shrink a screenshot before it ever becomes a data URL. A modern phone
+        // produces 4-8 MB per shot; five of those base64-encoded would push the
+        // request past 40 MB and time out on tournament-day mobile data.
+        function compressScreenshot(file, maxSide = 1600, quality = 0.8) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onerror = () => reject(new Error('Не удалось прочитать файл'));
+                reader.onload = () => {
+                    const img = new Image();
+                    img.onerror = () => reject(new Error('Не удалось открыть изображение'));
+                    img.onload = () => {
+                        const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+                        const w = Math.max(1, Math.round(img.width * scale));
+                        const h = Math.max(1, Math.round(img.height * scale));
+                        const canvas = document.createElement('canvas');
+                        canvas.width = w;
+                        canvas.height = h;
+                        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+                        try {
+                            resolve(canvas.toDataURL('image/jpeg', quality));
+                        } catch (err) {
+                            reject(new Error('Не удалось обработать изображение'));
+                        }
+                    };
+                    img.src = reader.result;
+                };
+                reader.readAsDataURL(file);
+            });
+        }
+
+        async function handleScreenshotSelected(e) {
+            const picked = Array.from(e.target.files || []);
+            // Clearing the input now means picking the same file twice in a row
+            // still fires a change event.
+            e.target.value = '';
+            if (!picked.length) return;
+
+            const room = MAX_SCREENSHOTS - selectedScreenshots.length;
+            if (room <= 0) {
+                showToast(`Уже приложено ${MAX_SCREENSHOTS} скриншотов — максимум`, false);
                 return;
             }
-            const reader = new FileReader();
-            reader.onload = function(evt) {
-                selectedScreenshotBase64 = evt.target.result;
-                const img = document.getElementById('screenshotPreviewImg');
-                img.src = selectedScreenshotBase64;
-                img.style.display = 'block';
-                document.getElementById('screenshotPrompt').style.display = 'none';
-                showToast('Скриншот прикреплён', true);
-            };
-            reader.readAsDataURL(file);
+            const accepted = picked.slice(0, room);
+            if (picked.length > room) {
+                showToast(`Добавлено ${room} из ${picked.length}: лимит ${MAX_SCREENSHOTS} скриншотов`, false);
+            }
+
+            const addBox = document.getElementById('shotAddBox');
+            const label = document.getElementById('shotAddLabel');
+            const prevLabel = label.textContent;
+            addBox.style.pointerEvents = 'none';
+            label.textContent = 'Обработка...';
+
+            let failed = 0;
+            for (const file of accepted) {
+                try {
+                    selectedScreenshots.push(await compressScreenshot(file));
+                } catch (err) {
+                    failed++;
+                    console.warn('screenshot rejected:', err);
+                }
+            }
+
+            addBox.style.pointerEvents = '';
+            label.textContent = prevLabel;
+            renderScreenshots();
+
+            if (failed) {
+                showToast(`Не удалось обработать файлов: ${failed}`, false);
+            } else {
+                haptic('light');
+            }
+        }
+
+        function removeScreenshot(index) {
+            haptic('light');
+            selectedScreenshots.splice(index, 1);
+            renderScreenshots();
+        }
+
+        // Redraws thumbnails, the counter and the submit gate from
+        // selectedScreenshots, so every path that changes the list only has to
+        // call this.
+        function renderScreenshots() {
+            const grid = document.getElementById('shotGrid');
+            const counter = document.getElementById('shotCounter');
+            const addBox = document.getElementById('shotAddBox');
+            const label = document.getElementById('shotAddLabel');
+            const hint = document.getElementById('shotHint');
+            const submit = document.getElementById('btnSubmitReport');
+            if (!grid) return;
+
+            grid.innerHTML = '';
+            selectedScreenshots.forEach((src, i) => {
+                const cell = document.createElement('div');
+                cell.className = 'shot-thumb';
+
+                const img = document.createElement('img');
+                img.src = src;
+                img.alt = `Скриншот ${i + 1}`;
+                cell.appendChild(img);
+
+                const num = document.createElement('span');
+                num.className = 'shot-index';
+                num.textContent = i + 1;
+                cell.appendChild(num);
+
+                const del = document.createElement('button');
+                del.className = 'shot-remove';
+                del.type = 'button';
+                del.textContent = '×';
+                del.title = 'Убрать скриншот';
+                del.onclick = () => removeScreenshot(i);
+                cell.appendChild(del);
+
+                grid.appendChild(cell);
+            });
+
+            const count = selectedScreenshots.length;
+            grid.style.display = count ? 'grid' : 'none';
+            counter.textContent = `${count} / ${MAX_SCREENSHOTS}`;
+            counter.style.color = count ? 'var(--accent-green)' : 'var(--text-muted)';
+
+            const full = count >= MAX_SCREENSHOTS;
+            addBox.style.display = full ? 'none' : 'block';
+            if (!full) {
+                label.textContent = count
+                    ? 'Добавить ещё скриншот'
+                    : 'Нажмите, чтобы прикрепить скриншоты';
+            }
+
+            // The button says why it is off instead of just looking dead.
+            hint.style.display = count ? 'none' : 'block';
+            submit.disabled = count === 0;
         }
 
         async function submitMatchReport() {
@@ -1754,6 +3048,10 @@
             }
             if (myScore === oppScore) {
                 showToast('В матче на выбывание не может быть ничьей', false);
+                return;
+            }
+            if (!selectedScreenshots.length) {
+                showToast('Приложите хотя бы один скриншот результата', false);
                 return;
             }
 
@@ -1776,7 +3074,7 @@
                     match_id: currentActiveMatchID,
                     my_score: myScore,
                     opp_score: oppScore,
-                    screenshot: selectedScreenshotBase64
+                    screenshots: selectedScreenshots
                 })
             });
 
@@ -1794,41 +3092,284 @@
         }
 
         // Bracket View
-        async function loadBracket() {
+        async function loadBracket(silent = false) {
             const list = document.getElementById('bracketList');
-            list.innerHTML = `<div style="text-align:center; color:var(--text-muted); padding:20px; font-size:13px;">Загрузка сетки...</div>`;
+            if (!list) return;
+            if (!silent && !list.children.length) {
+                list.innerHTML = `<div style="text-align:center; color:var(--text-muted); padding:20px; font-size:13px;">Загрузка сетки...</div>`;
+            }
             const data = await apiFetch('/api/bracket');
-            list.innerHTML = "";
             if (!data || !data.matches || !data.matches.length) {
                 list.innerHTML = `<div class="card" style="text-align:center; color:var(--text-muted); font-size:13px;">Сетка ещё не сформирована</div>`;
                 return;
             }
 
+            const roundMap = {};
+            if (data.schedule) {
+                data.schedule.forEach(s => { roundMap[s.round] = s; });
+            }
+
+            const fragment = document.createDocumentFragment();
+            let lastRound = -1;
             data.matches.forEach(m => {
+                if (m.round !== lastRound) {
+                    lastRound = m.round;
+                    const rInfo = roundMap[lastRound];
+                    const roundHeader = document.createElement('div');
+                    roundHeader.className = 'admin-section-header';
+                    roundHeader.style.marginTop = '14px';
+                    roundHeader.style.marginBottom = '8px';
+                    roundHeader.innerHTML = `
+                        <span style="display:flex; align-items:center; gap:6px;">
+                            <span>${escapeHtml(rInfo ? rInfo.round_name : 'Раунд ' + lastRound)}</span>
+                            ${rInfo && rInfo.match_format ? `<span class="badge-role" style="font-size:10px;">${escapeHtml(rInfo.match_format)}</span>` : ''}
+                        </span>
+                        <span style="font-size: 11px; color: var(--accent-blue); font-weight: 600;">
+                            ${rInfo && rInfo.scheduled_time ? escapeHtml(rInfo.scheduled_time) : ''}
+                        </span>
+                    `;
+                    fragment.appendChild(roundHeader);
+                }
+
+                const isMyMatch = currentMyTeamName && (m.team1_name === currentMyTeamName || m.team2_name === currentMyTeamName);
                 const card = document.createElement('div');
-                card.className = 'bracket-match';
+                card.className = 'bracket-match' + (isMyMatch ? ' my-bracket-match' : '');
+                card.onclick = () => openBracketMatchModal(m.id || m.play_order);
                 let statusBadge = `<span class="bracket-status status-pending">ОЖИДАНИЕ</span>`;
                 if (m.state === 'complete') {
                     statusBadge = `<span class="bracket-status status-complete">ЗАВЕРШЁН</span>`;
                 } else if (m.state === 'open') {
                     statusBadge = `<span class="bracket-status status-live"><span class="status-dot live-pulse"></span> LIVE</span>`;
                 }
+
                 card.innerHTML = `
                     <div class="bracket-match-header">
-                        <span>Раунд ${m.round} // Матч #${m.play_order}</span>
+                        <span style="display:flex; align-items:center; gap:6px;">
+                            <span>Матч #${m.play_order}</span>
+                            ${isMyMatch ? `<span class="badge-role" style="background:rgba(52,152,219,0.25); color:#3498db; font-size:9px; padding:1px 6px;">ВАШ МАТЧ</span>` : ''}
+                            <span style="font-size: 10px; color: var(--text-muted); display: inline-flex; align-items: center; gap: 2px;">• составы</span>
+                        </span>
                         <span>${statusBadge}</span>
                     </div>
                     <div class="match-row ${m.winner_id === m.team1_id ? 'winner' : ''}">
-                        <span>${escapeHtml(m.team1_name || 'Ожидание')}</span>
+                        <span style="${isMyMatch && m.team1_name === currentMyTeamName ? 'font-weight:700; color:#3498db;' : ''}">${escapeHtml(m.team1_name || 'Ожидание')}</span>
                         <span class="match-score">${escapeHtml(m.scores_csv ? m.scores_csv.split('-')[0] : '—')}</span>
                     </div>
                     <div class="match-row ${m.winner_id === m.team2_id ? 'winner' : ''}">
-                        <span>${escapeHtml(m.team2_name || 'Ожидание')}</span>
+                        <span style="${isMyMatch && m.team2_name === currentMyTeamName ? 'font-weight:700; color:#3498db;' : ''}">${escapeHtml(m.team2_name || 'Ожидание')}</span>
                         <span class="match-score">${escapeHtml(m.scores_csv ? m.scores_csv.split('-')[1] || '' : '—')}</span>
                     </div>
                 `;
-                list.appendChild(card);
+                fragment.appendChild(card);
             });
+
+            list.innerHTML = "";
+            list.appendChild(fragment);
+
+            const searchInput = document.getElementById('bracketSearchInput');
+            if (searchInput && searchInput.value.trim()) {
+                filterBracket(searchInput.value);
+            } else if (!silent) {
+                const myMatchEl = list.querySelector('.my-bracket-match');
+                if (myMatchEl) {
+                    setTimeout(() => {
+                        myMatchEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }, 60);
+                }
+            }
+        }
+
+        function filterBracket(query) {
+            query = (query || '').trim().toLowerCase();
+            const list = document.getElementById('bracketList');
+            if (!list) return;
+
+            const cards = list.querySelectorAll('.bracket-match');
+            const roundHeaders = list.querySelectorAll('.admin-section-header');
+
+            if (!query) {
+                cards.forEach(c => c.style.display = '');
+                roundHeaders.forEach(h => h.style.display = '');
+                return;
+            }
+
+            let firstMatch = null;
+            cards.forEach(card => {
+                const text = card.textContent.toLowerCase();
+                if (text.includes(query)) {
+                    card.style.display = '';
+                    if (!firstMatch) firstMatch = card;
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+
+            // Hide round headers if all their matches are hidden
+            roundHeaders.forEach(header => {
+                let nextEl = header.nextElementSibling;
+                let hasVisibleMatch = false;
+                while (nextEl && !nextEl.classList.contains('admin-section-header')) {
+                    if (nextEl.classList.contains('bracket-match') && nextEl.style.display !== 'none') {
+                        hasVisibleMatch = true;
+                        break;
+                    }
+                    nextEl = nextEl.nextElementSibling;
+                }
+                header.style.display = hasVisibleMatch ? '' : 'none';
+            });
+
+            if (firstMatch) {
+                firstMatch.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }
+
+        function filterAdminMatches(query) {
+            query = (query || '').trim().toLowerCase();
+            const list = document.getElementById('adminMatchesList');
+            if (!list) return;
+            const cards = list.querySelectorAll('.card');
+            cards.forEach(c => {
+                if (!query) {
+                    c.style.display = '';
+                } else {
+                    c.style.display = c.textContent.toLowerCase().includes(query) ? '' : 'none';
+                }
+            });
+        }
+
+        // Bracket Match Details & Rosters Modal Functions
+        let currentBMData = null;
+        let selectedBMTeamSide = 1;
+
+        async function openBracketMatchModal(matchID) {
+            haptic('light');
+            const modal = document.getElementById('bracketMatchModal');
+            if (!modal) return;
+
+            document.getElementById('bmModalTitle').textContent = `Загрузка матча #${matchID}...`;
+            document.getElementById('bmModalSubtitle').textContent = 'Получение данных команд...';
+            document.getElementById('bmModalStatus').innerHTML = '';
+            document.getElementById('bmTeam1Header').textContent = '...';
+            document.getElementById('bmTeam2Header').textContent = '...';
+            document.getElementById('bmScoreHeader').textContent = '— : —';
+            document.getElementById('bmRosterContainer').innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 24px; font-size: 12px;">Загрузка данных матча и составов...</div>`;
+            modal.classList.add('active');
+            updateBackButton();
+
+            const res = await apiFetch(`/api/bracket/match_details?id=${matchID}`);
+            if (!res || !res.ok || !res.details) {
+                document.getElementById('bmModalTitle').textContent = `Матч #${matchID}`;
+                document.getElementById('bmRosterContainer').innerHTML = `<div style="text-align: center; color: var(--accent-red); padding: 24px; font-size: 12px;">Не удалось загрузить данные матча</div>`;
+                return;
+            }
+
+            currentBMData = res.details;
+            const m = currentBMData.match;
+            const team1Name = currentBMData.team1 ? currentBMData.team1.name : (m.team1_name || 'Ожидание');
+            const team2Name = currentBMData.team2 ? currentBMData.team2.name : (m.team2_name || 'Ожидание');
+
+            document.getElementById('bmModalTitle').textContent = `Матч #${m.play_order}`;
+            document.getElementById('bmModalSubtitle').textContent = `${currentBMData.round_name || 'Раунд ' + m.round} • ${currentBMData.scheduled_time || ''} • ${currentBMData.match_format || 'BO1'}`;
+
+            let statusBadge = `<span class="status-pill status-waiting" style="font-size: 10px;">ОЖИДАНИЕ</span>`;
+            if (m.state === 'complete') {
+                statusBadge = `<span class="status-pill status-ready" style="font-size: 10px;">ЗАВЕРШЁН</span>`;
+            } else if (m.state === 'open') {
+                statusBadge = `<span class="status-pill status-ready" style="font-size: 10px;"><span class="status-dot"></span>LIVE</span>`;
+            }
+            document.getElementById('bmModalStatus').innerHTML = statusBadge;
+
+            document.getElementById('bmTeam1Header').textContent = team1Name;
+            document.getElementById('bmTeam2Header').textContent = team2Name;
+            document.getElementById('bmTabLabel1').textContent = team1Name;
+            document.getElementById('bmTabLabel2').textContent = team2Name;
+            document.getElementById('bmScoreHeader').textContent = m.scores_csv ? m.scores_csv.replace('-', ' : ') : '— : —';
+
+            switchBMTeam(1);
+        }
+
+        function closeBracketMatchModal() {
+            const modal = document.getElementById('bracketMatchModal');
+            if (modal) modal.classList.remove('active');
+            updateBackButton();
+        }
+
+        function switchBMTeam(side) {
+            selectedBMTeamSide = side;
+            const btn1 = document.getElementById('bmTabBtn1');
+            const btn2 = document.getElementById('bmTabBtn2');
+            if (btn1 && btn2) {
+                if (side === 1) {
+                    btn1.classList.add('active');
+                    btn1.style.borderColor = 'var(--accent-blue)';
+                    btn1.style.background = 'rgba(52, 152, 219, 0.15)';
+                    btn2.classList.remove('active');
+                    btn2.style.borderColor = 'var(--card-border)';
+                    btn2.style.background = 'transparent';
+                } else {
+                    btn2.classList.add('active');
+                    btn2.style.borderColor = 'var(--accent-blue)';
+                    btn2.style.background = 'rgba(52, 152, 219, 0.15)';
+                    btn1.classList.remove('active');
+                    btn1.style.borderColor = 'var(--card-border)';
+                    btn1.style.background = 'transparent';
+                }
+            }
+
+            if (!currentBMData) return;
+            const team = side === 1 ? currentBMData.team1 : currentBMData.team2;
+            const members = side === 1 ? currentBMData.team1_members : currentBMData.team2_members;
+            const container = document.getElementById('bmRosterContainer');
+            if (!container) return;
+
+            if (!team && (!members || !members.length)) {
+                container.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 24px; font-size: 12px;">Команда ещё не определена<br><span style="font-size: 11px;">(ждём завершения предыдущей пары)</span></div>`;
+                return;
+            }
+
+            let checkInHtml = '';
+            if (team) {
+                checkInHtml = `
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; font-size: 11px; color: var(--text-muted);">
+                        <span>Статус Check-in:</span>
+                        <span class="status-pill ${team.is_checked_in ? 'status-ready' : 'status-waiting'}" style="font-size: 9px; padding: 2px 6px;">
+                            ${team.is_checked_in ? 'CHECK-IN ПРОЙДЕН' : 'НЕ ПОДТВЕРЖДЁН'}
+                        </span>
+                    </div>
+                `;
+            }
+
+            if (!members || members.length === 0) {
+                container.innerHTML = checkInHtml + `<div style="text-align: center; color: var(--text-muted); padding: 18px; font-size: 12px;">В составе нет подтверждённых игроков</div>`;
+                return;
+            }
+
+            let listHtml = checkInHtml + '<div style="display: flex; flex-direction: column; gap: 6px;">';
+            members.forEach((p, idx) => {
+                const isCap = p.is_captain;
+                const tgLink = p.telegram_username ? `<a href="https://t.me/${escapeHtml(p.telegram_username)}" target="_blank" style="color: #3498db; text-decoration: none; font-size: 11px; display: inline-flex; align-items: center; gap: 2px;">@${escapeHtml(p.telegram_username)}</a>` : '';
+                const gameInfo = (p.game_id || p.zone_id) ? `<span style="font-family: monospace; font-size: 11px; color: var(--text-muted);">ID: ${escapeHtml(p.game_id || '—')} (${escapeHtml(p.zone_id || '—')})</span>` : '';
+
+                listHtml += `
+                    <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 8px 10px; display: flex; justify-content: space-between; align-items: center;">
+                        <div style="overflow: hidden; text-overflow: ellipsis;">
+                            <div style="display: flex; align-items: center; gap: 6px;">
+                                ${isCap ? '<span class="badge-role" style="background: rgba(243,156,18,0.2); color: #f39c12; font-size: 9px; padding: 1px 5px;">Капитан</span>' : ''}
+                                <strong style="font-size: 13px;">${escapeHtml(p.game_nickname || p.first_name || 'Игрок ' + (idx + 1))}</strong>
+                                <span class="badge-role" style="font-size: 9px; padding: 1px 5px;">${escapeHtml(p.main_role || 'Игрок')}</span>
+                            </div>
+                            <div style="margin-top: 2px; display: flex; gap: 8px; align-items: center;">
+                                ${gameInfo}
+                            </div>
+                        </div>
+                        <div style="flex-shrink: 0; margin-left: 8px;">
+                            ${tgLink}
+                        </div>
+                    </div>
+                `;
+            });
+            listHtml += '</div>';
+            container.innerHTML = listHtml;
         }
 
         // Admin & Referee Hub Functions
@@ -1924,20 +3465,70 @@
                 data.active_matches.forEach(m => {
                     const card = document.createElement('div');
                     card.className = 'card';
+                    const bothReady = m.team1_ready && m.team2_ready;
+                    const oneReady = m.team1_ready || m.team2_ready;
+
+                    let statusPillClass = 'status-waiting';
+                    let statusPillText = 'СБОР';
+
+                    if (m.is_paused) {
+                        statusPillClass = 'status-blue';
+                        statusPillText = 'ПАУЗА';
+                    } else if (bothReady) {
+                        statusPillClass = 'status-ready';
+                        statusPillText = 'ИДЁТ';
+                    } else if (m.deadline_seconds <= 0) {
+                        statusPillClass = 'status-danger';
+                        statusPillText = oneReady ? 'НЕЯВКА (ТП)' : 'НЕЯВКА (ОБЕ)';
+                    } else if (oneReady) {
+                        statusPillClass = 'status-waiting';
+                        statusPillText = 'ЖДЁМ ВТОРОГО';
+                    } else {
+                        statusPillClass = 'status-waiting';
+                        statusPillText = 'ОЖИДАНИЕ';
+                    }
+
+                    const deadlineBadge = bothReady 
+                        ? '<strong style="color:var(--accent-green);">(в игре, готовы)</strong>'
+                        : (m.is_paused 
+                            ? '<strong style="color:var(--accent-blue);">(пауза)</strong>'
+                            : (m.deadline_seconds > 0 
+                                ? `<strong style="color:var(--accent-gold);">(ост. ${Math.floor(m.deadline_seconds / 60)}:${String(m.deadline_seconds % 60).padStart(2, '0')})</strong>` 
+                                : '<strong style="color:var(--accent-red);">(неявка / истёк)</strong>'));
+
                     card.innerHTML = `
                         <div class="card-header">
-                            <span class="card-title">Матч #${m.number}</span>
-                            <span class="status-pill ${m.is_paused ? 'status-waiting' : 'status-ready'}">
-                                ${m.is_paused ? 'ПАУЗА' : 'ИДЁТ'}
+                            <div>
+                                <span class="card-title">Матч #${m.number}</span>
+                                <span class="badge-role" style="font-size: 11px; margin-left: 6px;">${escapeHtml(m.round_name || 'Раунд ' + m.round)}</span>
+                            </div>
+                            <span class="status-pill ${statusPillClass}">
+                                <span class="status-dot"></span>${statusPillText}
                             </span>
                         </div>
-                        <div style="font-size: 14px; font-weight: 700; margin-bottom: 8px;">
+                        <div style="font-size: 14px; font-weight: 700; margin-bottom: 6px;">
                             ${escapeHtml(m.team1_name)} ${m.team1_ready ? '<span style="color:var(--accent-green)">[готов]</span>' : '<span style="color:var(--accent-gold)">[ждём]</span>'} 
                             vs 
                             ${escapeHtml(m.team2_name)} ${m.team2_ready ? '<span style="color:var(--accent-green)">[готов]</span>' : '<span style="color:var(--accent-gold)">[ждём]</span>'}
                         </div>
-                        <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 10px;">
-                            Дедлайн: ${escapeHtml(m.deadline_formatted || '—')}
+                        <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); margin-bottom: 10px;">
+                            <span>Старт: ${escapeHtml(m.scheduled_time || '—')}</span>
+                            <span>Дедлайн: ${escapeHtml(m.deadline_formatted || '—')} ${deadlineBadge}</span>
+                        </div>
+                        <!-- Emergency referee quick controls -->
+                        <div style="display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap;">
+                            <button class="btn-copy" style="font-size: 10px; padding: 4px 8px;" onclick="adminQuickAction(${m.match_id}, ${m.generation}, 'extend_5')">
+                                <span>+5 мин</span>
+                            </button>
+                            <button class="btn-copy" style="font-size: 10px; padding: 4px 8px;" onclick="adminQuickAction(${m.match_id}, ${m.generation}, 'extend_10')">
+                                <span>+10 мин</span>
+                            </button>
+                            <button class="btn-copy" style="font-size: 10px; padding: 4px 8px;" onclick="adminQuickAction(${m.match_id}, ${m.generation}, 'reset_ready')">
+                                <span>Сброс готовности</span>
+                            </button>
+                            <button class="btn-copy" style="font-size: 10px; padding: 4px 8px; margin-left: auto;" onclick="openAuditLogModal(${m.match_id})">
+                                <span>Лог</span>
+                            </button>
                         </div>
                         <div style="display: flex; gap: 6px;">
                             <button class="btn btn-sm ${m.is_paused ? 'btn-green' : 'btn-red-outline'}" style="flex: 1;" onclick="toggleMatchPause(${m.match_id}, ${m.generation}, ${m.is_paused})">
@@ -1950,6 +3541,11 @@
                     `;
                     matchesList.appendChild(card);
                 });
+
+                const searchInput = document.getElementById('adminMatchesSearch');
+                if (searchInput && searchInput.value.trim()) {
+                    filterAdminMatches(searchInput.value);
+                }
             }
 
             // Section 3: Debtors
@@ -1981,6 +3577,56 @@
                     `;
                     debtorsList.appendChild(row);
                 });
+            }
+
+            // Section 4: Match Archive (Completed)
+            const archivedBadge = document.getElementById('statArchivedBadge');
+            if (archivedBadge) archivedBadge.textContent = data.archived_matches ? data.archived_matches.length : 0;
+            const archivedList = document.getElementById('adminArchivedMatchesList');
+            if (archivedList) {
+                if (!data.archived_matches || data.archived_matches.length === 0) {
+                    archivedList.innerHTML = `<div class="card" style="text-align: center; color: var(--text-muted); font-size: 13px; padding: 18px;">Завершённых матчей пока нет</div>`;
+                } else {
+                    archivedList.innerHTML = '';
+                    data.archived_matches.forEach(m => {
+                        const card = document.createElement('div');
+                        card.className = 'card';
+                        card.style.borderColor = 'rgba(46, 204, 113, 0.3)';
+                        card.innerHTML = `
+                            <div class="card-header">
+                                <div>
+                                    <span class="card-title">Матч #${m.number}</span>
+                                    <span class="badge-role" style="font-size: 11px; margin-left: 6px;">${escapeHtml(m.round_name || 'Раунд ' + m.round)}</span>
+                                </div>
+                                <span class="bracket-status status-complete">ЗАВЕРШЁН</span>
+                            </div>
+                            <div style="font-size: 14px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
+                                <span>
+                                    <span style="${m.winner_name === m.team1_name ? 'font-weight:700; color:var(--accent-green);' : 'color:var(--text-muted);'}">${escapeHtml(m.team1_name)}</span>
+                                    <span style="color:var(--text-muted); margin: 0 4px;">vs</span>
+                                    <span style="${m.winner_name === m.team2_name ? 'font-weight:700; color:var(--accent-green);' : 'color:var(--text-muted);'}">${escapeHtml(m.team2_name)}</span>
+                                </span>
+                                <span class="match-score" style="font-size: 15px; color: var(--accent-green); font-weight: 800;">${escapeHtml(m.score || '1:0')}</span>
+                            </div>
+                            <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 10px;">
+                                Победитель: <strong style="color: var(--accent-gold);">${escapeHtml(m.winner_name || '—')}</strong>
+                            </div>
+                            <div style="display: flex; gap: 6px;">
+                                <button class="btn btn-red-outline btn-sm" style="flex: 1;" onclick="openRollbackModal(${m.match_id}, '${escapeAttr(m.team1_name)}', '${escapeAttr(m.team2_name)}')">
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
+                                    <span>Откатить результат</span>
+                                </button>
+                                <button class="btn btn-copy btn-sm" style="flex: 1; justify-content: center;" onclick="openChangeWinnerModal(${m.match_id}, '${escapeAttr(m.team1_name)}', '${escapeAttr(m.team2_name)}', '${escapeAttr(m.winner_name)}')">
+                                    <span>Сменить победителя</span>
+                                </button>
+                                <button class="btn btn-copy btn-sm" onclick="openAuditLogModal(${m.match_id})" title="Журнал действий">
+                                    <span>Лог</span>
+                                </button>
+                            </div>
+                        `;
+                        archivedList.appendChild(card);
+                    });
+                }
             }
         }
 
@@ -2050,6 +3696,7 @@
             document.getElementById('techWinMatchNumber').textContent = number;
             document.getElementById('techWinTeam1Name').textContent = team1;
             document.getElementById('techWinTeam2Name').textContent = team2;
+            document.getElementById('techWinScore').value = '';
             selectTechWinner(1);
             document.getElementById('techWinModal').classList.add('active');
             updateBackButton();
@@ -2081,7 +3728,7 @@
             haptic('success');
             const matchID = parseInt(document.getElementById('techWinMatchID').value, 10);
             const gen = parseInt(document.getElementById('techWinGeneration').value, 10);
-            const score = document.getElementById('techWinScore').value.trim() || '2:0';
+            const score = document.getElementById('techWinScore').value.trim();
             const winnerName = selectedTechWinnerSide === 1 
                 ? document.getElementById('techWinTeam1Name').textContent 
                 : document.getElementById('techWinTeam2Name').textContent;
@@ -2138,7 +3785,8 @@
         }
 
         async function confirmDisqualifyUncheck() {
-            if (!confirm('Вы уверены, что хотите снять с турнира все команды, не прошедшие Check-in? Им будет проставлено техническое поражение.')) {
+            const confirmed = await appConfirm('Вы уверены, что хотите снять с турнира все команды, не прошедшие Check-in? Им будет проставлено техническое поражение.');
+            if (!confirmed) {
                 return;
             }
             haptic('warning');
@@ -2152,7 +3800,195 @@
             }
         }
 
-        // Smart Live Polling Engine
+        // Rollback Modal Functions
+        let rollbackTargetMatchID = 0;
+        function openRollbackModal(matchID, t1, t2) {
+            haptic('warning');
+            rollbackTargetMatchID = matchID;
+            document.getElementById('rollbackMatchInfo').textContent = `${t1} vs ${t2}`;
+            document.getElementById('rollbackModal').classList.add('active');
+            updateBackButton();
+        }
+
+        function closeRollbackModal() {
+            document.getElementById('rollbackModal').classList.remove('active');
+            updateBackButton();
+        }
+
+        async function confirmRollbackSubmit() {
+            haptic('success');
+            const res = await apiFetch('/api/admin/match_action', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'rollback',
+                    match_id: rollbackTargetMatchID
+                })
+            });
+            closeRollbackModal();
+            if (res && res.ok) {
+                showToast(res.message || 'Результат матча успешно откачен', true);
+                loadAdminDesk();
+                loadBracket();
+                loadActiveMatch();
+            } else {
+                showToast(res?.error || 'Ошибка отката результата', false);
+            }
+        }
+
+        // Change Winner Modal Functions
+        let changeWinnerTargetMatchID = 0;
+        function openChangeWinnerModal(matchID, t1, t2, currentWinner) {
+            haptic('light');
+            changeWinnerTargetMatchID = matchID;
+            document.getElementById('changeWinnerTeam1').value = t1;
+            document.getElementById('changeWinnerTeam1Label').textContent = t1 + (currentWinner === t1 ? ' (текущий побед.)' : '');
+            document.getElementById('changeWinnerTeam2').value = t2;
+            document.getElementById('changeWinnerTeam2Label').textContent = t2 + (currentWinner === t2 ? ' (текущий побед.)' : '');
+            if (currentWinner === t1) {
+                document.getElementById('changeWinnerTeam2').checked = true;
+            } else {
+                document.getElementById('changeWinnerTeam1').checked = true;
+            }
+            document.getElementById('changeWinnerScore').value = '';
+            document.getElementById('changeWinnerModal').classList.add('active');
+            updateBackButton();
+        }
+
+        function closeChangeWinnerModal() {
+            document.getElementById('changeWinnerModal').classList.remove('active');
+            updateBackButton();
+        }
+
+        async function confirmChangeWinnerSubmit() {
+            haptic('success');
+            const teamRadio = document.querySelector('input[name="changeWinnerTeam"]:checked');
+            if (!teamRadio) {
+                showToast('Выберите команду-победителя', false);
+                return;
+            }
+            const winnerName = teamRadio.value;
+            const score = document.getElementById('changeWinnerScore').value.trim();
+            const res = await apiFetch('/api/admin/match_action', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'change_winner',
+                    match_id: changeWinnerTargetMatchID,
+                    winner_team_name: winnerName,
+                    score: score
+                })
+            });
+            closeChangeWinnerModal();
+            if (res && res.ok) {
+                showToast(res.message || 'Победитель успешно изменён', true);
+                loadAdminDesk();
+                loadBracket();
+            } else {
+                showToast(res?.error || 'Ошибка смены победителя', false);
+            }
+        }
+
+        // Emergency Referee Quick Actions (+5m, +10m, reset_ready)
+        async function adminQuickAction(matchID, gen, action) {
+            haptic('light');
+            const res = await apiFetch('/api/admin/match_action', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: action,
+                    match_id: matchID,
+                    generation: gen
+                })
+            });
+            if (res && res.ok) {
+                showToast(res.message || 'Действие выполнено', true);
+                loadAdminDesk();
+            } else {
+                showToast(res?.error || 'Ошибка выполнения действия', false);
+            }
+        }
+
+        // Audit Log Modal Functions
+        function openAuditLogModal(matchID) {
+            haptic('light');
+            let item = null;
+            if (adminDeskData) {
+                if (adminDeskData.active_matches) {
+                    item = adminDeskData.active_matches.find(m => m.match_id === matchID);
+                }
+                if (!item && adminDeskData.archived_matches) {
+                    item = adminDeskData.archived_matches.find(m => m.match_id === matchID);
+                }
+            }
+            document.getElementById('auditLogTitle').textContent = `Журнал: Матч #${item ? item.number : matchID}`;
+            const list = document.getElementById('auditLogEventsList');
+            list.innerHTML = '';
+            if (!item || !item.history || !item.history.length) {
+                list.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 18px; font-size: 12px;">События матча ещё не зафиксированы</div>`;
+            } else {
+                item.history.forEach(ev => {
+                    const row = document.createElement('div');
+                    row.style.background = '#1a1c28';
+                    row.style.border = '1px solid var(--card-border)';
+                    row.style.borderRadius = '8px';
+                    row.style.padding = '8px 10px';
+                    row.style.fontSize = '12px';
+                    const timeStr = new Date(ev.At).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                    row.innerHTML = `
+                        <div style="color: var(--accent-blue); font-size: 10px; font-weight: 700; margin-bottom: 2px;">${escapeHtml(timeStr)}</div>
+                        <div style="color: var(--text-main);">${escapeHtml(ev.Text)}</div>
+                    `;
+                    list.appendChild(row);
+                });
+            }
+            document.getElementById('auditLogModal').classList.add('active');
+            updateBackButton();
+        }
+
+        function closeAuditLogModal() {
+            document.getElementById('auditLogModal').classList.remove('active');
+            updateBackButton();
+        }
+
+        // Real-Time Server-Sent Events (SSE) Engine
+        let sseConnection = null;
+        function initSSE() {
+            if (!initData) return;
+            try {
+                if (sseConnection) sseConnection.close();
+                const sseUrl = '/api/events?init_data=' + encodeURIComponent(initData);
+                sseConnection = new EventSource(sseUrl);
+
+                sseConnection.addEventListener('match_update', () => {
+                    haptic('success');
+                    loadActiveMatch(true);
+                    if (currentUserIsAdmin) loadAdminDesk(true);
+                });
+
+                sseConnection.addEventListener('bracket_update', () => {
+                    loadBracket(true);
+                    loadActiveMatch(true);
+                });
+
+                sseConnection.addEventListener('checkin_update', () => {
+                    loadProfile();
+                    if (currentUserIsAdmin) loadAdminDesk(true);
+                });
+
+                sseConnection.addEventListener('team_update', () => {
+                    loadProfile();
+                });
+
+                sseConnection.onerror = () => {
+                    // Browser EventSource automatically reconnects with backoff
+                };
+            } catch (err) {
+                console.warn('SSE connection init error:', err);
+            }
+        }
+
+        // Smart Live Polling Engine (Fallback)
         function startSmartPolling() {
             if (smartPollingTimer) clearInterval(smartPollingTimer);
             smartPollingTimer = setInterval(() => {
@@ -2165,13 +4001,17 @@
                 } else if (currentTab === 'tabAdmin') {
                     loadAdminDesk(true);
                 }
-            }, 4000);
+            }, 6000);
         }
 
         // Initial Boot
-        loadProfile();
-        loadActiveMatch();
-        startSmartPolling();
+        async function bootApp() {
+            await loadProfile();
+            await loadActiveMatch();
+            initSSE();
+            startSmartPolling();
+        }
+        bootApp();
     </script>
 </body>
 </html>

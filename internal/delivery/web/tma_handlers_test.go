@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,10 +10,27 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"blackwatch/internal/application"
 	"blackwatch/internal/models"
 )
+
+type mockDeskStore struct {
+	state models.MatchDesk
+	ctx   models.DeskContext
+}
+
+func (s *mockDeskStore) UpdateMatchDesk(_ context.Context, f func(*models.MatchDesk, models.DeskContext) error) error {
+	data, _ := json.Marshal(s.state)
+	var next models.MatchDesk
+	_ = json.Unmarshal(data, &next)
+	if err := f(&next, s.ctx); err != nil {
+		return err
+	}
+	s.state = next
+	return nil
+}
 
 type mockTelegramSvc struct {
 	application.TelegramService
@@ -20,6 +38,10 @@ type mockTelegramSvc struct {
 	player   *models.TelegramPlayer
 	team     *models.TelegramTeam
 	teamMems []models.TelegramPlayer
+	// reportedPhotoIDs records what the handler passed down on the last
+	// report, so tests can assert Telegram file IDs arrive here rather than
+	// the raw base64 the browser sent.
+	reportedPhotoIDs []string
 }
 
 func (m *mockTelegramSvc) GetBracket(ctx context.Context) ([]models.BracketMatch, error) {
@@ -38,6 +60,10 @@ func (m *mockTelegramSvc) ToggleCheckIn(ctx context.Context, tgID int64) string 
 	return "Check-in подтвержден!"
 }
 
+func (m *mockTelegramSvc) RegistrationStatus(ctx context.Context) (bool, string) {
+	return true, ""
+}
+
 func (m *mockTelegramSvc) UpdateTeamPlayer(ctx context.Context, captainTgID int64, playerID int, nick, gameID, zoneID, role string) error {
 	if m.team != nil && m.team.IsCheckedIn {
 		return errors.New("редактирование заблокировано: команда уже прошла Check-in")
@@ -45,7 +71,8 @@ func (m *mockTelegramSvc) UpdateTeamPlayer(ctx context.Context, captainTgID int6
 	return nil
 }
 
-func (m *mockTelegramSvc) ReportMatchDirect(ctx context.Context, reporterTgID int64, matchID int, myScore, oppScore int, screenshotData string) (*models.TelegramMatchReport, error) {
+func (m *mockTelegramSvc) ReportMatchDirect(ctx context.Context, reporterTgID int64, matchID int, myScore, oppScore int, photoFileIDs []string) (*models.TelegramMatchReport, error) {
+	m.reportedPhotoIDs = photoFileIDs
 	if myScore == oppScore {
 		return nil, errors.New("счёт не может быть равным")
 	}
@@ -54,6 +81,7 @@ func (m *mockTelegramSvc) ReportMatchDirect(ctx context.Context, reporterTgID in
 		Score:              fmt.Sprintf("%d:%d", myScore, oppScore),
 		WinnerTeamName:     "Alpha",
 		LoserTeamName:      "Beta",
+		PhotoFileIDs:       photoFileIDs,
 	}, nil
 }
 
@@ -70,6 +98,18 @@ func (m *mockTelegramSvc) GetCheckInSummary(ctx context.Context) (*models.CheckI
 
 func (m *mockTelegramSvc) DisqualifyUnchecked(ctx context.Context) ([]models.TelegramTeam, error) {
 	return []models.TelegramTeam{{ID: 2, Name: "Beta"}}, nil
+}
+
+func (m *mockTelegramSvc) GetTournamentTime(ctx context.Context) time.Time {
+	return time.Time{}
+}
+
+func (m *mockTelegramSvc) RollbackMatch(ctx context.Context, matchID int) error {
+	return nil
+}
+
+func (m *mockTelegramSvc) ChangeWinnerDirect(ctx context.Context, matchID int, winnerTeamName string, winScore, loseScore int) error {
+	return nil
 }
 
 func TestTMAHandlers(t *testing.T) {
@@ -101,6 +141,13 @@ func TestTMAHandlers(t *testing.T) {
 	server.WithAdminIDs([]int64{99999})
 	server.WithDebtorNotifier(func(ctx context.Context, adminChatID int64, msg string) error {
 		return nil
+	})
+	// Stand in for Telegram: echo back a file ID shaped like the real ones so
+	// tests can tell an uploaded photo from the base64 that came in.
+	var uploadedNames []string
+	server.WithPhotoUploader(func(ctx context.Context, data []byte, filename string) (string, error) {
+		uploadedNames = append(uploadedNames, filename)
+		return fmt.Sprintf("tg-file-%d", len(uploadedNames)), nil
 	})
 
 	t.Run("GET /app renders template", func(t *testing.T) {
@@ -237,13 +284,108 @@ func TestTMAHandlers(t *testing.T) {
 		user := &TelegramUser{ID: 12345}
 		ctx := context.WithValue(context.Background(), userCtxKey, user)
 
-		body := `{"match_id": 1, "my_score": 2, "opp_score": 0, "screenshot": "data:image/png;base64,mock"}`
+		body := `{"match_id": 1, "my_score": 2, "opp_score": 0, "screenshot": "` + pngDataURL(32) + `"}`
 		req := httptest.NewRequest(http.MethodPost, "/api/match/report", strings.NewReader(body)).WithContext(ctx)
 		rec := httptest.NewRecorder()
 
 		server.handleMatchReport(rec, req)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("POST /api/match/report carries every screenshot", func(t *testing.T) {
+		user := &TelegramUser{ID: 12345}
+		ctx := context.WithValue(context.Background(), userCtxKey, user)
+
+		body := fmt.Sprintf(`{"match_id": 7, "my_score": 2, "opp_score": 1, "screenshots": [%q, %q, %q]}`,
+			pngDataURL(32), pngDataURL(64), pngDataURL(16))
+		req := httptest.NewRequest(http.MethodPost, "/api/match/report", strings.NewReader(body)).WithContext(ctx)
+		rec := httptest.NewRecorder()
+
+		tgSvc.reportedPhotoIDs = nil
+		server.handleMatchReport(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if len(tgSvc.reportedPhotoIDs) != 3 {
+			t.Fatalf("service received %d photo IDs, want 3: %v", len(tgSvc.reportedPhotoIDs), tgSvc.reportedPhotoIDs)
+		}
+		// The whole point of the change: what reaches the service must be
+		// Telegram file IDs, because base64 sent as a FileID is rejected by
+		// the API and the referee silently gets nothing.
+		for _, id := range tgSvc.reportedPhotoIDs {
+			if strings.HasPrefix(id, "data:") {
+				t.Errorf("raw data URL reached the service: %q", id)
+			}
+		}
+	})
+
+	t.Run("POST /api/match/report rejects a report with no proof", func(t *testing.T) {
+		user := &TelegramUser{ID: 12345}
+		ctx := context.WithValue(context.Background(), userCtxKey, user)
+
+		body := `{"match_id": 1, "my_score": 2, "opp_score": 0}`
+		req := httptest.NewRequest(http.MethodPost, "/api/match/report", strings.NewReader(body)).WithContext(ctx)
+		rec := httptest.NewRecorder()
+
+		server.handleMatchReport(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 without screenshots, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("POST /api/match/report enforces the screenshot cap", func(t *testing.T) {
+		user := &TelegramUser{ID: 12345}
+		ctx := context.WithValue(context.Background(), userCtxKey, user)
+
+		// The browser limits this too, but a client is not a place to enforce
+		// anything: the cap has to hold when the request is crafted by hand.
+		urls := make([]string, maxReportPhotos+1)
+		for i := range urls {
+			urls[i] = pngDataURL(16)
+		}
+		payload, err := json.Marshal(map[string]interface{}{
+			"match_id": 1, "my_score": 2, "opp_score": 0, "screenshots": urls,
+		})
+		if err != nil {
+			t.Fatalf("failed to build payload: %v", err)
+		}
+		req := httptest.NewRequest(http.MethodPost, "/api/match/report", bytes.NewReader(payload)).WithContext(ctx)
+		rec := httptest.NewRecorder()
+
+		server.handleMatchReport(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 above the cap, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("POST /api/match/report does not record a score it cannot prove", func(t *testing.T) {
+		user := &TelegramUser{ID: 12345}
+		ctx := context.WithValue(context.Background(), userCtxKey, user)
+
+		// Telegram being unreachable is a tournament-day reality. Saving the
+		// result anyway would advance the bracket while the referee is left
+		// with a disputed match and no screenshots to judge it by.
+		server.WithPhotoUploader(func(ctx context.Context, data []byte, filename string) (string, error) {
+			return "", errors.New("telegram is down")
+		})
+		defer server.WithPhotoUploader(func(ctx context.Context, data []byte, filename string) (string, error) {
+			uploadedNames = append(uploadedNames, filename)
+			return fmt.Sprintf("tg-file-%d", len(uploadedNames)), nil
+		})
+
+		body := `{"match_id": 3, "my_score": 2, "opp_score": 0, "screenshots": ["` + pngDataURL(32) + `"]}`
+		req := httptest.NewRequest(http.MethodPost, "/api/match/report", strings.NewReader(body)).WithContext(ctx)
+		rec := httptest.NewRecorder()
+
+		tgSvc.reportedPhotoIDs = nil
+		server.handleMatchReport(rec, req)
+		if rec.Code != http.StatusBadGateway {
+			t.Fatalf("expected 502 when the upload fails, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if tgSvc.reportedPhotoIDs != nil {
+			t.Error("the result was recorded even though its screenshots never uploaded")
 		}
 	})
 
@@ -305,6 +447,219 @@ func TestTMAHandlers(t *testing.T) {
 		server.handleAdminDisqualifyUncheck(rec, req)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200, got %d", rec.Code)
+		}
+	})
+
+	t.Run("POST /api/admin/match_action rollback works for admin", func(t *testing.T) {
+		adminUser := &TelegramUser{ID: 99999}
+		ctx := context.WithValue(context.Background(), userCtxKey, adminUser)
+
+		body := `{"action": "rollback", "match_id": 1}`
+		req := httptest.NewRequest(http.MethodPost, "/api/admin/match_action", strings.NewReader(body)).WithContext(ctx)
+		rec := httptest.NewRecorder()
+
+		server.handleAdminMatchAction(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rec.Code)
+		}
+
+		var result map[string]interface{}
+		if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if result["ok"] != true {
+			t.Errorf("expected ok: true, got %+v", result)
+		}
+	})
+
+	t.Run("POST /api/admin/match_action change_winner works for admin", func(t *testing.T) {
+		adminUser := &TelegramUser{ID: 99999}
+		ctx := context.WithValue(context.Background(), userCtxKey, adminUser)
+
+		body := `{"action": "change_winner", "match_id": 1, "winner_team_name": "Beta", "score": "2:1"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/admin/match_action", strings.NewReader(body)).WithContext(ctx)
+		rec := httptest.NewRecorder()
+
+		server.handleAdminMatchAction(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rec.Code)
+		}
+
+		var result map[string]interface{}
+		if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if result["ok"] != true {
+			t.Errorf("expected ok: true, got %+v", result)
+		}
+	})
+
+	t.Run("GET /api/match/active returns active match with status playing", func(t *testing.T) {
+		user := &TelegramUser{ID: 12345}
+		ctx := context.WithValue(context.Background(), userCtxKey, user)
+
+		uid := user.ID
+		team1 := 1
+		team2 := 2
+		deskStore := &mockDeskStore{
+			state: models.MatchDesk{
+				Matches: map[int]*models.DeskMatch{
+					1: {
+						ID:         1,
+						Number:     1,
+						Active:     true,
+						Teams:      [2]int{1, 2},
+						Names:      [2]string{"Alpha", "Beta"},
+						Generation: 1,
+					},
+				},
+			},
+			ctx: models.DeskContext{
+				Matches: []models.BracketMatch{
+					{
+						ID:        1,
+						Round:     1,
+						PlayOrder: 1,
+						Team1ID:   &team1,
+						Team2ID:   &team2,
+						Team1Name: "Alpha",
+						Team2Name: "Beta",
+						State:     models.BracketOpen,
+					},
+				},
+				Captains: map[int]models.TelegramPlayer{
+					1: {TelegramID: &uid, IsCaptain: true},
+				},
+			},
+		}
+		services.MatchDesk = application.NewMatchDeskService(deskStore, []int64{99999}, time.UTC)
+		t.Cleanup(func() { services.MatchDesk = nil })
+
+		req := httptest.NewRequest(http.MethodGet, "/api/match/active", nil).WithContext(ctx)
+		rec := httptest.NewRecorder()
+
+		server.handleActiveMatch(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rec.Code)
+		}
+
+		var resp ActiveMatchResponse
+		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if !resp.HasMatch {
+			t.Errorf("expected HasMatch: true")
+		}
+		if resp.TournamentStatus == nil || resp.TournamentStatus.Status != "playing" {
+			t.Errorf("expected TournamentStatus.Status: playing, got %+v", resp.TournamentStatus)
+		}
+	})
+
+	t.Run("GET /api/match/active returns eliminated when team lost match", func(t *testing.T) {
+		// Mock team 2 (Beta) losing to team 1 (Alpha)
+		tgSvc.team = &models.TelegramTeam{ID: 2, Name: "Beta", Status: "active"}
+		winnerID := 1
+		tgSvc.bracket = []models.BracketMatch{
+			{
+				ID:        1,
+				Round:     1,
+				PlayOrder: 1,
+				Team1ID:   &winnerID,
+				Team2ID:   &tgSvc.team.ID,
+				Team1Name: "Alpha",
+				Team2Name: "Beta",
+				WinnerID:  &winnerID,
+				State:     models.BracketComplete,
+				ScoresCSV: "2-0",
+			},
+		}
+
+		user := &TelegramUser{ID: 12345}
+		ctx := context.WithValue(context.Background(), userCtxKey, user)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/match/active", nil).WithContext(ctx)
+		rec := httptest.NewRecorder()
+
+		server.handleActiveMatch(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rec.Code)
+		}
+
+		var resp ActiveMatchResponse
+		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.HasMatch {
+			t.Errorf("expected HasMatch: false for completed match")
+		}
+		if resp.TournamentStatus == nil || resp.TournamentStatus.Status != "eliminated" {
+			t.Errorf("expected TournamentStatus.Status: eliminated, got %+v", resp.TournamentStatus)
+		}
+		if resp.TournamentStatus.OpponentName != "Alpha" || resp.TournamentStatus.Score != "2-0" {
+			t.Errorf("unexpected opponent or score: %+v", resp.TournamentStatus)
+		}
+	})
+
+	t.Run("GET /api/match/active returns advanced when team won match", func(t *testing.T) {
+		// Mock team 1 (Alpha) winning match #1
+		tgSvc.team = &models.TelegramTeam{ID: 1, Name: "Alpha", Status: "active"}
+		winnerID := 1
+		team2ID := 2
+		tgSvc.bracket = []models.BracketMatch{
+			{
+				ID:        1,
+				Round:     1,
+				PlayOrder: 1,
+				Team1ID:   &tgSvc.team.ID,
+				Team2ID:   &team2ID,
+				Team1Name: "Alpha",
+				Team2Name: "Beta",
+				WinnerID:  &winnerID,
+				State:     models.BracketComplete,
+				ScoresCSV: "2-0",
+			},
+			{
+				ID:        2,
+				Round:     1,
+				PlayOrder: 2,
+				Team1Name: "Gamma",
+				Team2Name: "Delta",
+				State:     models.BracketOpen,
+			},
+			{
+				ID:        3,
+				Round:     2,
+				PlayOrder: 3,
+				State:     models.BracketPending,
+			},
+		}
+
+		user := &TelegramUser{ID: 12345}
+		ctx := context.WithValue(context.Background(), userCtxKey, user)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/match/active", nil).WithContext(ctx)
+		rec := httptest.NewRecorder()
+
+		server.handleActiveMatch(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rec.Code)
+		}
+
+		var resp ActiveMatchResponse
+		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.HasMatch {
+			t.Errorf("expected HasMatch: false for completed match with no open desk")
+		}
+		if resp.TournamentStatus == nil || resp.TournamentStatus.Status != "advanced" {
+			t.Errorf("expected TournamentStatus.Status: advanced, got %+v", resp.TournamentStatus)
+		}
+		if !resp.TournamentStatus.WaitingForOpponent {
+			t.Errorf("expected WaitingForOpponent: true")
+		}
+		if resp.TournamentStatus.WaitingOpponents != "Gamma vs Delta" {
+			t.Errorf("expected WaitingOpponents: Gamma vs Delta, got %q", resp.TournamentStatus.WaitingOpponents)
 		}
 	})
 }

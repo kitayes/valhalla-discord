@@ -153,25 +153,37 @@ func (b *Bot) notifyAdmins(text string) {
 }
 
 func (b *Bot) notifyTeam(ctx context.Context, teamID int, text, kb string) {
-	if b.bracket == nil {
-		return
+	var chatIDs []int64
+	if b.bracket != nil {
+		chatIDs = b.bracket.CaptainChatIDs(ctx, teamID)
+	} else if b.service != nil {
+		caps, _ := b.service.GetTeamCaptains(ctx, teamID)
+		for _, c := range caps {
+			if c.TelegramID != nil && *c.TelegramID > 0 {
+				chatIDs = append(chatIDs, *c.TelegramID)
+			}
+		}
 	}
-	for _, chatID := range b.bracket.CaptainChatIDs(ctx, teamID) {
-		b.sendMessage(chatID, text, kb)
+	for _, chatID := range chatIDs {
+		if b.webAppURL != "" {
+			b.SendMatchNotification(chatID, text, true)
+		} else {
+			b.sendMessage(chatID, text, kb)
+		}
 	}
 }
 
 func (b *Bot) notifyMatchesReady(ctx context.Context, ms []models.BracketMatch) {
-	if b.bracket == nil {
-		return
-	}
 	for _, m := range ms {
 		if m.Team1ID == nil || m.Team2ID == nil {
 			continue
 		}
-		text := fmt.Sprintf("Раунд %d, матч #%d: %s vs %s.\n\nПосле игры капитан победителя отправляет /report.", m.Round, m.PlayOrder, m.Team1Name, m.Team2Name)
-		b.notifyTeam(ctx, *m.Team1ID, text, "main_menu")
-		b.notifyTeam(ctx, *m.Team2ID, text, "main_menu")
+		text1 := fmt.Sprintf("⚔️ Матч #%d (Раунд %d): %s vs %s\n\nВаш соперник — команда «%s»!\nЗайдите в приложение для подтверждения готовности к игре.",
+			m.PlayOrder, m.Round, m.Team1Name, m.Team2Name, m.Team2Name)
+		text2 := fmt.Sprintf("⚔️ Матч #%d (Раунд %d): %s vs %s\n\nВаш соперник — команда «%s»!\nЗайдите в приложение для подтверждения готовности к игре.",
+			m.PlayOrder, m.Round, m.Team1Name, m.Team2Name, m.Team1Name)
+		b.notifyTeam(ctx, *m.Team1ID, text1, "main_menu")
+		b.notifyTeam(ctx, *m.Team2ID, text2, "main_menu")
 	}
 }
 

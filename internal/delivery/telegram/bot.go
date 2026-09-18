@@ -1,13 +1,17 @@
 package telegram
 
 import (
-	"blackwatch/internal/application"
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
+
+	"blackwatch/internal/application"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -100,9 +104,49 @@ func (b *Bot) WithWebAppURL(url string) *Bot {
 	return b
 }
 
+// SendMatchNotification delivers a tournament notification to a captain with an optional WebApp button.
+func (b *Bot) SendMatchNotification(chatID int64, text string, hasWebAppBtn bool) {
+	if text == "" || chatID <= 0 {
+		return
+	}
+	msg := tgbotapi.NewMessage(chatID, text)
+	if hasWebAppBtn && b.webAppURL != "" {
+		msg.ReplyMarkup = struct {
+			Keyboard [][]struct {
+				Text   string `json:"text"`
+				WebApp struct {
+					URL string `json:"url"`
+				} `json:"web_app"`
+			} `json:"inline_keyboard"`
+		}{
+			Keyboard: [][]struct {
+				Text   string `json:"text"`
+				WebApp struct {
+					URL string `json:"url"`
+				} `json:"web_app"`
+			}{
+				{
+					{
+						Text: "🎮 Открыть в приложении",
+						WebApp: struct {
+							URL string `json:"url"`
+						}{URL: b.webAppURL},
+					},
+				},
+			},
+		}
+	}
+	if _, err := b.bot.Send(msg); err != nil {
+		b.logger.Warn("telegram: failed to send match notification to %d: %v", chatID, err)
+	}
+}
+
 // Start consumes updates until ctx is cancelled. Each update is handled under
 // its own deadline, so one stuck query cannot wedge the whole update loop.
 func (b *Bot) Start(ctx context.Context) {
+	b.EnsureChatMenuButton(0)
+	b.SetBotCommands()
+
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
 	updates := b.bot.GetUpdatesChan(u)
@@ -139,6 +183,7 @@ func (b *Bot) handleCallbackQuery(parent context.Context, callback *tgbotapi.Cal
 	if callback.From == nil {
 		return
 	}
+	b.logger.Info("telegram: callback query from user %d: %q", callback.From.ID, callback.Data)
 
 	ctx, cancel := context.WithTimeout(parent, updateTimeout)
 	defer cancel()
@@ -195,6 +240,7 @@ func (b *Bot) handleUpdate(parent context.Context, msg *tgbotapi.Message) {
 	if user != nil {
 		username = user.UserName
 	}
+	b.logger.Info("telegram: received private message: chat_id=%d user=%q text=%q", chatID, username, text)
 
 	if len(msg.Photo) > 0 {
 		b.handlePhoto(ctx, chatID, msg)
@@ -411,3 +457,55 @@ func (b *Bot) processTechnicalDefeat(ctx context.Context) {
 func (b *Bot) BettingBot() *BettingBot {
 	return b.bettingBot
 }
+
+// EnsureChatMenuButton sets the Telegram chat menu button to point to the current Mini App URL.
+// If chatID is 0, it sets the default menu button for all users.
+func (b *Bot) EnsureChatMenuButton(chatID int64) {
+	if b.webAppURL == "" {
+		return
+	}
+	payload := map[string]interface{}{
+		"menu_button": map[string]interface{}{
+			"type": "web_app",
+			"text": "🎮 Турнир",
+			"web_app": map[string]string{
+				"url": b.webAppURL,
+			},
+		},
+	}
+	if chatID > 0 {
+		payload["chat_id"] = chatID
+	}
+	data, _ := json.Marshal(payload)
+	resp, err := http.Post(
+		fmt.Sprintf("https://api.telegram.org/bot%s/setChatMenuButton", b.bot.Token),
+		"application/json",
+		bytes.NewReader(data),
+	)
+	if err == nil && resp != nil {
+		_ = resp.Body.Close()
+	}
+}
+
+// SetBotCommands registers standard bot commands with Telegram so they appear in the UI autocomplete.
+func (b *Bot) SetBotCommands() {
+	commands := []map[string]string{
+		{"command": "start", "description": "Главное меню и приложение"},
+		{"command": "app", "description": "Открыть турнирное приложение (Web App)"},
+		{"command": "my_team", "description": "Моя команда и состав"},
+		{"command": "profile", "description": "Мой профиль игрока"},
+		{"command": "bracket", "description": "Турнирная сетка"},
+		{"command": "checkin", "description": "Подтвердить участие команды (Check-in)"},
+		{"command": "report", "description": "Внести счёт матча"},
+	}
+	data, _ := json.Marshal(map[string]interface{}{"commands": commands})
+	resp, err := http.Post(
+		fmt.Sprintf("https://api.telegram.org/bot%s/setMyCommands", b.bot.Token),
+		"application/json",
+		bytes.NewReader(data),
+	)
+	if err == nil && resp != nil {
+		_ = resp.Body.Close()
+	}
+}
+

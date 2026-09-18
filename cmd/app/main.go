@@ -142,13 +142,21 @@ func main() {
 		log.Warn("TELEGRAM_TOKEN not set, telegram bot disabled")
 	}
 
+	location, _ := cfg.TournamentLocation()
+	matchDesk := application.NewMatchDeskService(repository.NewTelegramPostgres(db), cfg.TelegramAdminIDs, location)
+	if cfg.WebAppURL != "" {
+		matchDesk.WithWebAppURL(cfg.WebAppURL)
+	}
+	services.SetMatchDeskService(matchDesk)
 	if telegramBot != nil {
-		location, _ := cfg.TournamentLocation()
-		matchDesk := application.NewMatchDeskService(repository.NewTelegramPostgres(db), cfg.TelegramAdminIDs, location)
 		telegramBot.WithMatchDesk(matchDesk)
-		services.SetMatchDeskService(matchDesk)
 		if cfg.WebAppURL != "" {
 			telegramBot.WithWebAppURL(cfg.WebAppURL)
+		}
+		if services.TelegramService != nil {
+			services.TelegramService.SetMatchNotifier(func(ctx context.Context, chatID int64, text string, hasWebAppBtn bool) {
+				telegramBot.SendMatchNotification(chatID, text, hasWebAppBtn)
+			})
 		}
 	}
 	discordBot := discord.NewBot(&cfg, services, log)
@@ -180,6 +188,7 @@ func main() {
 				adminServer.WithDebtorNotifier(func(ctx context.Context, adminChatID int64, msg string) error {
 					return telegramBot.PingDebtors(ctx, adminChatID, msg)
 				})
+				adminServer.WithPhotoUploader(telegramBot.UploadPhoto)
 			}
 			srv := adminServer
 			go func() {

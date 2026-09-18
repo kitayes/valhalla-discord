@@ -44,7 +44,7 @@ func (r *TelegramPostgres) UpdateMatchDesk(ctx context.Context, change func(*mod
 	d.Tournament = tournament
 	snapshot := models.DeskContext{StartsAt: startsAt, Captains: map[int]models.TelegramPlayer{}, Revisions: map[int]int64{}}
 	err = func() error {
-		rows, err := tx.QueryContext(ctx, `SELECT m.id,m.challonge_match_id,m.play_order,m.team1_id,m.team2_id,m.state,COALESCE(a.name,''),COALESCE(b.name,''),m.desk_revision
+		rows, err := tx.QueryContext(ctx, `SELECT m.id,m.challonge_match_id,m.round,m.play_order,m.team1_id,m.team2_id,m.winner_id,m.state,m.scores_csv,COALESCE(a.name,''),COALESCE(b.name,''),m.desk_revision
  FROM telegram_bracket_matches m LEFT JOIN telegram_teams a ON a.id=m.team1_id LEFT JOIN telegram_teams b ON b.id=m.team2_id ORDER BY m.id FOR SHARE OF m`)
 		if err != nil {
 			return err
@@ -53,7 +53,7 @@ func (r *TelegramPostgres) UpdateMatchDesk(ctx context.Context, change func(*mod
 		for rows.Next() {
 			var m models.BracketMatch
 			var revision int64
-			if err = rows.Scan(&m.ID, &m.ChallongeMatchID, &m.PlayOrder, &m.Team1ID, &m.Team2ID, &m.State, &m.Team1Name, &m.Team2Name, &revision); err != nil {
+			if err = rows.Scan(&m.ID, &m.ChallongeMatchID, &m.Round, &m.PlayOrder, &m.Team1ID, &m.Team2ID, &m.WinnerID, &m.State, &m.ScoresCSV, &m.Team1Name, &m.Team2Name, &revision); err != nil {
 				return err
 			}
 			snapshot.Matches = append(snapshot.Matches, m)

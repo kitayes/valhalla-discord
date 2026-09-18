@@ -65,6 +65,7 @@ func (b *Bot) trySendMessage(chatID int64, text string, kbType string) error {
 	case "main_menu":
 		rows := [][]tgbotapi.KeyboardButton{
 			tgbotapi.NewKeyboardButtonRow(
+				tgbotapi.NewKeyboardButton("/app"),
 				tgbotapi.NewKeyboardButton("/profile"),
 				tgbotapi.NewKeyboardButton("/my_team"),
 			),

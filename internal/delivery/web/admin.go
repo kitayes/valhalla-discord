@@ -35,8 +35,14 @@ type AdminServer struct {
 	trustedProxies []netip.Prefix
 	adminIDs       map[int64]bool
 	debtorNotifier func(ctx context.Context, adminChatID int64, msg string) error
-	srv            *http.Server
-	startedAt      time.Time
+	// photoUploader hands a screenshot to Telegram and returns the file ID it
+	// answers with. The mini app can only send raw bytes, while everything
+	// downstream addresses photos by file ID, so this is the bridge between
+	// the two.
+	photoUploader func(ctx context.Context, data []byte, filename string) (string, error)
+	sseBroker     *SSEBroker
+	srv           *http.Server
+	startedAt     time.Time
 }
 
 // NewAdminServer creates a new web admin server.
@@ -61,6 +67,7 @@ func NewAdminServer(services *application.Service, logger application.Logger, po
 		sessions:       newSessionStore(),
 		throttle:       newLoginThrottle(),
 		trustedProxies: proxies,
+		sseBroker:      NewSSEBroker(),
 		startedAt:      time.Now(),
 	}
 
@@ -80,20 +87,25 @@ func NewAdminServer(services *application.Service, logger application.Logger, po
 	mux.HandleFunc("/app", s.handleApp)
 
 	tmaAuth := func(h http.HandlerFunc) http.HandlerFunc {
-		if botToken == "" {
-			return h
-		}
 		return TMAAuthMiddleware(botToken, 24*time.Hour, h)
 	}
 
+	mux.HandleFunc("/api/events", tmaAuth(s.handleEventsSSE))
 	mux.HandleFunc("/api/me", tmaAuth(s.handleMe))
 	mux.HandleFunc("/api/bracket", s.handleBracket)
+	mux.HandleFunc("/api/bracket/match_details", s.handleBracketMatchDetails)
+	mux.HandleFunc("/api/team/details", s.handleTeamDetails)
 	mux.HandleFunc("/api/match/active", tmaAuth(s.handleActiveMatch))
 	mux.HandleFunc("/api/match/ready", tmaAuth(s.handleMatchReady))
 	mux.HandleFunc("/api/match/referee", tmaAuth(s.handleMatchReferee))
 	mux.HandleFunc("/api/match/report", tmaAuth(s.handleMatchReport))
 	mux.HandleFunc("/api/team/checkin", tmaAuth(s.handleCheckIn))
 	mux.HandleFunc("/api/team/player", tmaAuth(s.handleUpdateTeamPlayer))
+	mux.HandleFunc("/api/team/create", tmaAuth(s.handleCreateTeam))
+	mux.HandleFunc("/api/team/invite", tmaAuth(s.handleGenerateInvite))
+	mux.HandleFunc("/api/team/join", tmaAuth(s.handleJoinTeam))
+	mux.HandleFunc("/api/team/kick", tmaAuth(s.handleKickPlayer))
+	mux.HandleFunc("/api/team/transfer", tmaAuth(s.handleTransferCaptain))
 	mux.HandleFunc("/api/admin/desk", tmaAuth(s.handleAdminDesk))
 	mux.HandleFunc("/api/admin/match_action", tmaAuth(s.handleAdminMatchAction))
 	mux.HandleFunc("/api/admin/ping_debtors", tmaAuth(s.handleAdminPingDebtors))
@@ -136,6 +148,15 @@ func (s *AdminServer) WithDebtorNotifier(fn func(ctx context.Context, adminChatI
 	return s
 }
 
+// WithPhotoUploader supplies the function that turns screenshot bytes into a
+// Telegram file ID. Without it the mini app cannot accept match results,
+// because a report that reaches the referee without its proof is worse than
+// one that is refused outright.
+func (s *AdminServer) WithPhotoUploader(fn func(ctx context.Context, data []byte, filename string) (string, error)) *AdminServer {
+	s.photoUploader = fn
+	return s
+}
+
 func (s *AdminServer) isAdmin(tgID int64) bool {
 	return s.adminIDs != nil && s.adminIDs[tgID]
 }
@@ -144,10 +165,18 @@ func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
-		if strings.HasPrefix(r.URL.Path, "/app") {
-			h.Set("Content-Security-Policy", "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org;")
+		if strings.HasPrefix(r.URL.Path, "/app") || strings.HasPrefix(r.URL.Path, "/api/") {
+			// Telegram Desktop (Linux/Windows/macOS) loads Mini Apps in a native
+			// webview — the parent frame origin is NOT https://telegram.org but a
+			// tg:// scheme or a null origin, so restricting frame-ancestors to
+			// *.telegram.org blocks the desktop client entirely.
+			// Using '*' satisfies every Telegram client variant while still
+			// preventing completely unrelated sites from embedding the app
+			// (they would need a valid Telegram initData to do anything useful).
+			h.Set("Content-Security-Policy", "frame-ancestors *;")
 		} else {
 			h.Set("X-Frame-Options", "DENY")
+			h.Set("Content-Security-Policy", "frame-ancestors 'none';")
 		}
 		h.Set("Referrer-Policy", "no-referrer")
 		next.ServeHTTP(w, r)
