@@ -187,16 +187,69 @@
             color: var(--accent-red);
         }
 
+        /* Timer is neutral while there is plenty of time; it turns red only
+           in the last two minutes, so red still means "act now". */
         .timer-box {
-            background: linear-gradient(135deg, rgba(231, 76, 60, 0.1), rgba(243, 156, 18, 0.08));
-            border: 1px solid rgba(231, 76, 60, 0.3);
+            background: #1b1d2a;
+            border: 1px solid var(--card-border);
             border-radius: 12px;
-            padding: 12px;
+            padding: 12px 12px 10px;
             text-align: center;
             margin-bottom: 14px;
+            position: relative;
+            overflow: hidden;
+            transition: background 0.3s, border-color 0.3s;
+        }
+        .timer-box.timer-urgent {
+            background: linear-gradient(135deg, rgba(231, 76, 60, 0.14), rgba(243, 156, 18, 0.08));
+            border-color: rgba(231, 76, 60, 0.4);
+        }
+        .timer-box.timer-live {
+            background: rgba(46, 204, 113, 0.08);
+            border-color: rgba(46, 204, 113, 0.3);
         }
         .timer-label { font-size: 11px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 4px; }
-        .timer-value { font-size: 24px; font-weight: 800; font-family: monospace; color: var(--accent-red); }
+        .timer-value { font-size: 28px; font-weight: 800; font-family: monospace; color: var(--text-main); transition: color 0.3s; }
+        .timer-urgent .timer-value { color: var(--accent-red); }
+        .timer-live .timer-value { color: var(--accent-green); }
+        .timer-progress {
+            position: absolute; left: 0; bottom: 0; height: 3px;
+            background: var(--accent-blue);
+            transition: width 1s linear, background 0.3s;
+        }
+        .timer-urgent .timer-progress { background: var(--accent-red); }
+        .timer-live .timer-progress, .timer-paused .timer-progress { display: none; }
+
+        /* Protocol chips sit in one scrollable row; room rules fold under a toggle. */
+        .protocol-row {
+            display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none;
+            margin-bottom: 10px; padding-bottom: 2px;
+        }
+        .protocol-row::-webkit-scrollbar { display: none; }
+        .protocol-row .status-pill { flex-shrink: 0; }
+        .rules-toggle {
+            background: none; border: none; color: var(--text-muted); font-size: 12px;
+            padding: 4px 0; cursor: pointer; display: inline-flex; align-items: center; gap: 4px;
+        }
+        .rules-toggle svg { transition: transform 0.15s; }
+        .rules-toggle.open svg { transform: rotate(90deg); }
+
+        /* Referee call is an escape hatch, not a primary action. */
+        .link-btn {
+            background: none; border: none; color: var(--text-muted); font-size: 12px;
+            text-decoration: underline; text-underline-offset: 3px; cursor: pointer;
+            display: block; margin: 14px auto 0; padding: 6px 12px;
+        }
+        .link-btn:active { color: var(--accent-red); }
+
+        /* Status plaque shown where the action button would be when there is
+           nothing for this viewer to press. */
+        .desk-status {
+            margin-top: 12px; padding: 12px; border-radius: 12px; text-align: center;
+            font-size: 13px; color: var(--text-muted);
+            background: rgba(255, 255, 255, 0.03); border: 1px dashed var(--card-border);
+        }
+        .desk-status.ok { color: var(--accent-green); border-color: rgba(46, 204, 113, 0.3); }
 
         .info-row {
             display: flex;
@@ -1137,71 +1190,84 @@
                     </div>
                 </div>
 
-                <div class="timer-box" id="timerBox">
-                    <div class="timer-label" id="timerLabel">Дедлайн подтверждения</div>
-                    <div class="timer-value" id="timerValue">10:00</div>
-                </div>
+                <!-- Blocks below are reordered by applyMatchLayout() per phase:
+                     while waiting for readiness the timer leads; once both
+                     teams are ready the opponent's contact leads, because
+                     that is what the captain needs while switching to MLBB. -->
+                <div id="deskBody">
+                    <div class="timer-box" id="timerBox">
+                        <div class="timer-label" id="timerLabel">Осталось на подтверждение</div>
+                        <div class="timer-value" id="timerValue">10:00</div>
+                        <div class="timer-progress" id="timerProgress" style="width: 100%;"></div>
+                    </div>
 
-                <!-- Match Protocol Badges -->
-                <div id="matchProtocolBox" style="display: flex; gap: 6px; margin: 10px 0; flex-wrap: wrap;">
-                    <span class="status-pill" id="matchFormatPill" style="background: rgba(52, 152, 219, 0.15); color: #3498db; border: 1px solid rgba(52, 152, 219, 0.3);">
-                        <span id="matchFormatText">BO1</span>
-                    </span>
-                    <span class="status-pill" id="matchSidePill" style="background: rgba(46, 204, 113, 0.15); color: #2ecc71; border: 1px solid rgba(46, 204, 113, 0.3);">
-                        <span id="matchSideText">Синяя сторона (1st Pick)</span>
-                    </span>
-                    <span class="status-pill" id="matchHostPill" style="background: rgba(243, 156, 18, 0.15); color: #f39c12; border: 1px solid rgba(243, 156, 18, 0.3);">
-                        <span id="matchHostText">Вы создаете лобби</span>
-                    </span>
-                </div>
+                    <div class="vs-container" id="vsBox">
+                        <div class="team-box my-team">
+                            <div class="team-name" id="myTeamName">Моя Команда</div>
+                            <span class="status-pill status-waiting" id="myTeamStatus">
+                                <span class="status-dot"></span> <span id="myTeamStatusText">ОЖИДАНИЕ</span>
+                            </span>
+                        </div>
+                        <div class="vs-divider">VS</div>
+                        <div class="team-box">
+                            <div class="team-name" id="oppTeamName">Соперник</div>
+                            <span class="status-pill status-waiting" id="oppTeamStatus">
+                                <span class="status-dot"></span> <span id="oppTeamStatusText">ОЖИДАНИЕ</span>
+                            </span>
+                        </div>
+                    </div>
 
-                <div id="roomRulesBox" style="background: #11131c; border: 1px dashed var(--card-border); border-radius: 8px; padding: 8px 10px; margin-bottom: 12px; font-size: 11px; color: var(--text-muted);">
-                    <span id="roomRulesText">Режим: Custom → Draft Pick 5v5 | Наблюдатели: Выкл</span>
-                </div>
+                    <div id="oppContactBox">
+                        <div class="info-row">
+                            <span class="info-label">Капитан соперника</span>
+                            <span class="info-val" style="display: flex; align-items: center; gap: 6px;">
+                                <span id="oppCaptain">@rival</span>
+                                <button id="btnOppCaptainChat" class="btn-copy" onclick="openOpponentChat()" style="display: none; color: var(--accent-blue); border-color: rgba(52, 152, 219, 0.3); padding: 3px 8px; font-size: 11px;">
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                                    <span>Написать</span>
+                                </button>
+                            </span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Game ID соперника</span>
+                            <span class="info-val">
+                                <span id="oppGameID" style="font-family: monospace;">12345678</span>
+                                <button class="btn-copy" onclick="copyGameID()">
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                                    <span>Копировать</span>
+                                </button>
+                            </span>
+                        </div>
+                    </div>
 
-                <div class="vs-container">
-                    <div class="team-box my-team">
-                        <div class="team-name" id="myTeamName">Моя Команда</div>
-                        <span class="status-pill status-waiting" id="myTeamStatus">
-                            <span class="status-dot"></span> <span id="myTeamStatusText">ОЖИДАНИЕ</span>
+                    <!-- Match protocol: one chip row, rules folded. -->
+                    <div class="protocol-row" id="matchProtocolBox">
+                        <span class="status-pill" id="matchFormatPill" style="background: rgba(52, 152, 219, 0.15); color: #3498db; border: 1px solid rgba(52, 152, 219, 0.3);">
+                            <span id="matchFormatText">BO1</span>
+                        </span>
+                        <span class="status-pill" id="matchSidePill" style="background: rgba(46, 204, 113, 0.15); color: #2ecc71; border: 1px solid rgba(46, 204, 113, 0.3);">
+                            <span id="matchSideText">Синяя сторона</span>
+                        </span>
+                        <span class="status-pill" id="matchHostPill" style="background: rgba(243, 156, 18, 0.15); color: #f39c12; border: 1px solid rgba(243, 156, 18, 0.3);">
+                            <span id="matchHostText">Вы создаёте лобби</span>
                         </span>
                     </div>
-                    <div class="vs-divider">VS</div>
-                    <div class="team-box">
-                        <div class="team-name" id="oppTeamName">Соперник</div>
-                        <span class="status-pill status-waiting" id="oppTeamStatus">
-                            <span class="status-dot"></span> <span id="oppTeamStatusText">ОЖИДАНИЕ</span>
-                        </span>
+                    <button class="rules-toggle" id="rulesToggle" onclick="toggleRoomRules()">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+                        <span>Правила комнаты</span>
+                    </button>
+                    <div id="roomRulesBox" style="display: none; background: #11131c; border: 1px dashed var(--card-border); border-radius: 8px; padding: 8px 10px; margin: 6px 0 4px; font-size: 11px; color: var(--text-muted);">
+                        <span id="roomRulesText">Режим: Custom → Draft Pick 5v5 | Наблюдатели: Выкл</span>
                     </div>
                 </div>
 
-                <div class="info-row">
-                    <span class="info-label">Капитан соперника</span>
-                    <span class="info-val" style="display: flex; align-items: center; gap: 6px;">
-                        <span id="oppCaptain">@rival</span>
-                        <button id="btnOppCaptainChat" class="btn-copy" onclick="openOpponentChat()" style="display: none; color: var(--accent-blue); border-color: rgba(52, 152, 219, 0.3); padding: 3px 8px; font-size: 11px;">
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                            <span>Написать</span>
-                        </button>
-                    </span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label">Game ID соперника</span>
-                    <span class="info-val">
-                        <span id="oppGameID">12345678</span>
-                        <button class="btn-copy" onclick="copyGameID()">
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
-                            <span>Копировать</span>
-                        </button>
-                    </span>
-                </div>
-
+                <!-- Action area. Inside Telegram the native MainButton carries
+                     the primary action and these in-page buttons stay hidden;
+                     in a plain browser they are the fallback. -->
                 <button class="btn btn-green" id="btnReady" onclick="confirmReady()">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
                     <span id="btnReadyText">ПОДТВЕРДИТЬ ГОТОВНОСТЬ</span>
                 </button>
-                <div id="btnReadySubtext" style="display: none; text-align: center; font-size: 11px; color: var(--text-muted); margin-top: 5px; margin-bottom: 6px;"></div>
-
                 <button class="btn btn-blue" id="btnReportResult" onclick="openReportModal()" style="display: none;">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/>
@@ -1211,10 +1277,9 @@
                     </svg>
                     <span>ВНЕСТИ РЕЗУЛЬТАТ МАТЧА</span>
                 </button>
-                <button class="btn btn-red-outline" onclick="openRefereeModal()">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m4.93 4.93 4.24 4.24"/><path d="m14.83 9.17 4.24-4.24"/><path d="m14.83 14.83 4.24 4.24"/><path d="m9.17 14.83-4.24 4.24"/><circle cx="12" cy="12" r="4"/></svg>
-                    <span>ВЫЗВАТЬ СУДЬЮ</span>
-                </button>
+                <div id="deskStatus" class="desk-status" style="display: none;"></div>
+                <div id="btnReadySubtext" style="display: none;"></div>
+                <button class="link-btn" id="btnCallReferee" onclick="openRefereeModal()">Проблема? Вызвать судью</button>
             </div>
         </div>
     </main>
@@ -1984,6 +2049,7 @@
             document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
             document.getElementById(tabId).classList.add('active');
             if (el) el.classList.add('active');
+            window.scrollTo(0, 0);
 
             updateBackButton();
 
@@ -2046,6 +2112,7 @@
                     if (btnReport) btnReport.style.display = currentUserIsCaptain ? 'flex' : 'none';
                     if (currentActiveMatchData) {
                         updateMainButton(currentActiveMatchData);
+                        applyMatchLayout(currentActiveMatchData);
                         if (typeof updateMatchStepGuide === 'function') {
                             updateMatchStepGuide(currentActiveMatchData);
                         }
@@ -2568,6 +2635,102 @@
             }
         }
 
+        // Inside Telegram the native MainButton is the one primary action;
+        // in a plain browser it does not render, so the in-page buttons stay.
+        function useNativeMainButton() {
+            return !!(tg && tg.MainButton && initData);
+        }
+
+        // Haptics are reserved for the few moments the captain must not miss.
+        function notifyHaptic(kind) {
+            try { tg?.HapticFeedback?.notificationOccurred(kind); } catch (e) { /* not in Telegram */ }
+        }
+
+        function matchPhase(m) {
+            if (!m) return null;
+            if (m.is_paused) return 'paused';
+            if (!m.my_ready) return 'ready';
+            if (!m.opponent_ready) return 'waiting';
+            return 'lobby';
+        }
+
+        let lastMatchPhaseKey = '';
+
+        // applyMatchLayout arranges the desk for the current phase: block
+        // order, which action (if any) this viewer has, and what the status
+        // plaque says instead of a disabled button.
+        function applyMatchLayout(m) {
+            const body = document.getElementById('deskBody');
+            if (!body || !m) return;
+            const phase = matchPhase(m);
+            const timer = document.getElementById('timerBox');
+            const vs = document.getElementById('vsBox');
+            const contact = document.getElementById('oppContactBox');
+            const protocol = document.getElementById('matchProtocolBox');
+
+            // Lobby phase: contact first, then who is host, then the teams.
+            // Otherwise: timer, teams, contact, protocol.
+            const order = phase === 'lobby' ? [contact, protocol, vs, timer] : [timer, vs, contact, protocol];
+            order.forEach(el => { if (el) body.appendChild(el); });
+            // Rules toggle + box always trail the protocol row.
+            const rt = document.getElementById('rulesToggle');
+            const rb = document.getElementById('roomRulesBox');
+            if (rt) body.appendChild(rt);
+            if (rb) body.appendChild(rb);
+            if (timer) timer.style.marginTop = phase === 'lobby' ? '12px' : '0';
+
+            const native = useNativeMainButton();
+            const btnReady = document.getElementById('btnReady');
+            const btnReport = document.getElementById('btnReportResult');
+            const status = document.getElementById('deskStatus');
+            const subtext = document.getElementById('btnReadySubtext');
+
+            const captainCanReady = currentUserIsCaptain && phase === 'ready' && m.can_ready;
+            const captainCanReport = currentUserIsCaptain && phase === 'lobby';
+            if (btnReady) btnReady.style.display = (!native && captainCanReady) ? 'flex' : 'none';
+            if (btnReport) btnReport.style.display = (!native && captainCanReport) ? 'flex' : 'none';
+
+            // Anyone without a button to press gets a one-line status instead.
+            let statusText = '';
+            let ok = false;
+            if (phase === 'paused') {
+                statusText = 'Матч на паузе — действия заморожены судьёй.';
+            } else if (!currentUserIsCaptain) {
+                statusText = phase === 'ready' ? 'Готовность подтверждает капитан вашей команды.'
+                    : phase === 'waiting' ? 'Ваша команда готова. Ждём соперника.'
+                    : 'Обе команды готовы — заходите в лобби MLBB.';
+                ok = phase === 'lobby';
+            } else if (phase === 'waiting') {
+                statusText = 'Готовность подтверждена. Ждём ' + (m.opponent_team_name || 'соперника') + '.';
+            } else if (phase === 'ready' && !m.can_ready) {
+                statusText = 'Матч ещё не открыт для подтверждения.';
+            } else if (phase === 'lobby' && native) {
+                statusText = 'Обе команды готовы. После игры внесите результат кнопкой ниже.';
+                ok = true;
+            }
+            if (status) {
+                status.textContent = statusText;
+                status.className = 'desk-status' + (ok ? ' ok' : '');
+                status.style.display = statusText ? 'block' : 'none';
+            }
+            if (subtext) subtext.style.display = 'none';
+
+            const key = (m.match_id || 0) + ':' + phase;
+            if (lastMatchPhaseKey && lastMatchPhaseKey !== key && phase === 'lobby') {
+                notifyHaptic('success');
+            }
+            lastMatchPhaseKey = key;
+        }
+
+        function toggleRoomRules() {
+            const box = document.getElementById('roomRulesBox');
+            const btn = document.getElementById('rulesToggle');
+            if (!box) return;
+            const open = box.style.display === 'none';
+            box.style.display = open ? 'block' : 'none';
+            if (btn) btn.classList.toggle('open', open);
+        }
+
         function openOpponentChat() {
             haptic('light');
             const oppEl = document.getElementById('oppCaptain');
@@ -2640,39 +2803,65 @@
             }, 1000);
         }
 
+        // The progress bar needs the window's full length, which the API does
+        // not send; the largest remaining value seen for this match stands in.
+        let timerTotalSeconds = 0;
+        let timerTotalMatchID = 0;
+        let urgentHapticFiredFor = 0;
+        const TIMER_URGENT_SECONDS = 120;
+
         function updateTimerDisplay() {
             const timerBox = document.getElementById('timerBox');
             const timerVal = document.getElementById('timerValue');
             const timerLabel = document.getElementById('timerLabel');
+            const progress = document.getElementById('timerProgress');
             if (!timerBox || !timerVal) return;
+            timerVal.style.color = '';
 
             if (isMatchPaused) {
                 timerBox.classList.add('timer-paused');
+                timerBox.classList.remove('timer-urgent', 'timer-live');
                 timerVal.textContent = 'ПАУЗА';
                 timerVal.style.color = 'var(--accent-gold)';
-                if (timerLabel) timerLabel.textContent = 'ТАЙМЕР ЗАМОРОЖЕН СУДЬЁЙ';
+                if (timerLabel) timerLabel.textContent = 'Таймер заморожен судьёй';
                 return;
             }
+            timerBox.classList.remove('timer-paused');
 
             if (currentActiveMatchData && currentActiveMatchData.my_ready && currentActiveMatchData.opponent_ready) {
-                timerBox.classList.remove('timer-paused');
+                timerBox.classList.add('timer-live');
+                timerBox.classList.remove('timer-urgent');
                 timerVal.textContent = 'В ИГРЕ';
-                timerVal.style.color = 'var(--accent-green)';
-                if (timerLabel) timerLabel.textContent = 'ОБЕ КОМАНДЫ ГОТОВЫ';
+                if (timerLabel) timerLabel.textContent = 'Обе команды готовы';
                 return;
             }
+            timerBox.classList.remove('timer-live');
 
-            timerBox.classList.remove('timer-paused');
-            if (timerLabel) timerLabel.textContent = 'Дедлайн подтверждения';
-            const mins = Math.floor(Math.max(0, remainingSeconds) / 60);
-            const secs = Math.max(0, remainingSeconds) % 60;
+            if (timerLabel) timerLabel.textContent = 'Осталось на подтверждение';
+            const left = Math.max(0, remainingSeconds);
+            const mins = Math.floor(left / 60);
+            const secs = left % 60;
             timerVal.textContent = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-            if (remainingSeconds <= 60 && remainingSeconds > 0) {
-                timerVal.style.color = 'var(--accent-red)';
-            } else if (remainingSeconds <= 0) {
-                timerVal.style.color = 'var(--text-muted)';
-            } else {
-                timerVal.style.color = 'var(--accent-red)';
+
+            const matchID = currentActiveMatchData ? currentActiveMatchData.match_id : 0;
+            if (matchID !== timerTotalMatchID) {
+                timerTotalMatchID = matchID;
+                timerTotalSeconds = 0;
+            }
+            timerTotalSeconds = Math.max(timerTotalSeconds, left);
+            if (progress) {
+                progress.style.width = timerTotalSeconds > 0 ? Math.round(left / timerTotalSeconds * 100) + '%' : '0%';
+            }
+
+            const urgent = left > 0 && left <= TIMER_URGENT_SECONDS;
+            timerBox.classList.toggle('timer-urgent', urgent);
+            if (left <= 0) timerVal.style.color = 'var(--text-muted)';
+
+            // One buzz per match when a minute is left and it is still on us.
+            if (left > 0 && left <= 60 && urgentHapticFiredFor !== matchID
+                && currentActiveMatchData && !currentActiveMatchData.my_ready && currentUserIsCaptain) {
+                urgentHapticFiredFor = matchID;
+                notifyHaptic('warning');
             }
         }
 
@@ -2751,6 +2940,7 @@
                 };
                 updateMatchStepGuide(currentActiveMatchData);
                 updateMainButton(currentActiveMatchData);
+                applyMatchLayout(currentActiveMatchData);
 
                 if (!deadlineTimer) {
                     remainingSeconds = 582;
@@ -2902,7 +3092,7 @@
             const sidePill = document.getElementById('matchSidePill');
             if (sideText && sidePill) {
                 const isBlue = m.my_side === 'Blue';
-                sideText.textContent = isBlue ? 'Синяя сторона (1st Pick)' : 'Красная сторона (2nd Pick)';
+                sideText.textContent = isBlue ? 'Синяя · 1st pick' : 'Красная · 2nd pick';
                 sidePill.style.color = isBlue ? '#3498db' : '#e74c3c';
                 sidePill.style.background = isBlue ? 'rgba(52, 152, 219, 0.15)' : 'rgba(231, 76, 60, 0.15)';
                 sidePill.style.borderColor = isBlue ? 'rgba(52, 152, 219, 0.3)' : 'rgba(231, 76, 60, 0.3)';
@@ -2912,11 +3102,11 @@
             const hostPill = document.getElementById('matchHostPill');
             if (hostText && hostPill) {
                 if (m.is_host) {
-                    hostText.textContent = 'Вы создаете лобби';
+                    hostText.textContent = 'Вы создаёте лобби';
                     hostPill.style.color = '#f39c12';
                     hostPill.style.background = 'rgba(243, 156, 18, 0.15)';
                 } else {
-                    hostText.textContent = 'Ожидайте инвайт от ' + (m.host_team_name || 'соперника');
+                    hostText.textContent = 'Лобби создаёт ' + (m.host_team_name || 'соперник');
                     hostPill.style.color = '#838a9e';
                     hostPill.style.background = 'rgba(131, 138, 158, 0.15)';
                 }
@@ -2981,6 +3171,7 @@
             // Step guidance and Telegram MainButton
             updateMatchStepGuide(m);
             updateMainButton(m);
+            applyMatchLayout(m);
 
             // Timer synchronization
             const newSeconds = m.deadline_seconds || 0;
