@@ -165,6 +165,10 @@ func (s *AdminServer) handleMe(w http.ResponseWriter, r *http.Request) {
 
 	resp := MeResponse{User: user, IsAdmin: s.isAdmin(user.ID), RegistrationOpen: regOpen, BotUsername: s.botUsername}
 	player, _ := s.services.TelegramService.GetPlayer(r.Context(), user.ID)
+	if player == nil && s.services.TelegramService != nil {
+		_ = s.services.TelegramService.RegisterUser(r.Context(), user.ID, user.Username, user.FirstName)
+		player, _ = s.services.TelegramService.GetPlayer(r.Context(), user.ID)
+	}
 	if player != nil {
 		resp.Player = player
 	}
@@ -1187,7 +1191,11 @@ func (s *AdminServer) handleEventsSSE(w http.ResponseWriter, r *http.Request) {
 // ──────────────────────────────────────────────────────────────────────────────
 
 type createTeamRequest struct {
-	Name string `json:"name"`
+	Name         string `json:"name"`
+	GameNickname string `json:"game_nickname"`
+	GameID       string `json:"game_id"`
+	ZoneID       string `json:"zone_id"`
+	Role         string `json:"role"`
 }
 
 func (s *AdminServer) handleCreateTeam(w http.ResponseWriter, r *http.Request) {
@@ -1207,7 +1215,7 @@ func (s *AdminServer) handleCreateTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.services.TelegramService.CreateTeamInApp(r.Context(), user.ID, req.Name); err != nil {
+	if err := s.services.TelegramService.CreateTeamInApp(r.Context(), user.ID, req.Name, req.GameNickname, req.GameID, req.ZoneID, req.Role); err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": err.Error()})
@@ -1219,6 +1227,46 @@ func (s *AdminServer) handleCreateTeam(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "message": "Команда создана"})
+}
+
+type addTeamPlayerRequest struct {
+	Nickname     string `json:"nickname"`
+	GameID       string `json:"game_id"`
+	ZoneID       string `json:"zone_id"`
+	Role         string `json:"role"`
+	IsSubstitute bool   `json:"is_substitute"`
+}
+
+func (s *AdminServer) handleAddTeamPlayer(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	user, ok := UserFromContext(r.Context())
+	if !ok || user == nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	var req addTeamPlayerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	player, err := s.services.TelegramService.AddTeamPlayer(r.Context(), user.ID, req.Nickname, req.GameID, req.ZoneID, req.Role, req.IsSubstitute)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": err.Error()})
+		return
+	}
+
+	if s.sseBroker != nil {
+		s.sseBroker.Broadcast("team_update", map[string]interface{}{"user_id": user.ID, "player_id": player.ID})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "message": "Игрок добавлен в команду", "player": player})
 }
 
 func (s *AdminServer) handleGenerateInvite(w http.ResponseWriter, r *http.Request) {

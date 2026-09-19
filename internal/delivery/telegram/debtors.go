@@ -148,8 +148,8 @@ func (b *Bot) pingDebtors(ctx context.Context, adminChatID int64, customMsg stri
 	for _, team := range incompleteTeams {
 		for _, p := range team.Players {
 			if p.IsCaptain && p.TelegramID != nil {
-				msg := fmt.Sprintf("ВНИМАНИЕ, Капитан!\nВ вашей команде '%s' не хватает игроков (%d из %d).\n\nСрочно доберите состав через /my_team %s! Без полного состава команда не сможет подтвердить Check-in и получит ТЕХНИЧЕСКОЕ ПОРАЖЕНИЕ.",
-					team.Name, len(team.Players), application.MainRosterSlots, deadlineStr)
+				msg := fmt.Sprintf("ВНИМАНИЕ, Капитан!\nВ вашей команде '%s' не хватает игроков (%d из %d).\n\nСрочно доберите состав (минимум %d игроков) %s! Без полного состава команда не сможет подтвердить Check-in и получит ТЕХНИЧЕСКОЕ ПОРАЖЕНИЕ.",
+					team.Name, len(team.Players), application.MainRosterSlots, application.MainRosterSlots, deadlineStr)
 				if customMsg != "" {
 					msg += "\n\nСообщение от организаторов:\n" + customMsg
 				}

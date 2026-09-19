@@ -90,6 +90,32 @@ func (m *mockTelegramSvc) RegistrationStatus(ctx context.Context) (bool, string)
 	return true, ""
 }
 
+func (m *mockTelegramSvc) CreateTeamInApp(ctx context.Context, captainTgID int64, teamName, nick, gameID, zoneID, role string) error {
+	m.team = &models.TelegramTeam{ID: 2, Name: teamName}
+	m.player = &models.TelegramPlayer{
+		TelegramID:   &captainTgID,
+		GameNickname: nick,
+		GameID:       gameID,
+		ZoneID:       zoneID,
+		MainRole:     role,
+		IsCaptain:    true,
+	}
+	return nil
+}
+
+func (m *mockTelegramSvc) AddTeamPlayer(ctx context.Context, captainTgID int64, nick, gameID, zoneID, role string, isSubstitute bool) (*models.TelegramPlayer, error) {
+	p := models.TelegramPlayer{
+		ID:           99,
+		GameNickname: nick,
+		GameID:       gameID,
+		ZoneID:       zoneID,
+		MainRole:     role,
+		IsSubstitute: isSubstitute,
+	}
+	m.teamMems = append(m.teamMems, p)
+	return &p, nil
+}
+
 func (m *mockTelegramSvc) UpdateTeamPlayer(ctx context.Context, captainTgID int64, playerID int, nick, gameID, zoneID, role string) error {
 	if m.team != nil && m.team.IsCheckedIn {
 		return errors.New("редактирование заблокировано: команда уже прошла Check-in")
@@ -303,6 +329,44 @@ func TestTMAHandlers(t *testing.T) {
 		server.handleUpdateTeamPlayer(rec, req)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200 when team is not checked in, got %d", rec.Code)
+		}
+	})
+
+	t.Run("POST /api/team/create with captain fields", func(t *testing.T) {
+		user := &TelegramUser{ID: 12345}
+		ctx := context.WithValue(context.Background(), userCtxKey, user)
+
+		body := `{"name": "Team Omega", "game_nickname": "OmegaCap", "game_id": "778899", "zone_id": "1001", "role": "Exp"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/team/create", strings.NewReader(body)).WithContext(ctx)
+		rec := httptest.NewRecorder()
+
+		server.handleCreateTeam(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if tgSvc.team == nil || tgSvc.team.Name != "Team Omega" {
+			t.Fatalf("expected team Team Omega, got %+v", tgSvc.team)
+		}
+		if tgSvc.player == nil || tgSvc.player.GameNickname != "OmegaCap" || tgSvc.player.GameID != "778899" {
+			t.Fatalf("expected captain data saved, got %+v", tgSvc.player)
+		}
+	})
+
+	t.Run("POST /api/team/player/add adds teammate", func(t *testing.T) {
+		user := &TelegramUser{ID: 12345}
+		ctx := context.WithValue(context.Background(), userCtxKey, user)
+
+		body := `{"nickname": "OmegaMate", "game_id": "112233", "zone_id": "1001", "role": "Gold", "is_substitute": false}`
+		req := httptest.NewRequest(http.MethodPost, "/api/team/player/add", strings.NewReader(body)).WithContext(ctx)
+		rec := httptest.NewRecorder()
+
+		server.handleAddTeamPlayer(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var resp map[string]interface{}
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || resp["ok"] != true {
+			t.Fatalf("expected ok: true, got %s", rec.Body.String())
 		}
 	})
 

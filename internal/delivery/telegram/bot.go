@@ -433,8 +433,8 @@ func (b *Bot) broadcastCheckInReminder(ctx context.Context) {
 		for _, p := range team.Players {
 			if p.IsCaptain && p.TelegramID != nil {
 				if len(team.Players) < application.MainRosterSlots {
-					msg := fmt.Sprintf("ВНИМАНИЕ, Капитан!\nВ вашей команде '%s' не хватает игроков (%d из %d).\n\nСрочно доберите состав через /my_team до %s, иначе — ТЕХНИЧЕСКОЕ ПОРАЖЕНИЕ.",
-						team.Name, len(team.Players), application.MainRosterSlots, tTime.In(b.location).Add(technicalDefeatGrace).Format("15:04"))
+					msg := fmt.Sprintf("ВНИМАНИЕ, Капитан!\nВ вашей команде '%s' не хватает игроков (%d из %d).\n\nСрочно доберите состав (минимум %d игроков) до %s, иначе — ТЕХНИЧЕСКОЕ ПОРАЖЕНИЕ.",
+						team.Name, len(team.Players), application.MainRosterSlots, application.MainRosterSlots, tTime.In(b.location).Add(technicalDefeatGrace).Format("15:04"))
 					b.sendMessage(*p.TelegramID, msg, "empty")
 				} else {
 					msg := fmt.Sprintf("ВНИМАНИЕ, Капитан!\nВаша команда '%s' не прошла Check-in.\n\nНажмите кнопку ниже до %s, иначе — ТЕХНИЧЕСКОЕ ПОРАЖЕНИЕ.",

@@ -805,7 +805,7 @@ func (s *TelegramServiceImpl) confirmCheckIn(ctx context.Context, p *models.Tele
 	if !team.IsCheckedIn {
 		members := s.roster(ctx, team.ID)
 		if len(members) < mainRosterSlots {
-			return fmt.Sprintf("Check-in невозможен: в команде %d из %d обязательных игроков. Доукомплектуйте состав через /my_team.", len(members), mainRosterSlots), KbNone
+			return fmt.Sprintf("Check-in невозможен: в команде %d из %d обязательных игроков. Доукомплектуйте состав (минимум %d игроков).", len(members), mainRosterSlots, mainRosterSlots), KbNone
 		}
 		if err := s.repo.SetCheckIn(ctx, team.ID, true); err != nil {
 			s.logWrite("SetCheckIn", err)

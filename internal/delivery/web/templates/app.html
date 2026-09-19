@@ -1363,21 +1363,55 @@
 
             <!-- Create Team Section -->
             <div style="background: #1b1d2a; border: 1px solid var(--card-border); border-radius: 10px; padding: 14px; margin-bottom: 14px;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
                     <div style="font-size: 13px; font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 6px;">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="16" y1="11" x2="22" y2="11"/></svg>
                         Создать команду
                     </div>
                     <span id="createTeamCharCount" style="font-size: 11px; color: var(--text-muted);">0 / 64</span>
                 </div>
-                <input type="text" id="createTeamNameInput" placeholder="Название команды"
-                    style="width: 100%; box-sizing: border-box; background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 8px; padding: 11px 12px; color: var(--text-main); font-size: 13px; outline: none; margin-bottom: 10px;"
-                    maxlength="64"
-                    oninput="document.getElementById('createTeamCharCount').textContent = this.value.length + ' / 64'" />
-                <button class="btn btn-green" id="btnCreateTeam" style="margin-top: 0;" onclick="createTeam()">
+
+                <div style="margin-bottom: 10px;">
+                    <label style="display: block; font-size: 11px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px;">Название команды</label>
+                    <input type="text" id="createTeamNameInput" placeholder="Например: Dark Phoenix"
+                        style="width: 100%; box-sizing: border-box; background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 8px; padding: 10px 12px; color: var(--text-main); font-size: 13px; outline: none;"
+                        maxlength="64"
+                        oninput="document.getElementById('createTeamCharCount').textContent = this.value.length + ' / 64'" />
+                </div>
+
+                <div style="font-size: 11px; font-weight: 700; color: var(--accent-blue); text-transform: uppercase; letter-spacing: 0.5px; margin: 14px 0 8px 0;">Данные капитана (ваш аккаунт MLBB)</div>
+
+                <div style="margin-bottom: 10px;">
+                    <label style="display: block; font-size: 11px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px;">Игровой никнейм</label>
+                    <input type="text" id="createCaptainNickInput" class="form-input" placeholder="Ник в игре" style="margin-bottom: 0;">
+                </div>
+
+                <div style="display: flex; gap: 8px; margin-bottom: 10px;">
+                    <div style="flex: 1;">
+                        <label style="display: block; font-size: 11px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px;">Game ID</label>
+                        <input type="text" id="createCaptainGameIdInput" class="form-input" placeholder="12345678" inputmode="numeric" style="margin-bottom: 0;">
+                    </div>
+                    <div style="flex: 1;">
+                        <label style="display: block; font-size: 11px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px;">Zone ID (Сервер)</label>
+                        <input type="text" id="createCaptainZoneIdInput" class="form-input" placeholder="1001" inputmode="numeric" style="margin-bottom: 0;">
+                    </div>
+                </div>
+
+                <div style="margin-bottom: 14px;">
+                    <label style="display: block; font-size: 11px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px;">Основная роль</label>
+                    <select id="createCaptainRoleSelect" class="form-input" style="margin-bottom: 0;">
+                        <option value="Mid">Mid (Мидлейн)</option>
+                        <option value="Roam">Roam (Роум)</option>
+                        <option value="Gold">Gold (Голдлейн)</option>
+                        <option value="Exp">Exp (Эксплейн)</option>
+                        <option value="Jungle">Jungle (Лесник)</option>
+                    </select>
+                </div>
+
+                <button class="btn btn-green" id="btnCreateTeam" style="margin-top: 0; width: 100%;" onclick="createTeam()">
                     Создать команду
                 </button>
-                <div id="createTeamError" style="display:none; font-size:11px; color:var(--accent-red); margin-top:6px;"></div>
+                <div id="createTeamError" style="display:none; font-size:11px; color:var(--accent-red); margin-top:8px;"></div>
             </div>
 
             <!-- Join Team Section -->
@@ -1455,6 +1489,12 @@
             <div id="rosterList">
                 <!-- Dynamically populated -->
             </div>
+
+            <!-- Add player button (visible to captain when roster is not locked and < 7 players) -->
+            <button class="btn btn-blue" id="btnOpenAddPlayer" onclick="openAddPlayerModal()" style="display: none; margin-top: 12px; width: 100%; justify-content: center;">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                <span>Добавить игрока в состав</span>
+            </button>
         </div>
     </main>
 
@@ -1668,6 +1708,48 @@
                 <span>Сохранить изменения</span>
             </button>
             <button class="btn btn-red-outline" onclick="closeEditPlayerModal()">Отмена</button>
+        </div>
+    </div>
+
+    <!-- Add Player Modal -->
+    <div class="modal" id="addPlayerModal">
+        <div class="modal-content">
+            <div class="modal-title">Добавить игрока в состав</div>
+            <div class="form-group">
+                <label class="form-label">Игровой ник</label>
+                <input type="text" id="addPlayerNick" class="form-input" placeholder="Ник в игре">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Game ID</label>
+                <input type="text" id="addPlayerGameID" class="form-input" placeholder="Например: 12345678" inputmode="numeric" pattern="[0-9]*">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Zone ID (Сервер)</label>
+                <input type="text" id="addPlayerZoneID" class="form-input" placeholder="Например: 1001" inputmode="numeric" pattern="[0-9]*">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Основная роль</label>
+                <select id="addPlayerRole" class="form-input">
+                    <option value="Mid">Mid (Мидлейн)</option>
+                    <option value="Roam" selected>Roam (Роум)</option>
+                    <option value="Gold">Gold (Голдлейн)</option>
+                    <option value="Exp">Exp (Эксплейн)</option>
+                    <option value="Jungle">Jungle (Лесник)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Позиция в ростере</label>
+                <select id="addPlayerIsSub" class="form-input">
+                    <option value="false" selected>Основной состав</option>
+                    <option value="true">Запасной игрок</option>
+                </select>
+            </div>
+            <div id="addPlayerError" style="display:none; font-size:11px; color:var(--accent-red); margin-bottom:10px;"></div>
+            <button class="btn btn-green" id="btnAddPlayerSubmit" style="width: 100%; justify-content: center; margin-bottom: 8px;" onclick="addTeamPlayer()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                <span>Добавить в состав</span>
+            </button>
+            <button class="btn btn-red-outline" style="width: 100%; justify-content: center;" onclick="closeAddPlayerModal()">Отмена</button>
         </div>
     </div>
 
@@ -2157,8 +2239,8 @@
                     currentUserIsCaptain = isCaptain;
                     const regOpen = data.registration_open !== false;
                     updateCheckInStatus(data.team.is_checked_in, isCaptain, regOpen);
-                    const canEdit = isCaptain && !data.team.is_checked_in && regOpen;
-                    renderRoster(cachedTeammates, canEdit);
+                    const canEdit = !data.team.is_checked_in && regOpen;
+                    renderRoster(cachedTeammates, canEdit, isCaptain, data.player ? data.player.id : null);
 
                     // Sync captain action buttons if active match is loaded
                     const btnReport = document.getElementById('btnReportResult');
@@ -2174,6 +2256,16 @@
                     document.getElementById('noTeamCard').style.display = 'block';
                     document.getElementById('teamProfileCard').style.display = 'none';
                     document.getElementById('rosterCard').style.display = 'none';
+                    if (data.player) {
+                        const nickEl = document.getElementById('createCaptainNickInput');
+                        const gameIdEl = document.getElementById('createCaptainGameIdInput');
+                        const zoneIdEl = document.getElementById('createCaptainZoneIdInput');
+                        const roleEl = document.getElementById('createCaptainRoleSelect');
+                        if (nickEl && !nickEl.value && data.player.game_nickname) nickEl.value = data.player.game_nickname;
+                        if (gameIdEl && !gameIdEl.value && data.player.game_id) gameIdEl.value = data.player.game_id;
+                        if (zoneIdEl && !zoneIdEl.value && data.player.zone_id) zoneIdEl.value = data.player.zone_id;
+                        if (roleEl && data.player.main_role) roleEl.value = data.player.main_role;
+                    }
                 }
             }
         }
@@ -2191,7 +2283,7 @@
             return nick.substring(0, 2).toUpperCase();
         }
 
-        function renderRoster(players, canEdit) {
+        function renderRoster(players, canEdit, isCaptain = currentUserIsCaptain, currentUserId = null) {
             const list = document.getElementById('rosterList');
             list.innerHTML = "";
 
@@ -2200,57 +2292,86 @@
             if (slotsBadge) slotsBadge.textContent = `${players.length} / 7 игроков`;
 
             if (!players.length) {
-                list.innerHTML = `<div style="color:var(--text-muted); font-size:13px; text-align:center; padding:10px;">Состав не заполнен — пригласите игроков по ссылке</div>`;
-                return;
-            }
-            players.forEach((p, idx) => {
-                const item = document.createElement('div');
-                item.className = 'roster-item';
-                const capBadge = p.is_captain ? `<span class="captain-tag"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7zm3 16h14"/></svg> C</span>` : '';
-                const pNick = p.nickname || p.game_nickname || ('Игрок ' + (idx + 1));
-                const pRole = p.role || p.main_role || (p.is_captain ? 'Капитан' : 'Основа');
-                const pGameId = p.game_id || '';
-                const pZoneId = p.zone_id || '';
-                const avatarBg = nickToColor(pNick);
-                const avatarText = nickInitials(pNick);
+                list.innerHTML = `<div style="color:var(--text-muted); font-size:13px; text-align:center; padding:10px;">Состав не заполнен — добавьте игроков или пригласите по ссылке</div>`;
+            } else {
+                players.forEach((p, idx) => {
+                    const item = document.createElement('div');
+                    item.className = 'roster-item';
+                    const capBadge = p.is_captain ? `<span class="captain-tag"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7zm3 16h14"/></svg> C</span>` : '';
+                    const pNick = p.nickname || p.game_nickname || ('Игрок ' + (idx + 1));
+                    const pRole = p.role || p.main_role || (p.is_captain ? 'Капитан' : 'Основа');
+                    const pGameId = p.game_id || '';
+                    const pZoneId = p.zone_id || '';
+                    const avatarBg = nickToColor(pNick);
+                    const avatarText = nickInitials(pNick);
 
-                const editBtn = canEdit ? `
-                    <button class="btn-edit-player" onclick="openEditModal(${p.id}, '${escapeAttr(pNick)}', '${escapeAttr(pGameId)}', '${escapeAttr(pZoneId)}', '${escapeAttr(pRole)}')\" title="Редактировать игрока">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
-                        </svg>
-                    </button>
-                ` : '';
+                    const isSelf = currentUserId && (p.id === currentUserId);
+                    const canEditThisPlayer = canEdit && (isCaptain || isSelf);
 
-                // Kick and transfer captain: only captain can do it, and not on themselves
-                const captainActions = (canEdit && currentUserIsCaptain && !p.is_captain) ? `
-                    <button class="btn-edit-player" onclick="kickPlayer(${p.id}, '${escapeAttr(pNick)}')" title="Исключить из команды" style="color: var(--accent-red); margin-left:2px;">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                    </button>
-                    <button class="btn-edit-player" onclick="transferCaptain(${p.id}, '${escapeAttr(pNick)}')" title="Назначить капитаном" style="color: var(--accent-gold); margin-left:2px;">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7zm3 16h14"/></svg>
-                    </button>
-                ` : '';
+                    const editBtn = canEditThisPlayer ? `
+                        <button class="btn-edit-player" onclick="openEditModal(${p.id}, '${escapeAttr(pNick)}', '${escapeAttr(pGameId)}', '${escapeAttr(pZoneId)}', '${escapeAttr(pRole)}')\" title="Редактировать игрока">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
+                            </svg>
+                        </button>
+                    ` : '';
 
-                item.innerHTML = `
-                    <div style="display:flex; align-items:center; flex:1; min-width:0;">
-                        <div class="player-avatar" style="background:${avatarBg}; color:#fff;">${avatarText}</div>
-                        <div class="player-info" style="min-width:0;">
-                            <div class="player-nick">
-                                <span>${escapeHtml(pNick)}</span>
-                                ${capBadge}
+                    // Kick and transfer captain: only captain can do it, and not on themselves
+                    const captainActions = (canEdit && isCaptain && !p.is_captain) ? `
+                        <button class="btn-edit-player" onclick="kickPlayer(${p.id}, '${escapeAttr(pNick)}')" title="Исключить из команды" style="color: var(--accent-red); margin-left:2px;">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                        </button>
+                        <button class="btn-edit-player" onclick="transferCaptain(${p.id}, '${escapeAttr(pNick)}')" title="Назначить капитаном" style="color: var(--accent-gold); margin-left:2px;">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7zm3 16h14"/></svg>
+                        </button>
+                    ` : '';
+
+                    item.innerHTML = `
+                        <div style="display:flex; align-items:center; flex:1; min-width:0;">
+                            <div class="player-avatar" style="background:${avatarBg}; color:#fff;">${avatarText}</div>
+                            <div class="player-info" style="min-width:0;">
+                                <div class="player-nick">
+                                    <span>${escapeHtml(pNick)}</span>
+                                    ${capBadge}
+                                </div>
+                                <div class="player-meta">ID: ${pGameId || '—'} ${pZoneId ? '(' + pZoneId + ')' : ''}</div>
                             </div>
-                            <div class="player-meta">ID: ${pGameId || '—'} ${pZoneId ? '(' + pZoneId + ')' : ''}</div>
                         </div>
-                    </div>
-                    <div style="display:flex; align-items:center; flex-shrink:0;">
-                        <div class="badge-role">${escapeHtml(pRole)}</div>
-                        ${editBtn}
-                        ${captainActions}
-                    </div>
-                `;
-                list.appendChild(item);
-            });
+                        <div style="display:flex; align-items:center; flex-shrink:0;">
+                            <div class="badge-role">${escapeHtml(pRole)}</div>
+                            ${editBtn}
+                            ${captainActions}
+                        </div>
+                    `;
+                    list.appendChild(item);
+                });
+            }
+
+            // If captain and can edit, render empty slots up to 5 so captain sees missing required players
+            if (canEdit && isCaptain && players.length < 5) {
+                for (let slot = players.length + 1; slot <= 5; slot++) {
+                    const emptyItem = document.createElement('div');
+                    emptyItem.className = 'roster-item';
+                    emptyItem.style.cssText = 'border: 1px dashed var(--card-border); opacity: 0.8; cursor: pointer; background: rgba(255,255,255,0.02);';
+                    emptyItem.onclick = () => openAddPlayerModal();
+                    emptyItem.innerHTML = `
+                        <div style="display:flex; align-items:center; flex:1; min-width:0;">
+                            <div class="player-avatar" style="background:rgba(255,255,255,0.04); color:var(--text-muted); border:1px dashed var(--card-border);">+</div>
+                            <div class="player-info" style="min-width:0;">
+                                <div class="player-nick" style="color:var(--text-muted);">Слот ${slot} (Основа)</div>
+                                <div class="player-meta" style="color:var(--accent-blue);">Нажмите, чтобы добавить игрока</div>
+                            </div>
+                        </div>
+                        <div style="display:flex; align-items:center;">
+                            <span style="font-size:11px; color:var(--accent-blue); font-weight:600; padding: 4px 8px; border-radius: 4px; background: rgba(52,152,219,0.1);">+ Добавить</span>
+                        </div>
+                    `;
+                    list.appendChild(emptyItem);
+                }
+            }
+
+            const btnAdd = document.getElementById('btnOpenAddPlayer');
+            if (btnAdd) btnAdd.style.display = (canEdit && isCaptain && players.length < 7) ? 'flex' : 'none';
         }
 
         let demoCheckedIn = false;
@@ -2339,6 +2460,11 @@
         async function createTeam() {
             if (_isCreatingTeam) return;
             const name = document.getElementById('createTeamNameInput').value.trim();
+            const nick = (document.getElementById('createCaptainNickInput')?.value || '').trim();
+            const gameId = (document.getElementById('createCaptainGameIdInput')?.value || '').trim();
+            const zoneId = (document.getElementById('createCaptainZoneIdInput')?.value || '').trim();
+            const role = document.getElementById('createCaptainRoleSelect')?.value || 'Mid';
+
             const errEl = document.getElementById('createTeamError');
             errEl.style.display = 'none';
             if (!name) {
@@ -2346,6 +2472,22 @@
                 errEl.style.display = 'block';
                 return;
             }
+            if (!nick) {
+                errEl.textContent = 'Укажите ваш игровой никнейм';
+                errEl.style.display = 'block';
+                return;
+            }
+            if (!gameId) {
+                errEl.textContent = 'Укажите ваш Game ID (в MLBB)';
+                errEl.style.display = 'block';
+                return;
+            }
+            if (!zoneId) {
+                errEl.textContent = 'Укажите ваш Zone ID (Сервер)';
+                errEl.style.display = 'block';
+                return;
+            }
+
             if (!initData) {
                 showToast('Создание команды доступно только в Telegram', false);
                 return;
@@ -2357,7 +2499,13 @@
                 const res = await apiFetch('/api/team/create', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name })
+                    body: JSON.stringify({
+                        name: name,
+                        game_nickname: nick,
+                        game_id: gameId,
+                        zone_id: zoneId,
+                        role: role
+                    })
                 });
                 if (res && res.ok) {
                     showToast('Команда «' + name + '» создана!', true);
@@ -2547,6 +2695,102 @@
         }
 
         // ── End Пачка 4 ────────────────────────────────────────────────────────
+
+        // Add Teammate Modal Functions
+        function openAddPlayerModal() {
+            haptic('light');
+            if (currentTeamCheckedIn) {
+                showToast('Состав заблокирован: Check-in уже пройден!', false);
+                return;
+            }
+            document.getElementById('addPlayerNick').value = '';
+            document.getElementById('addPlayerGameID').value = '';
+            document.getElementById('addPlayerZoneID').value = '';
+            document.getElementById('addPlayerRole').value = 'Roam';
+            document.getElementById('addPlayerIsSub').value = 'false';
+            const errEl = document.getElementById('addPlayerError');
+            if (errEl) errEl.style.display = 'none';
+            document.getElementById('addPlayerModal').classList.add('active');
+            updateBackButton();
+        }
+
+        function closeAddPlayerModal() {
+            document.getElementById('addPlayerModal').classList.remove('active');
+            updateBackButton();
+        }
+
+        let _isAddingPlayer = false;
+        async function addTeamPlayer() {
+            if (_isAddingPlayer) return;
+            haptic('light');
+            const nick = document.getElementById('addPlayerNick').value.trim();
+            const gameId = document.getElementById('addPlayerGameID').value.trim();
+            const zoneId = document.getElementById('addPlayerZoneID').value.trim();
+            const role = document.getElementById('addPlayerRole').value;
+            const isSub = document.getElementById('addPlayerIsSub').value === 'true';
+            const errEl = document.getElementById('addPlayerError');
+            if (errEl) errEl.style.display = 'none';
+
+            if (!nick) {
+                if (errEl) { errEl.textContent = 'Введите игровой никнейм'; errEl.style.display = 'block'; }
+                return;
+            }
+            if (!gameId) {
+                if (errEl) { errEl.textContent = 'Введите Game ID'; errEl.style.display = 'block'; }
+                return;
+            }
+            if (!zoneId) {
+                if (errEl) { errEl.textContent = 'Введите Zone ID (сервер)'; errEl.style.display = 'block'; }
+                return;
+            }
+
+            const btn = document.getElementById('btnAddPlayerSubmit');
+            if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
+            _isAddingPlayer = true;
+
+            try {
+                if (!initData) {
+                    cachedTeammates.push({
+                        id: Date.now(),
+                        nickname: nick,
+                        game_id: gameId,
+                        zone_id: zoneId,
+                        role: role,
+                        is_captain: false,
+                        is_substitute: isSub
+                    });
+                    closeAddPlayerModal();
+                    showToast('Игрок «' + nick + '» добавлен в состав', true);
+                    renderRoster(cachedTeammates, true, true);
+                    return;
+                }
+
+                const res = await apiFetch('/api/team/player/add', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        nickname: nick,
+                        game_id: gameId,
+                        zone_id: zoneId,
+                        role: role,
+                        is_substitute: isSub
+                    })
+                });
+
+                if (res && res.ok) {
+                    closeAddPlayerModal();
+                    showToast('Игрок «' + nick + '» добавлен в состав!', true);
+                    await loadProfile();
+                } else {
+                    const msg = (res && (res.error || res.message)) || 'Ошибка при добавлении игрока';
+                    if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; }
+                    else { showToast(msg, false); }
+                }
+            } finally {
+                _isAddingPlayer = false;
+                if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+            }
+        }
 
         // Edit Player Modal Functions
         function openEditModal(id, nick, gameId, zoneId, role) {

@@ -93,7 +93,8 @@ type TelegramService interface {
 	ChangeWinnerDirect(ctx context.Context, matchID int, newWinnerTeamName string, winScore, loseScore int) error
 
 	// In-app registration & roster management (Пачка 4)
-	CreateTeamInApp(ctx context.Context, captainTgID int64, teamName string) error
+	CreateTeamInApp(ctx context.Context, captainTgID int64, teamName, nick, gameID, zoneID, role string) error
+	AddTeamPlayer(ctx context.Context, captainTgID int64, nick, gameID, zoneID, role string, isSubstitute bool) (*models.TelegramPlayer, error)
 	GenerateInviteToken(ctx context.Context, captainTgID int64) (string, error)
 	JoinTeamByToken(ctx context.Context, playerTgID int64, token string) error
 	KickTeamPlayer(ctx context.Context, captainTgID int64, playerID int) error
@@ -279,7 +280,7 @@ func (s *TelegramServiceImpl) StartEditPlayer(ctx context.Context, tgID int64, s
 	}
 	members := s.roster(ctx, *p.TeamID)
 	if slot < 1 || slot > len(members) {
-		return fmt.Sprintf("Игрок №%d не найден. В команде %d игрок(ов), см. /my_team", slot, len(members)), KbNone
+		return fmt.Sprintf("Игрок №%d не найден. В команде %d игрок(ов).", slot, len(members)), KbNone
 	}
 	// /edit_player N is the typed form of the slot N button on the /my_team card.
 	return s.HandleRegAction(ctx, tgID, "fix", strconv.Itoa(slot))
@@ -312,7 +313,7 @@ func (s *TelegramServiceImpl) ToggleCheckIn(ctx context.Context, tgID int64) str
 	if !t.IsCheckedIn {
 		members := s.roster(ctx, t.ID)
 		if len(members) < mainRosterSlots {
-			return fmt.Sprintf("Check-in невозможен: в команде %d из %d обязательных игроков. Доукомплектуйте состав через /my_team.", len(members), mainRosterSlots)
+			return fmt.Sprintf("Check-in невозможен: в команде %d из %d обязательных игроков. Доукомплектуйте состав (минимум %d игроков).", len(members), mainRosterSlots, mainRosterSlots)
 		}
 	}
 	checkedIn := !t.IsCheckedIn
@@ -325,7 +326,7 @@ func (s *TelegramServiceImpl) ToggleCheckIn(ctx context.Context, tgID int64) str
 	if checkedIn {
 		return fmt.Sprintf("Check-in подтверждён. Команда '%s' участвует в турнире.", t.Name)
 	}
-	return fmt.Sprintf("Check-in снят. Команда '%s' НЕ подтверждена — нажмите /checkin ещё раз, чтобы подтвердить.", t.Name)
+	return fmt.Sprintf("Check-in снят. Команда '%s' НЕ подтверждена — нажмите кнопку ещё раз, чтобы подтвердить.", t.Name)
 }
 
 func (s *TelegramServiceImpl) DeleteTeam(ctx context.Context, tgID int64) string {
@@ -347,10 +348,10 @@ func (s *TelegramServiceImpl) DeleteTeam(ctx context.Context, tgID int64) string
 	return "Команда удалена."
 }
 
-func (s *TelegramServiceImpl) UpdateTeamPlayer(ctx context.Context, captainTgID int64, playerID int, nick, gameID, zoneID, role string) error {
-	p, err := s.repo.GetPlayerByTelegramID(ctx, captainTgID)
-	if err != nil || p == nil || p.TeamID == nil || !p.IsCaptain {
-		return errors.New("только капитан команды может редактировать состав")
+func (s *TelegramServiceImpl) UpdateTeamPlayer(ctx context.Context, callerTgID int64, playerID int, nick, gameID, zoneID, role string) error {
+	p, err := s.repo.GetPlayerByTelegramID(ctx, callerTgID)
+	if err != nil || p == nil || p.TeamID == nil {
+		return errors.New("вы не состоите в команде")
 	}
 	team, err := s.repo.GetTeamByID(ctx, *p.TeamID)
 	if err != nil || team == nil {
@@ -368,15 +369,21 @@ func (s *TelegramServiceImpl) UpdateTeamPlayer(ctx context.Context, captainTgID 
 		return errors.New("не удалось получить состав команды")
 	}
 
-	found := false
+	var targetMember *models.TelegramPlayer
 	for _, m := range members {
 		if m.ID == playerID {
-			found = true
+			targetMember = &m
 			break
 		}
 	}
-	if !found {
+	if targetMember == nil {
 		return errors.New("игрок не найден в составе вашей команды")
+	}
+
+	// Permission: captain can edit anyone; regular member can edit only themselves
+	isSelf := targetMember.TelegramID != nil && *targetMember.TelegramID == callerTgID
+	if !p.IsCaptain && !isSelf {
+		return errors.New("только капитан команды может редактировать других участников")
 	}
 
 	nick = strings.TrimSpace(nick)
@@ -404,9 +411,8 @@ func (s *TelegramServiceImpl) UpdateTeamPlayer(ctx context.Context, captainTgID 
 	return nil
 }
 
-// CreateTeamInApp creates a new team and assigns the caller as captain.
-// The caller must already have a player row (created on /start or first visit).
-func (s *TelegramServiceImpl) CreateTeamInApp(ctx context.Context, captainTgID int64, teamName string) error {
+// CreateTeamInApp creates a new team, assigns the caller as captain, and populates captain details.
+func (s *TelegramServiceImpl) CreateTeamInApp(ctx context.Context, captainTgID int64, teamName, nick, gameID, zoneID, role string) error {
 	if open, reason := s.RegistrationStatus(ctx); !open {
 		return errors.New(reason)
 	}
@@ -417,16 +423,46 @@ func (s *TelegramServiceImpl) CreateTeamInApp(ctx context.Context, captainTgID i
 	if len(teamName) > maxTeamNameLen {
 		return fmt.Errorf("название команды слишком длинное (максимум %d символов)", maxTeamNameLen)
 	}
+
+	nick = strings.TrimSpace(nick)
+	gameID = strings.TrimSpace(gameID)
+	zoneID = strings.TrimSpace(zoneID)
+	role = strings.TrimSpace(role)
+	if nick == "" {
+		return errors.New("укажите ваш игровой никнейм")
+	}
+	if gameID == "" {
+		return errors.New("укажите ваш Game ID")
+	}
+	if zoneID == "" {
+		return errors.New("укажите ваш Zone ID (Сервер)")
+	}
+	if role == "" {
+		role = "Mid"
+	}
+
 	p, err := s.repo.GetPlayerByTelegramID(ctx, captainTgID)
 	if err != nil {
 		return fmt.Errorf("не удалось получить данные игрока: %w", err)
 	}
 	if p == nil {
-		return errors.New("сначала запустите бота командой /start, чтобы создать аккаунт")
+		p = &models.TelegramPlayer{TelegramID: &captainTgID}
+		if err := s.repo.CreateOrUpdatePlayer(ctx, p); err != nil {
+			return fmt.Errorf("не удалось создать профиль игрока: %w", err)
+		}
+		p, err = s.repo.GetPlayerByTelegramID(ctx, captainTgID)
+		if err != nil || p == nil {
+			return errors.New("не удалось инициализировать профиль игрока")
+		}
 	}
 	if p.TeamID != nil {
 		return errors.New("вы уже состоите в команде. Сначала покиньте или удалите текущую команду")
 	}
+
+	if dup := s.duplicateGameID(ctx, gameID, p.ID); dup != "" {
+		return errors.New(dup)
+	}
+
 	team, err := s.repo.CreateTeam(ctx, teamName)
 	if err != nil {
 		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
@@ -440,7 +476,72 @@ func (s *TelegramServiceImpl) CreateTeamInApp(ctx context.Context, captainTgID i
 	if err := s.repo.UpdatePlayerField(ctx, captainTgID, "is_captain", true); err != nil {
 		return fmt.Errorf("не удалось установить флаг капитана: %w", err)
 	}
+	_ = s.repo.UpdatePlayerField(ctx, captainTgID, "game_nickname", nick)
+	_ = s.repo.UpdatePlayerField(ctx, captainTgID, "game_id", gameID)
+	_ = s.repo.UpdatePlayerField(ctx, captainTgID, "zone_id", zoneID)
+	_ = s.repo.UpdatePlayerField(ctx, captainTgID, "main_role", role)
 	return nil
+}
+
+// AddTeamPlayer adds a teammate directly to the captain's team (roster row).
+func (s *TelegramServiceImpl) AddTeamPlayer(ctx context.Context, captainTgID int64, nick, gameID, zoneID, role string, isSubstitute bool) (*models.TelegramPlayer, error) {
+	p, err := s.repo.GetPlayerByTelegramID(ctx, captainTgID)
+	if err != nil || p == nil || p.TeamID == nil || !p.IsCaptain {
+		return nil, errors.New("только капитан команды может добавлять игроков")
+	}
+	team, err := s.repo.GetTeamByID(ctx, *p.TeamID)
+	if err != nil || team == nil {
+		return nil, errors.New("команда не найдена")
+	}
+	if team.IsCheckedIn {
+		return nil, errors.New("добавление игроков заблокировано: команда уже прошла Check-in")
+	}
+	if open, _ := s.RegistrationStatus(ctx); !open {
+		return nil, errors.New("добавление игроков заблокировано: регистрация на турнир закрыта")
+	}
+
+	members, err := s.repo.GetTeamMembers(ctx, team.ID)
+	if err != nil {
+		return nil, errors.New("не удалось получить состав команды")
+	}
+	if len(members) >= maxTeamSlots {
+		return nil, fmt.Errorf("в команде уже максимальное количество игроков (%d)", maxTeamSlots)
+	}
+
+	nick = strings.TrimSpace(nick)
+	gameID = strings.TrimSpace(gameID)
+	zoneID = strings.TrimSpace(zoneID)
+	role = strings.TrimSpace(role)
+
+	if nick == "" {
+		return nil, errors.New("никнейм игрока не может быть пустым")
+	}
+	if gameID == "" {
+		return nil, errors.New("game ID игрока не может быть пустым")
+	}
+	if zoneID == "" {
+		return nil, errors.New("zone ID игрока не может быть пустым")
+	}
+	if role == "" {
+		role = "Roam"
+	}
+
+	if dup := s.duplicateGameID(ctx, gameID, 0); dup != "" {
+		return nil, errors.New(dup)
+	}
+
+	newPlayer := &models.TelegramPlayer{
+		TeamID:       &team.ID,
+		GameNickname: nick,
+		GameID:       gameID,
+		ZoneID:       zoneID,
+		MainRole:     role,
+		IsSubstitute: isSubstitute,
+	}
+	if err := s.repo.CreateTeammate(ctx, newPlayer); err != nil {
+		return nil, fmt.Errorf("не удалось добавить игрока: %w", err)
+	}
+	return newPlayer, nil
 }
 
 // inviteKey returns the settings key used to store a team's active invite token.
@@ -523,7 +624,14 @@ func (s *TelegramServiceImpl) JoinTeamByToken(ctx context.Context, playerTgID in
 		return fmt.Errorf("не удалось получить данные игрока: %w", err)
 	}
 	if p == nil {
-		return errors.New("сначала запустите бота командой /start, чтобы создать аккаунт")
+		p = &models.TelegramPlayer{TelegramID: &playerTgID}
+		if err := s.repo.CreateOrUpdatePlayer(ctx, p); err != nil {
+			return fmt.Errorf("не удалось создать профиль игрока: %w", err)
+		}
+		p, err = s.repo.GetPlayerByTelegramID(ctx, playerTgID)
+		if err != nil || p == nil {
+			return errors.New("не удалось инициализировать профиль игрока")
+		}
 	}
 	if p.TeamID != nil {
 		if *p.TeamID == teamID {

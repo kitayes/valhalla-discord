@@ -267,12 +267,12 @@ func (r *TelegramPostgres) GetTeamMembers(ctx context.Context, teamID int) ([]mo
 // CreateTeammate inserts a roster row entered by the captain. Such rows have
 // no telegram_id of their own; every other field comes from the parsed line.
 func (r *TelegramPostgres) CreateTeammate(ctx context.Context, p *models.TelegramPlayer) error {
-	_, err := r.db.ExecContext(ctx, `
+	return r.db.QueryRowContext(ctx, `
 		INSERT INTO telegram_players
 			(team_id, game_nickname, game_id, zone_id, stars, main_role, telegram_username, is_substitute)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`, p.TeamID, p.GameNickname, p.GameID, p.ZoneID, p.Stars, p.MainRole, p.TelegramUsername, p.IsSubstitute)
-	return err
+		RETURNING id
+	`, p.TeamID, p.GameNickname, p.GameID, p.ZoneID, p.Stars, p.MainRole, p.TelegramUsername, p.IsSubstitute).Scan(&p.ID)
 }
 
 // DeleteTeammate deletes a teammate row by ID, ensuring captains cannot be accidentally deleted.
