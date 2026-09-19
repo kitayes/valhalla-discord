@@ -1370,15 +1370,13 @@
                     </div>
                     <span id="createTeamCharCount" style="font-size: 11px; color: var(--text-muted);">0 / 64</span>
                 </div>
-                <div style="display: flex; gap: 8px;">
-                    <input type="text" id="createTeamNameInput" placeholder="Название команды"
-                        style="flex: 1; background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 8px; padding: 9px 12px; color: var(--text-main); font-size: 13px; outline: none;"
-                        maxlength="64"
-                        oninput="document.getElementById('createTeamCharCount').textContent = this.value.length + ' / 64'" />
-                    <button class="btn btn-green" id="btnCreateTeam" style="padding: 9px 14px; flex-shrink: 0;" onclick="createTeam()">
-                        Создать
-                    </button>
-                </div>
+                <input type="text" id="createTeamNameInput" placeholder="Название команды"
+                    style="width: 100%; box-sizing: border-box; background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 8px; padding: 11px 12px; color: var(--text-main); font-size: 13px; outline: none; margin-bottom: 10px;"
+                    maxlength="64"
+                    oninput="document.getElementById('createTeamCharCount').textContent = this.value.length + ' / 64'" />
+                <button class="btn btn-green" id="btnCreateTeam" style="margin-top: 0;" onclick="createTeam()">
+                    Создать команду
+                </button>
                 <div id="createTeamError" style="display:none; font-size:11px; color:var(--accent-red); margin-top:6px;"></div>
             </div>
 
@@ -1388,13 +1386,11 @@
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
                     Вступить по ссылке
                 </div>
-                <div style="display: flex; gap: 8px;">
-                    <input type="text" id="joinTokenInput" placeholder="Ссылка или код приглашения"
-                        style="flex: 1; background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 8px; padding: 9px 12px; color: var(--text-main); font-size: 13px; outline: none; font-family: monospace;" />
-                    <button class="btn btn-blue" id="btnJoinTeam" style="padding: 9px 14px; flex-shrink: 0;" onclick="joinTeam()">
-                        Войти
-                    </button>
-                </div>
+                <input type="text" id="joinTokenInput" placeholder="Ссылка или код приглашения"
+                    style="width: 100%; box-sizing: border-box; background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 8px; padding: 11px 12px; color: var(--text-main); font-size: 13px; outline: none; font-family: monospace; margin-bottom: 10px;" />
+                <button class="btn btn-blue" id="btnJoinTeam" style="margin-top: 0;" onclick="joinTeam()">
+                    Вступить в команду
+                </button>
                 <div id="joinTeamError" style="display:none; font-size:11px; color:var(--accent-red); margin-top:6px;"></div>
             </div>
         </div>
