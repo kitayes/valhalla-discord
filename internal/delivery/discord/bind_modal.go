@@ -29,7 +29,6 @@ func bindPromptComponents() []discordgo.MessageComponent {
 				Label:    "Привязать профиль",
 				Style:    discordgo.PrimaryButton,
 				CustomID: buttonBindOpen,
-				Emoji:    &discordgo.ComponentEmoji{Name: "🔗"},
 			},
 		}},
 	}
@@ -81,7 +80,7 @@ func (b *Bot) onModalSubmit(s *discordgo.Session, i *discordgo.InteractionCreate
 
 	member := interactionMember(i.Interaction)
 	if member == nil {
-		b.respondMessage(s, i.Interaction, "⚠️ Эта команда работает только на сервере.", true)
+		b.respondMessage(s, i.Interaction, "Эта команда работает только на сервере.", true)
 		return
 	}
 

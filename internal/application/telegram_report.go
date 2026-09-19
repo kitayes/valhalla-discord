@@ -125,7 +125,7 @@ func (s *TelegramServiceImpl) StartReport(ctx context.Context, tgID int64) (stri
 		draft.PlayOrder = m.PlayOrder
 		s.setReportDraft(tgID, draft)
 		s.setState(ctx, tgID, models.StateReportScore)
-		return fmt.Sprintf("🏆 Отчет о результате матча\nМатч #%d (раунд %d): %s vs %s\n\nУкажите счет матча в пользу вашей команды:\n(Выберите кнопку или отправьте счет сообщением, например 2:0)",
+		return fmt.Sprintf("Отчет о результате матча\nМатч #%d (раунд %d): %s vs %s\n\nУкажите счет матча в пользу вашей команды:\n(Выберите кнопку или отправьте счет сообщением, например 2:0)",
 			m.PlayOrder, m.Round, myTeam.Name, opp.Name), KbReportScore
 	}
 
@@ -136,7 +136,7 @@ func (s *TelegramServiceImpl) StartReport(ctx context.Context, tgID int64) (stri
 	s.setReportDraft(tgID, draft)
 	s.setState(ctx, tgID, models.StateReportOpponent)
 
-	msg := fmt.Sprintf("🏆 Отчет о результате матча\nВаша команда: %s (Победитель)\n\nВыберите команду соперника, против которой вы играли:", myTeam.Name)
+	msg := fmt.Sprintf("Отчет о результате матча\nВаша команда: %s (Победитель)\n\nВыберите команду соперника, против которой вы играли:", myTeam.Name)
 	return msg, KbReportOpponent
 }
 
@@ -212,7 +212,7 @@ func (s *TelegramServiceImpl) SetReportScore(ctx context.Context, tgID int64, sc
 	}
 
 	if x <= y {
-		return fmt.Sprintf("❌ По правилам турнира отчет отправляет команда-победитель.\nВ счете победа должна быть за вашей командой (например, 2:0 или 2:1).\n\nЕсли вы проиграли матч со счетом %s, отчет должен отправить капитан команды соперника.", formatted), KbReportScore
+		return fmt.Sprintf("По правилам турнира отчет отправляет команда-победитель.\nВ счете победа должна быть за вашей командой (например, 2:0 или 2:1).\n\nЕсли вы проиграли матч со счетом %s, отчет должен отправить капитан команды соперника.", formatted), KbReportScore
 	}
 
 	draft.Score = formatted
@@ -221,7 +221,7 @@ func (s *TelegramServiceImpl) SetReportScore(ctx context.Context, tgID int64, sc
 	s.setReportDraft(tgID, draft)
 	s.setState(ctx, tgID, models.StateReportScreenshots)
 
-	msg := fmt.Sprintf("Матч: %s %s %s\n\n📸 Отправьте скриншоты победы в матче.\nВы можете отправить один или несколько скриншотов (альбомом или по очереди).\n\nЗагружено: 0 скриншотов.",
+	msg := fmt.Sprintf("Матч: %s %s %s\n\nОтправьте скриншоты победы в матче.\nВы можете отправить один или несколько скриншотов (альбомом или по очереди).\n\nЗагружено: 0 скриншотов.",
 		draft.WinnerTeamName, draft.Score, draft.LoserTeamName)
 	return msg, KbReportPhotos + ":0"
 }
@@ -239,7 +239,7 @@ func (s *TelegramServiceImpl) AddReportPhoto(ctx context.Context, tgID int64, ph
 	n := len(draft.PhotoFileIDs)
 	s.reportMu.Unlock()
 
-	msg := fmt.Sprintf("📸 Скриншот добавлен! Всего загружено: %d.\n\nОтправьте ещё скриншот или нажмите «Отправить отчет» ниже:", n)
+	msg := fmt.Sprintf("Скриншот добавлен! Всего загружено: %d.\n\nОтправьте ещё скриншот или нажмите «Отправить отчет» ниже:", n)
 	return msg, KbReportPhotos + ":" + strconv.Itoa(n), n
 }
 
@@ -258,7 +258,7 @@ func (s *TelegramServiceImpl) ResetReportPhotos(ctx context.Context, tgID int64)
 	loserName := draft.LoserTeamName
 	s.reportMu.Unlock()
 
-	msg := fmt.Sprintf("Скриншоты сброшены.\nМатч: %s %s %s\n\n📸 Отправьте новые скриншоты победы:",
+	msg := fmt.Sprintf("Скриншоты сброшены.\nМатч: %s %s %s\n\nОтправьте новые скриншоты победы:",
 		winnerName, score, loserName)
 	return msg, KbReportPhotos + ":0"
 }
@@ -302,7 +302,7 @@ func (s *TelegramServiceImpl) SubmitReport(ctx context.Context, tgID int64) (str
 	s.setState(ctx, tgID, models.StateIdle)
 	s.clearReportDraft(tgID)
 
-	successMsg := fmt.Sprintf("✅ Отчет о матче %s %s %s успешно отправлен судьям!",
+	successMsg := fmt.Sprintf("Отчет о матче %s %s %s успешно отправлен судьям!",
 		d.WinnerTeamName, d.Score, d.LoserTeamName)
 	var ready []models.BracketMatch
 	if s.bracket != nil && d.BracketMatchID != 0 {
@@ -340,7 +340,7 @@ func (s *TelegramServiceImpl) GetRecentMatchReports(ctx context.Context, limit i
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("🏆 Последние отчеты о матчах (%d):\n\n", len(reports)))
+	sb.WriteString(fmt.Sprintf("Последние отчеты о матчах (%d):\n\n", len(reports)))
 	for i, r := range reports {
 		sb.WriteString(fmt.Sprintf("%d. %s %s %s (%s) — скриншотов: %d\n",
 			i+1, r.WinnerTeamName, r.Score, r.LoserTeamName,

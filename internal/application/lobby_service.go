@@ -372,7 +372,7 @@ func (l *LobbyService) CheckInactivity() {
 		l.logger.Info("lobby: kicking inactive player %s (ID: %d)", e.player.Name, e.player.ID)
 		notices = append(notices, notice{
 			discordID: e.discordID,
-			message: fmt.Sprintf("👋 **%s**, вы были удалены из лобби за неактивность (%d+ мин).",
+			message: fmt.Sprintf("**%s**, вы были удалены из лобби за неактивность (%d+ мин).",
 				e.player.Name, int(inactivityTimeout.Minutes())),
 		})
 		promoted, _ := l.removePlayerLocked(e.player.ID)
@@ -427,7 +427,7 @@ func (l *LobbyService) removePlayerLocked(playerID int) ([]notice, bool) {
 					promoted.player.Name, promoted.player.ID)
 				return []notice{{
 					discordID: promoted.discordID,
-					message: fmt.Sprintf("🎉 **%s**, вы переведены из резерва в основной состав лобби! Место освободилось.",
+					message: fmt.Sprintf("**%s**, вы переведены из резерва в основной состав лобби! Место освободилось.",
 						promoted.player.Name),
 				}}, true
 			}

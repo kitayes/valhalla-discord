@@ -60,7 +60,7 @@ func (s *FAQService) AnswerQuestion(ctx context.Context, userQuestion string) st
 	s.mu.RUnlock()
 
 	if faqContext == "" {
-		return "⚠️ База знаний пуста. Попробуйте позже или используйте /faq_reload."
+		return "База знаний пуста. Попробуйте позже или используйте /faq_reload."
 	}
 
 	if s.faqClient != nil {
@@ -84,11 +84,11 @@ func (s *FAQService) AnswerQuestion(ctx context.Context, userQuestion string) st
 func (s *FAQService) fallbackSearch(question, faq string) string {
 	best, score := bestFAQSection(question, faq)
 	if score == 0 {
-		return "⚠️ Не нашёл ответа в базе знаний, а ИИ-ассистент сейчас недоступен.\n\n" +
+		return "Не нашёл ответа в базе знаний, а ИИ-ассистент сейчас недоступен.\n\n" +
 			"Попробуйте переформулировать вопрос или обратитесь к администратору."
 	}
 
-	return "ℹ️ **Из базы знаний** (ИИ-ассистент недоступен, показываю ближайший раздел):\n\n" + best
+	return "**Из базы знаний** (ИИ-ассистент недоступен, показываю ближайший раздел):\n\n" + best
 }
 
 // bestFAQSection returns the FAQ section matching the most question keywords,

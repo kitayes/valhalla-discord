@@ -209,7 +209,7 @@ func (b *Bot) Init() error {
 	// Register match button handlers (Team A WIN / Team B WIN)
 	b.RegisterMatchHandlers()
 
-	// Register requeue button handler (🔁 Встать в очередь лобби)
+	// Register requeue button handler (Встать в очередь лобби)
 	b.RegisterRequeueHandler()
 
 	// Register danger button confirmation handlers (/wipe, /reset, /wipe_player, /reset_player)
@@ -338,7 +338,7 @@ func (b *Bot) requireReferee(s *discordgo.Session, i *discordgo.Interaction) boo
 	if b.canRefereeMatches(interactionMember(i)) {
 		return true
 	}
-	b.respondMessage(s, i, "⛔ Только рефери (роль SUDЬЯ) или админ могут управлять матчами.", true)
+	b.respondMessage(s, i, "Только рефери (роль SUDЬЯ) или админ могут управлять матчами.", true)
 	return false
 }
 

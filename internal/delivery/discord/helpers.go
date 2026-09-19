@@ -60,13 +60,13 @@ func getColorByWinRate(winRate float64) int {
 func getMedalEmoji(position int) string {
 	switch position {
 	case 0:
-		return "🥇"
+		return "[1]"
 	case 1:
-		return "🥈"
+		return "[2]"
 	case 2:
-		return "🥉"
+		return "[3]"
 	default:
-		return "▪️"
+		return "[-]"
 	}
 }
 

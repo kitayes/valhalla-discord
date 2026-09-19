@@ -38,15 +38,15 @@ func DetermineTier(mmr int) Tier {
 func FormatTierDisplay(t Tier) string {
 	switch t {
 	case TierObsidian:
-		return "⚫ S-Tier: OBSIDIAN"
+		return "[S-Tier] OBSIDIAN"
 	case TierOnyx:
-		return "⚪ A-Tier: ONYX"
+		return "[A-Tier] ONYX"
 	case TierCarbon:
-		return "🔵 B-Tier: CARBON"
+		return "[B-Tier] CARBON"
 	case TierGraphite:
-		return "🟢 C-Tier: GRAPHITE"
+		return "[C-Tier] GRAPHITE"
 	default:
-		return "⚪ Unranked"
+		return "Unranked"
 	}
 }
 

@@ -51,7 +51,7 @@ func (b *Bot) newBalanceCommand() *discordgo.ApplicationCommand {
 
 func (b *Bot) RegisterMatchHandlers() {
 	b.session.AddHandler(b.wrapRecover(b.onMatchSelectMenu))
-	b.session.AddHandler(b.wrapRecover(b.onMatchWinButton))
+	b.session.AddHandler(b.wrapRecover(b.onMatchResultButton))
 }
 
 func (b *Bot) RegisterRequeueHandler() {
@@ -69,7 +69,7 @@ func (b *Bot) handleCreateMatch(ctx context.Context, s *discordgo.Session, i *di
 
 	activePlayers := b.services.Lobby.GetActivePlayers()
 	if len(activePlayers) < teamSize*2 {
-		b.respondMessage(s, i, fmt.Sprintf("⚠️ Нужно %d игроков в лобби, сейчас %d.", teamSize*2, len(activePlayers)), true)
+		b.respondMessage(s, i, fmt.Sprintf("Нужно %d игроков в лобби, сейчас %d.", teamSize*2, len(activePlayers)), true)
 		return
 	}
 
@@ -85,7 +85,7 @@ func (b *Bot) handleCreateMatch(ctx context.Context, s *discordgo.Session, i *di
 	b.respond(s, i, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Content: "🛡️ **Шаг 1/4: Выберите Капитана A**",
+			Content: "**Шаг 1/4: Выберите Капитана A**",
 			Flags:   discordgo.MessageFlagsEphemeral,
 			Components: []discordgo.MessageComponent{
 				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
@@ -155,7 +155,7 @@ func (b *Bot) handleSelectCaptainA(ctx context.Context, s *discordgo.Session, i 
 	b.respond(s, i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
-			Content: fmt.Sprintf("🛡️ Капитан A: **%s**\n\n**Шаг 2/4: Выберите Капитана B**", captainAName),
+			Content: fmt.Sprintf("Капитан A: **%s**\n\n**Шаг 2/4: Выберите Капитана B**", captainAName),
 			Flags:   discordgo.MessageFlagsEphemeral,
 			Components: []discordgo.MessageComponent{
 				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
@@ -194,7 +194,7 @@ func (b *Bot) handleSelectCaptainB(ctx context.Context, s *discordgo.Session, i 
 	b.respond(s, i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
-			Content: fmt.Sprintf("🛡️ Капитан A: **%s**\n🛡️ Капитан B: **%s**\n\n**Шаг 3/4: Выберите 4 игроков для Команды A**", captainAName, captainBName),
+			Content: fmt.Sprintf("Капитан A: **%s**\nКапитан B: **%s**\n\n**Шаг 3/4: Выберите 4 игроков для Команды A**", captainAName, captainBName),
 			Flags:   discordgo.MessageFlagsEphemeral,
 			Components: []discordgo.MessageComponent{
 				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
@@ -248,7 +248,7 @@ func (b *Bot) handleSelectTeamA(ctx context.Context, s *discordgo.Session, i *di
 	b.respond(s, i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
-			Content: fmt.Sprintf("🛡️ Капитан A: **%s**\n🛡️ Капитан B: **%s**\n👥 Команда A: %s\n\n**Шаг 4/4: Выберите 4 игроков для Команды B**",
+			Content: fmt.Sprintf("Капитан A: **%s**\nКапитан B: **%s**\nКоманда A: %s\n\n**Шаг 4/4: Выберите 4 игроков для Команды B**",
 				captainAName, captainBName, strings.Join(teamANames[1:], ", ")),
 			Flags: discordgo.MessageFlagsEphemeral,
 			Components: []discordgo.MessageComponent{
@@ -299,7 +299,7 @@ func (b *Bot) handleSelectTeamB(ctx context.Context, s *discordgo.Session, i *di
 		b.logger.Error("match: failed to create: %v", err)
 		b.respond(s, i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{Content: "⚠️ Ошибка при создании матча: " + err.Error(), Flags: discordgo.MessageFlagsEphemeral},
+			Data: &discordgo.InteractionResponseData{Content: "Ошибка при создании матча: " + err.Error(), Flags: discordgo.MessageFlagsEphemeral},
 		})
 		return
 	}
@@ -348,8 +348,8 @@ func (b *Bot) publishCreatedMatch(
 func matchResultButtons(matchID int) []discordgo.MessageComponent {
 	return []discordgo.MessageComponent{
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-			discordgo.Button{Label: "Team A WIN", Style: discordgo.SuccessButton, CustomID: fmt.Sprintf("%s_%d", buttonTeamAWin, matchID), Emoji: &discordgo.ComponentEmoji{Name: "🏆"}},
-			discordgo.Button{Label: "Team B WIN", Style: discordgo.DangerButton, CustomID: fmt.Sprintf("%s_%d", buttonTeamBWin, matchID), Emoji: &discordgo.ComponentEmoji{Name: "🏆"}},
+			discordgo.Button{Label: "Team A WIN", Style: discordgo.SuccessButton, CustomID: fmt.Sprintf("%s_%d", buttonTeamAWin, matchID)},
+			discordgo.Button{Label: "Team B WIN", Style: discordgo.DangerButton, CustomID: fmt.Sprintf("%s_%d", buttonTeamBWin, matchID)},
 		}},
 	}
 }
@@ -358,15 +358,11 @@ func matchResultButtons(matchID int) []discordgo.MessageComponent {
 // Match Closure
 // =====================================================================
 
-func (b *Bot) onMatchWinButton(s *discordgo.Session, i *discordgo.InteractionCreate) {
+func (b *Bot) onMatchResultButton(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	if i.Type != discordgo.InteractionMessageComponent {
 		return
 	}
 
-	// The prefix filter runs before anything with a side effect. discordgo
-	// dispatches every component interaction to every registered handler, so a
-	// gate placed above this check would burn a rate-limit token — and answer
-	// the interaction — once per handler in the process.
 	data := i.MessageComponentData()
 	customID := data.CustomID
 	if !strings.HasPrefix(customID, buttonTeamAWin) && !strings.HasPrefix(customID, buttonTeamBWin) {
@@ -383,16 +379,15 @@ func (b *Bot) onMatchWinButton(s *discordgo.Session, i *discordgo.InteractionCre
 		return
 	}
 
-	var winner, prefix string
-	if strings.HasPrefix(customID, buttonTeamAWin) {
-		winner, prefix = domain.TeamA, buttonTeamAWin
-	} else {
+	winner := domain.TeamA
+	prefix := buttonTeamAWin
+	if strings.HasPrefix(customID, buttonTeamBWin) {
 		winner, prefix = domain.TeamB, buttonTeamBWin
 	}
 	matchID := parseID(strings.TrimPrefix(customID, prefix+"_"))
 	if matchID <= 0 {
 		b.logger.Error("match: malformed win button custom ID %q", customID)
-		b.respondMessage(s, i.Interaction, "⚠️ Некорректная кнопка. Обновите сообщение матча.", true)
+		b.respondMessage(s, i.Interaction, "Некорректная кнопка. Обновите сообщение матча.", true)
 		return
 	}
 
@@ -401,14 +396,14 @@ func (b *Bot) onMatchWinButton(s *discordgo.Session, i *discordgo.InteractionCre
 		b.logger.Error("match: atomic closure failed for #%d: %v", matchID, err)
 		b.respond(s, i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{Content: "⚠️ Ошибка системы при закрытии матча.", Flags: discordgo.MessageFlagsEphemeral},
+			Data: &discordgo.InteractionResponseData{Content: "Ошибка системы при закрытии матча.", Flags: discordgo.MessageFlagsEphemeral},
 		})
 		return
 	}
 	if !success {
 		b.respond(s, i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{Content: "⏳ Этот матч уже обрабатывается или завершён.", Flags: discordgo.MessageFlagsEphemeral},
+			Data: &discordgo.InteractionResponseData{Content: "Этот матч уже обрабатывается или завершён.", Flags: discordgo.MessageFlagsEphemeral},
 		})
 		return
 	}
@@ -435,7 +430,7 @@ func (b *Bot) onMatchWinButton(s *discordgo.Session, i *discordgo.InteractionCre
 		// embed over a rating that was never applied.
 		b.logger.Error("elo: failed to process match #%d: %v", matchID, err)
 		b.respondMessage(s, i.Interaction, fmt.Sprintf(
-			"⚠️ Матч #%d закрыт (%s), но рейтинг применён не полностью — требуется ручная проверка. "+
+			"Матч #%d закрыт (%s), но рейтинг применён не полностью — требуется ручная проверка. "+
 				"Ставки рассчитываются отдельно.", matchID, winner), false)
 		return
 	}
@@ -459,7 +454,7 @@ func (b *Bot) onMatchWinButton(s *discordgo.Session, i *discordgo.InteractionCre
 	match, err := b.services.Lobby.GetMatch(ctx, matchID)
 	if err != nil {
 		b.logger.Error("match: closed #%d but failed to reload it for the result embed: %v", matchID, err)
-		b.respondMessage(s, i.Interaction, fmt.Sprintf("✅ Матч #%d закрыт (%s), но карточку результата отрисовать не удалось.", matchID, winner), false)
+		b.respondMessage(s, i.Interaction, fmt.Sprintf("Матч #%d закрыт (%s), но карточку результата отрисовать не удалось.", matchID, winner), false)
 		return
 	}
 
@@ -473,7 +468,7 @@ func (b *Bot) onMatchWinButton(s *discordgo.Session, i *discordgo.InteractionCre
 			Embeds: []*discordgo.MessageEmbed{embed},
 			Components: []discordgo.MessageComponent{
 				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-					discordgo.Button{Label: "🔁 Встать в очередь лобби", Style: discordgo.SecondaryButton, CustomID: fmt.Sprintf("requeue_%d", matchID)},
+					discordgo.Button{Label: "Встать в очередь лобби", Style: discordgo.SecondaryButton, CustomID: fmt.Sprintf("requeue_%d", matchID)},
 				}},
 			},
 		},
@@ -517,7 +512,7 @@ func (b *Bot) handleCancelMatch(ctx context.Context, s *discordgo.Session, i *di
 
 	refundNote := fmt.Sprintf("ставки возвращены (%d)", refunded)
 	if refundErr != nil {
-		refundNote = "⚠️ **ставки вернуть сразу не удалось — возврат выполнится автоматически**"
+		refundNote = "**ставки вернуть сразу не удалось — возврат выполнится автоматически**"
 	}
 
 	// Count what actually happened. The previous version discarded the result of
@@ -547,7 +542,7 @@ func (b *Bot) handleCancelMatch(ctx context.Context, s *discordgo.Session, i *di
 		b.logger.Warn("cancel_match: cannot reload match #%d: %v", matchID, err)
 	} else if match.ThreadID != "" {
 		threadID := match.ThreadID
-		if _, err := s.ChannelMessageSend(threadID, fmt.Sprintf("🚫 **Матч #%d отменён судьёй.** %s", matchID, refundNote)); err != nil {
+		if _, err := s.ChannelMessageSend(threadID, fmt.Sprintf("**Матч #%d отменён судьёй.** %s", matchID, refundNote)); err != nil {
 			b.logger.Warn("cancel_match: failed to post to thread %s: %v", threadID, err)
 		}
 		b.goBackground("archive-thread", backgroundTimeout, func(bg context.Context) {
@@ -555,7 +550,7 @@ func (b *Bot) handleCancelMatch(ctx context.Context, s *discordgo.Session, i *di
 		})
 	}
 
-	b.respondMessage(s, i, fmt.Sprintf("✅ Матч #%d отменён. Возвращено в лобби: %d из %d. %s",
+	b.respondMessage(s, i, fmt.Sprintf("Матч #%d отменён. Возвращено в лобби: %d из %d. %s",
 		matchID, requeued, len(playerIDs), refundNote), false)
 }
 
@@ -565,11 +560,11 @@ func (b *Bot) handleCancelMatch(ctx context.Context, s *discordgo.Session, i *di
 func cancelFailureMessage(err error, matchID int) string {
 	switch {
 	case errors.Is(err, domain.ErrMatchNotFound):
-		return fmt.Sprintf("❌ Матч #%d не найден. Проверьте номер в карточке матча.", matchID)
+		return fmt.Sprintf("Матч #%d не найден. Проверьте номер в карточке матча.", matchID)
 	case errors.Is(err, domain.ErrMatchNotActive):
-		return fmt.Sprintf("❌ Матч #%d уже завершён или отменён — отменять нечего.", matchID)
+		return fmt.Sprintf("Матч #%d уже завершён или отменён — отменять нечего.", matchID)
 	default:
-		return fmt.Sprintf("❌ Не удалось отменить матч #%d. Попробуйте ещё раз.", matchID)
+		return fmt.Sprintf("Не удалось отменить матч #%d. Попробуйте ещё раз.", matchID)
 	}
 }
 
@@ -610,7 +605,7 @@ func (b *Bot) onRequeueButton(s *discordgo.Session, i *discordgo.InteractionCrea
 		b.respond(s, i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
-				Content:    "⚠️ Ваш Discord не привязан к профилю игрока. Нажмите кнопку и укажите свой ник в игре.",
+				Content:    "Ваш Discord не привязан к профилю игрока. Нажмите кнопку и укажите свой ник в игре.",
 				Components: bindPromptComponents(),
 				Flags:      discordgo.MessageFlagsEphemeral,
 			},
@@ -634,7 +629,7 @@ func (b *Bot) onRequeueButton(s *discordgo.Session, i *discordgo.InteractionCrea
 		match, err := b.services.Lobby.GetMatch(ctx, matchID)
 		if err != nil {
 			b.logger.Error("requeue: failed to load match #%d: %v", matchID, err)
-			b.respondMessage(s, i.Interaction, "⚠️ Не удалось проверить состав матча. Попробуйте ещё раз.", true)
+			b.respondMessage(s, i.Interaction, "Не удалось проверить состав матча. Попробуйте ещё раз.", true)
 			return
 		}
 		allIDs := concatIDs(match.TeamAIDs, match.TeamBIDs)
@@ -647,7 +642,7 @@ func (b *Bot) onRequeueButton(s *discordgo.Session, i *discordgo.InteractionCrea
 	}
 
 	if !isParticipant {
-		b.respondMessage(s, i.Interaction, "⚠️ Вы не участвовали в этом матче.", true)
+		b.respondMessage(s, i.Interaction, "Вы не участвовали в этом матче.", true)
 		return
 	}
 
@@ -658,9 +653,9 @@ func (b *Bot) onRequeueButton(s *discordgo.Session, i *discordgo.InteractionCrea
 		return
 	}
 
-	content := "✅ Вы снова в лобби!"
+	content := "Вы снова в лобби!"
 	if place == application.PlaceWaitlist {
-		content = "ℹ️ Основное лобби заполнено. Вы добавлены в резерв."
+		content = "Основное лобби заполнено. Вы добавлены в резерв."
 	}
 
 	b.logger.Info("requeue: player %s (ID: %d) rejoined lobby (%s)", player.Name, player.ID, place)
@@ -920,11 +915,11 @@ func (b *Bot) processTelegramPayout(ctx context.Context, matchID int, winningTea
 
 func (b *Bot) buildMatchEmbed(matchID int, captainA, captainB string, teamA, teamB []string) *discordgo.MessageEmbed {
 	return &discordgo.MessageEmbed{
-		Title: fmt.Sprintf("⚔️ МАТЧ #%d АКТИВЕН", matchID), Description: fmt.Sprintf("Капитаны: **%s** vs **%s**", captainA, captainB),
+		Title: fmt.Sprintf("МАТЧ #%d АКТИВЕН", matchID), Description: fmt.Sprintf("Капитаны: **%s** vs **%s**", captainA, captainB),
 		Color: matchEmbedColor,
 		Fields: []*discordgo.MessageEmbedField{
-			{Name: "🛡️ Team A", Value: formatPlayerList(teamA), Inline: true},
-			{Name: "⚔️ Team B", Value: formatPlayerList(teamB), Inline: true},
+			{Name: "Team A", Value: formatPlayerList(teamA), Inline: true},
+			{Name: "Team B", Value: formatPlayerList(teamB), Inline: true},
 		},
 		Footer: &discordgo.MessageEmbedFooter{Text: "Только рефери (SUDЬЯ) могут завершить матч"},
 	}
@@ -936,11 +931,11 @@ func (b *Bot) buildMatchResultEmbed(ctx context.Context, match *models.LobbyMatc
 		color = loseColor
 	}
 	return &discordgo.MessageEmbed{
-		Title: fmt.Sprintf("🏁 МАТЧ #%d ЗАВЕРШЁН", match.ID), Description: fmt.Sprintf("**Победила: %s!**", winner),
+		Title: fmt.Sprintf("МАТЧ #%d ЗАВЕРШЁН", match.ID), Description: fmt.Sprintf("**Победила: %s!**", winner),
 		Color: color,
 		Fields: []*discordgo.MessageEmbedField{
-			{Name: "🛡️ Team A", Value: formatPlayerList(b.getPlayerNames(ctx, match.TeamAIDs)), Inline: true},
-			{Name: "⚔️ Team B", Value: formatPlayerList(b.getPlayerNames(ctx, match.TeamBIDs)), Inline: true},
+			{Name: "Team A", Value: formatPlayerList(b.getPlayerNames(ctx, match.TeamAIDs)), Inline: true},
+			{Name: "Team B", Value: formatPlayerList(b.getPlayerNames(ctx, match.TeamBIDs)), Inline: true},
 		},
 	}
 }
@@ -955,7 +950,7 @@ func (b *Bot) handleBalance(ctx context.Context, s *discordgo.Session, i *discor
 	}
 	activePlayers := b.services.Lobby.GetActivePlayers()
 	if len(activePlayers) < teamSize*2 {
-		b.respondMessage(s, i, fmt.Sprintf("⚠️ Нужно %d игроков в лобби, сейчас %d.", teamSize*2, len(activePlayers)), true)
+		b.respondMessage(s, i, fmt.Sprintf("Нужно %d игроков в лобби, сейчас %d.", teamSize*2, len(activePlayers)), true)
 		return
 	}
 	playerIDs := make([]int, len(activePlayers))
@@ -965,7 +960,7 @@ func (b *Bot) handleBalance(ctx context.Context, s *discordgo.Session, i *discor
 	mmrMap, err := b.services.Lobby.GetPlayerMMRsBatch(ctx, playerIDs)
 	if err != nil {
 		b.logger.Error("balance: failed to get MMRs: %v", err)
-		b.respondMessage(s, i, "⚠️ Ошибка получения MMR.", true)
+		b.respondMessage(s, i, "Ошибка получения MMR.", true)
 		return
 	}
 
@@ -1009,7 +1004,7 @@ func (b *Bot) handleBalance(ctx context.Context, s *discordgo.Session, i *discor
 	matchID, err := b.services.Lobby.CreateMatch(ctx, guildID, teamAIDs[0], teamBIDs[0], teamAIDs, teamBIDs)
 	if err != nil {
 		b.logger.Error("balance: failed to create match: %v", err)
-		b.respondMessage(s, i, "⚠️ Ошибка создания матча", true)
+		b.respondMessage(s, i, "Ошибка создания матча", true)
 		return
 	}
 

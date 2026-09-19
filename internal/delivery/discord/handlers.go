@@ -24,7 +24,7 @@ func (b *Bot) handleTop(ctx context.Context, s *discordgo.Session, i *discordgo.
 
 	stats, err := b.services.MatchService.GetLeaderboard(ctx, sortBy)
 	if err != nil {
-		b.reportFailure(s, i, "top", "⚠️ Не удалось получить лидерборд. Попробуйте позже.", err)
+		b.reportFailure(s, i, "top", "Не удалось получить лидерборд. Попробуйте позже.", err)
 		return
 	}
 
@@ -47,7 +47,7 @@ func (b *Bot) handleTop(ctx context.Context, s *discordgo.Session, i *discordgo.
 		sb.WriteString(fmt.Sprintf("%s %s — WR: `%.0f%%` | KDA: `%.2f` (%d игр)",
 			medal, p.Name, wr, kda, p.Matches))
 		if p.MVP > 0 {
-			sb.WriteString(fmt.Sprintf(" 🏅×%d", p.MVP))
+			sb.WriteString(fmt.Sprintf(" [MVP×%d]", p.MVP))
 		}
 		sb.WriteString("\n")
 	}
@@ -85,7 +85,7 @@ func (b *Bot) resolveTargetPlayer(ctx context.Context, s *discordgo.Session, i *
 		nickname := strings.TrimSpace(opt.StringValue())
 		id, name, err := b.services.MatchService.FindPlayerByName(ctx, nickname)
 		if err != nil {
-			b.respondMessage(s, i, fmt.Sprintf("⚠️ Игрок **%s** не найден.", nickname), true)
+			b.respondMessage(s, i, fmt.Sprintf("Игрок **%s** не найден.", nickname), true)
 			return 0, "", false
 		}
 		return id, name, true
@@ -94,12 +94,12 @@ func (b *Bot) resolveTargetPlayer(ctx context.Context, s *discordgo.Session, i *
 	if opt, ok := commandOption(data, "user"); ok {
 		target := opt.UserValue(s)
 		if target == nil {
-			b.respondMessage(s, i, "⚠️ Не удалось определить пользователя.", true)
+			b.respondMessage(s, i, "Не удалось определить пользователя.", true)
 			return 0, "", false
 		}
 		id, name, err := b.services.MatchService.GetPlayerByDiscordID(ctx, target.ID)
 		if err != nil {
-			b.respondMessage(s, i, fmt.Sprintf("⚠️ У <@%s> нет привязанного профиля.", target.ID), true)
+			b.respondMessage(s, i, fmt.Sprintf("У <@%s> нет привязанного профиля.", target.ID), true)
 			return 0, "", false
 		}
 		return id, name, true
@@ -143,9 +143,9 @@ func (b *Bot) handleProfile(ctx context.Context, s *discordgo.Session, i *discor
 			{Name: "Матчей", Value: fmt.Sprintf("%d", p.Matches), Inline: true},
 			{Name: "Винрейт", Value: fmt.Sprintf("%.1f%%", wr), Inline: true},
 			{Name: "KDA", Value: fmt.Sprintf("%.2f", kda), Inline: true},
-			{Name: "Статистика", Value: fmt.Sprintf("⚔️ K: %d | 💀 D: %d | 🤝 A: %d", p.Kills, p.Deaths, p.Assists), Inline: false},
-			{Name: "Результаты", Value: fmt.Sprintf("✅ Побед: %d | ❌ Поражений: %d", p.Wins, p.Losses), Inline: false},
-			{Name: "Медали (сезон)", Value: fmt.Sprintf("🏅 MVP: %d | 🥈 SVPG: %d", p.MVP, p.SVP), Inline: false},
+			{Name: "Статистика", Value: fmt.Sprintf("K: %d | D: %d | A: %d", p.Kills, p.Deaths, p.Assists), Inline: false},
+			{Name: "Результаты", Value: fmt.Sprintf("Побед: %d | Поражений: %d", p.Wins, p.Losses), Inline: false},
+			{Name: "Медали (сезон)", Value: fmt.Sprintf("MVP: %d | SVPG: %d", p.MVP, p.SVP), Inline: false},
 		},
 	}
 
@@ -159,7 +159,7 @@ func (b *Bot) handleProfile(ctx context.Context, s *discordgo.Session, i *discor
 	} else if lifetime.MVP > p.MVP || lifetime.SVP > p.SVP {
 		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
 			Name:   "Медали (за всё время)",
-			Value:  fmt.Sprintf("🏅 MVP: %d | 🥈 SVPG: %d", lifetime.MVP, lifetime.SVP),
+			Value:  fmt.Sprintf("MVP: %d | SVPG: %d", lifetime.MVP, lifetime.SVP),
 			Inline: false,
 		})
 	}
@@ -223,7 +223,7 @@ func (b *Bot) appendMMRFields(ctx context.Context, embed *discordgo.MessageEmbed
 func (b *Bot) handlePlayersList(ctx context.Context, s *discordgo.Session, i *discordgo.Interaction) {
 	players, err := b.services.MatchService.GetPlayerList(ctx)
 	if err != nil {
-		b.reportFailure(s, i, "players", "⚠️ Не удалось получить список игроков. Попробуйте позже.", err)
+		b.reportFailure(s, i, "players", "Не удалось получить список игроков. Попробуйте позже.", err)
 		return
 	}
 
@@ -244,7 +244,7 @@ func (b *Bot) handleHistory(ctx context.Context, s *discordgo.Session, i *discor
 
 	lines, err := b.services.MatchService.GetHistoryByID(ctx, id)
 	if err != nil {
-		b.reportFailure(s, i, "history", "⚠️ Не удалось получить историю матчей.", err)
+		b.reportFailure(s, i, "history", "Не удалось получить историю матчей.", err)
 		return
 	}
 
@@ -279,18 +279,18 @@ func (b *Bot) handleWipePlayer(ctx context.Context, s *discordgo.Session, i *dis
 	b.respond(s, i, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Content: fmt.Sprintf("⚠️ **Вы уверены, что хотите удалить игрока %s (ID: %d)?**\n\nЭто действие необратимо!", name, id),
+			Content: fmt.Sprintf("**Вы уверены, что хотите удалить игрока %s (ID: %d)?**\n\nЭто действие необратимо!", name, id),
 			Flags:   discordgo.MessageFlagsEphemeral,
 			Components: []discordgo.MessageComponent{
 				discordgo.ActionsRow{
 					Components: []discordgo.MessageComponent{
 						discordgo.Button{
-							Label:    "🔴 Да, удалить",
+							Label:    "Да, удалить",
 							Style:    discordgo.DangerButton,
 							CustomID: fmt.Sprintf("confirm_wipe_player_%d", id),
 						},
 						discordgo.Button{
-							Label:    "🟢 Отмена",
+							Label:    "Отмена",
 							Style:    discordgo.SuccessButton,
 							CustomID: "cancel_wipe_player",
 						},
@@ -311,18 +311,18 @@ func (b *Bot) handleResetPlayer(ctx context.Context, s *discordgo.Session, i *di
 	b.respond(s, i, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Content: fmt.Sprintf("⚠️ **Сбросить сезонную статистику игрока %s (ID: %d)?**", name, id),
+			Content: fmt.Sprintf("**Сбросить сезонную статистику игрока %s (ID: %d)?**", name, id),
 			Flags:   discordgo.MessageFlagsEphemeral,
 			Components: []discordgo.MessageComponent{
 				discordgo.ActionsRow{
 					Components: []discordgo.MessageComponent{
 						discordgo.Button{
-							Label:    "🟡 Да, сбросить",
+							Label:    "Да, сбросить",
 							Style:    discordgo.DangerButton,
 							CustomID: fmt.Sprintf("confirm_reset_player_%d", id),
 						},
 						discordgo.Button{
-							Label:    "🟢 Отмена",
+							Label:    "Отмена",
 							Style:    discordgo.SuccessButton,
 							CustomID: "cancel_reset_player",
 						},
@@ -337,18 +337,18 @@ func (b *Bot) handleWipe(ctx context.Context, s *discordgo.Session, i *discordgo
 	b.respond(s, i, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Content: "⚠️ **Вы уверены, что хотите полностью очистить базу данных? Это действие необратимо!**\n\nВсе матчи, игроки и статистика будут удалены.",
+			Content: "**Вы уверены, что хотите полностью очистить базу данных? Это действие необратимо!**\n\nВсе матчи, игроки и статистика будут удалены.",
 			Flags:   discordgo.MessageFlagsEphemeral,
 			Components: []discordgo.MessageComponent{
 				discordgo.ActionsRow{
 					Components: []discordgo.MessageComponent{
 						discordgo.Button{
-							Label:    "🔴 Да, очистить всё",
+							Label:    "Да, очистить всё",
 							Style:    discordgo.DangerButton,
 							CustomID: "confirm_wipe",
 						},
 						discordgo.Button{
-							Label:    "🟢 Отмена",
+							Label:    "Отмена",
 							Style:    discordgo.SuccessButton,
 							CustomID: "cancel_wipe",
 						},
@@ -363,18 +363,18 @@ func (b *Bot) handleReset(ctx context.Context, s *discordgo.Session, i *discordg
 	b.respond(s, i, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Content: "⚠️ **Сбросить сезонную статистику всех игроков?**",
+			Content: "**Сбросить сезонную статистику всех игроков?**",
 			Flags:   discordgo.MessageFlagsEphemeral,
 			Components: []discordgo.MessageComponent{
 				discordgo.ActionsRow{
 					Components: []discordgo.MessageComponent{
 						discordgo.Button{
-							Label:    "🟡 Да, сбросить сезон",
+							Label:    "Да, сбросить сезон",
 							Style:    discordgo.DangerButton,
 							CustomID: "confirm_reset",
 						},
 						discordgo.Button{
-							Label:    "🟢 Отмена",
+							Label:    "Отмена",
 							Style:    discordgo.SuccessButton,
 							CustomID: "cancel_reset",
 						},
@@ -394,7 +394,7 @@ func (b *Bot) handleExport(ctx context.Context, s *discordgo.Session, i *discord
 
 	data, err := b.services.MatchService.GetExcelReport(ctx)
 	if err != nil {
-		b.reportFailureEdit(s, i, "export", "⚠️ Не удалось сформировать отчёт.", err)
+		b.reportFailureEdit(s, i, "export", "Не удалось сформировать отчёт.", err)
 		return
 	}
 
@@ -413,7 +413,7 @@ func (b *Bot) handleSetTimer(ctx context.Context, s *discordgo.Session, i *disco
 
 	err := b.services.MatchService.SetTimer(ctx, dateStr)
 	if err != nil {
-		b.reportFailure(s, i, "set_timer", "⚠️ Не удалось установить дату начала сезона. Проверьте формат.", err)
+		b.reportFailure(s, i, "set_timer", "Не удалось установить дату начала сезона. Проверьте формат.", err)
 	} else {
 		b.respondMessage(s, i, fmt.Sprintf("Дата начала сезона установлена: %s", dateStr), false)
 	}
@@ -424,7 +424,7 @@ func (b *Bot) handleSyncSheet(ctx context.Context, s *discordgo.Session, i *disc
 
 	url, err := b.services.MatchService.SyncToGoogleSheet(ctx)
 	if err != nil {
-		b.reportFailureEdit(s, i, "sync_sheet", "⚠️ Не удалось синхронизировать таблицу.", err)
+		b.reportFailureEdit(s, i, "sync_sheet", "Не удалось синхронизировать таблицу.", err)
 		return
 	}
 
@@ -456,7 +456,7 @@ func (b *Bot) handleRenamePlayer(ctx context.Context, s *discordgo.Session, i *d
 
 	err = b.services.MatchService.RenamePlayer(ctx, id, newName)
 	if err != nil {
-		b.reportFailure(s, i, "rename_player", "⚠️ Не удалось переименовать игрока.", err)
+		b.reportFailure(s, i, "rename_player", "Не удалось переименовать игрока.", err)
 		return
 	}
 
@@ -478,7 +478,7 @@ func (b *Bot) handleUpdateNick(ctx context.Context, s *discordgo.Session, i *dis
 
 	err = b.services.MatchService.RenamePlayer(ctx, id, newName)
 	if err != nil {
-		b.reportFailureEdit(s, i, "rename_player", "⚠️ Не удалось переименовать игрока.", err)
+		b.reportFailureEdit(s, i, "rename_player", "Не удалось переименовать игрока.", err)
 		return
 	}
 
@@ -488,7 +488,7 @@ func (b *Bot) handleUpdateNick(ctx context.Context, s *discordgo.Session, i *dis
 		}
 	})
 
-	b.editContent(s, i, fmt.Sprintf("✅ Никнейм обновлён!\n**%s** → **%s**\n\nКаскадное переименование: все прошлые матчи, база данных и Google Таблицы обновлены.", oldName, newName))
+	b.editContent(s, i, fmt.Sprintf("Никнейм обновлён!\n**%s** → **%s**\n\nКаскадное переименование: все прошлые матчи, база данных и Google Таблицы обновлены.", oldName, newName))
 }
 
 func (b *Bot) handleScreenshots(ctx context.Context, s *discordgo.Session, m *discordgo.MessageCreate) {
@@ -516,7 +516,7 @@ func (b *Bot) handleScreenshots(ctx context.Context, s *discordgo.Session, m *di
 			b.rateLimiter.Refund(userID, taken)
 			b.logger.Warn("Rate limit exceeded for user %s (%d screenshot(s) requested)", userID, len(imageAttachments))
 			b.sendChannelMessage(s, m.ChannelID,
-				"⚠️ Слишком много запросов. Пожалуйста, подождите немного перед следующей загрузкой.")
+				"Слишком много запросов. Пожалуйста, подождите немного перед следующей загрузкой.")
 			return
 		}
 		taken++
@@ -524,7 +524,7 @@ func (b *Bot) handleScreenshots(ctx context.Context, s *discordgo.Session, m *di
 
 	b.startTyping(s, m.ChannelID)
 	msg := b.sendChannelMessage(s, m.ChannelID,
-		fmt.Sprintf("⏳ Анализирую %d скриншот(ов)...", len(imageAttachments)))
+		fmt.Sprintf("Анализирую %d скриншот(ов)...", len(imageAttachments)))
 
 	expectedPlayers, _ := b.getThreadPlayers(m.ChannelID)
 
@@ -569,7 +569,7 @@ func (b *Bot) handleScreenshots(ctx context.Context, s *discordgo.Session, m *di
 			} else {
 				errorCount++
 				messages = append(messages,
-					fmt.Sprintf("❌ Скриншот %d: %v", res.index+1, res.err))
+					fmt.Sprintf("[Ошибка] Скриншот %d: %v", res.index+1, res.err))
 			}
 			continue
 		}
@@ -577,12 +577,12 @@ func (b *Bot) handleScreenshots(ctx context.Context, s *discordgo.Session, m *di
 		if res.parsed == nil {
 			errorCount++
 			messages = append(messages,
-				fmt.Sprintf("❌ Скриншот %d: пустой результат распознавания", res.index+1))
+				fmt.Sprintf("[Ошибка] Скриншот %d: пустой результат распознавания", res.index+1))
 			continue
 		}
 
 		successCount++
-		line := fmt.Sprintf("✅ Скриншот %d: Матч #%d записан", res.index+1, res.parsed.MatchID)
+		line := fmt.Sprintf("[Успех] Скриншот %d: Матч #%d записан", res.index+1, res.parsed.MatchID)
 		if medals := formatMedals(res.parsed); medals != "" {
 			line += " " + medals
 		}
@@ -591,7 +591,7 @@ func (b *Bot) handleScreenshots(ctx context.Context, s *discordgo.Session, m *di
 		b.attachMedalsToLobbyMatch(ctx, m.ChannelID, res.parsed)
 	}
 
-	summary := fmt.Sprintf("**Обработано: %d скриншотов**\n✅ Успешно: %d\n⚠️ Дубликаты: %d\n❌ Ошибки: %d",
+	summary := fmt.Sprintf("**Обработано: %d скриншотов**\nУспешно: %d\nДубликаты: %d\nОшибки: %d",
 		len(imageAttachments), successCount, duplicateCount, errorCount)
 
 	if len(messages) > 0 {
@@ -631,10 +631,10 @@ func (b *Bot) attachMedalsToLobbyMatch(ctx context.Context, channelID string, pa
 func formatMedals(parsed *models.MatchResult) string {
 	var parts []string
 	if parsed.MVP != "" {
-		parts = append(parts, fmt.Sprintf("🏅 MVP: **%s**", parsed.MVP))
+		parts = append(parts, fmt.Sprintf("[MVP] **%s**", parsed.MVP))
 	}
 	if parsed.SVP != "" {
-		parts = append(parts, fmt.Sprintf("🥈 SVPG: **%s**", parsed.SVP))
+		parts = append(parts, fmt.Sprintf("[SVPG] **%s**", parsed.SVP))
 	}
 	return strings.Join(parts, " | ")
 }
@@ -652,13 +652,13 @@ func (b *Bot) handleLink(ctx context.Context, s *discordgo.Session, i *discordgo
 
 	code, err := b.services.ProfileLinkService.GenerateLinkCodeByID(ctx, playerID)
 	if err != nil {
-		b.reportFailure(s, i, "link", "⚠️ Не удалось выдать код привязки.", err)
+		b.reportFailure(s, i, "link", "Не удалось выдать код привязки.", err)
 		return
 	}
 
 	embed := &discordgo.MessageEmbed{
-		Title:       "🔗 Код привязки Telegram",
-		Description: fmt.Sprintf("Отправьте этот код боту в Telegram:\n\n```\n/link %s\n```\n\n⏰ Код действителен 10 минут", code),
+		Title:       "Код привязки Telegram",
+		Description: fmt.Sprintf("Отправьте этот код боту в Telegram:\n\n```\n/link %s\n```\n\nКод действителен 10 минут", code),
 		Color:       colorBlue,
 		Fields: []*discordgo.MessageEmbedField{
 			{Name: "Игрок", Value: fmt.Sprintf("%s (ID: %d)", playerName, playerID), Inline: true},
@@ -683,10 +683,10 @@ func (b *Bot) handleUnlink(ctx context.Context, s *discordgo.Session, i *discord
 		return
 	}
 	if err := b.services.ProfileLinkService.UnlinkPlayerID(ctx, playerID); err != nil {
-		b.reportFailure(s, i, "unlink", "⚠️ Не удалось отвязать аккаунт.", err)
+		b.reportFailure(s, i, "unlink", "Не удалось отвязать аккаунт.", err)
 		return
 	}
-	b.respondMessage(s, i, fmt.Sprintf("✅ Telegram аккаунт отвязан от профиля **%s**", playerName), true)
+	b.respondMessage(s, i, fmt.Sprintf("Telegram аккаунт отвязан от профиля **%s**", playerName), true)
 }
 
 // handleUnlinkPlayer releases someone else's Telegram binding. Admin-only, the
@@ -696,14 +696,14 @@ func (b *Bot) handleUnlinkPlayer(ctx context.Context, s *discordgo.Session, i *d
 	playerName, err := b.services.MatchService.GetPlayerNameByID(ctx, playerID)
 	if err != nil {
 		b.reportFailure(s, i, "unlink_player",
-			fmt.Sprintf("⚠️ Игрок с ID %d не найден.", playerID), err)
+			fmt.Sprintf("Игрок с ID %d не найден.", playerID), err)
 		return
 	}
 	if err := b.services.ProfileLinkService.UnlinkPlayerID(ctx, playerID); err != nil {
-		b.reportFailure(s, i, "unlink_player", "⚠️ Не удалось отвязать аккаунт.", err)
+		b.reportFailure(s, i, "unlink_player", "Не удалось отвязать аккаунт.", err)
 		return
 	}
-	b.respondMessage(s, i, fmt.Sprintf("✅ Telegram отвязан от профиля **%s** (ID: %d)", playerName, playerID), false)
+	b.respondMessage(s, i, fmt.Sprintf("Telegram отвязан от профиля **%s** (ID: %d)", playerName, playerID), false)
 }
 
 // callerProfile resolves the player the caller has claimed with /bind.
@@ -714,7 +714,7 @@ func (b *Bot) handleUnlinkPlayer(ctx context.Context, s *discordgo.Session, i *d
 func (b *Bot) callerProfile(s *discordgo.Session, i *discordgo.Interaction) (int, string, bool) {
 	member := interactionMember(i)
 	if member == nil {
-		b.respondMessage(s, i, "⚠️ Эта команда работает только на сервере.", true)
+		b.respondMessage(s, i, "Эта команда работает только на сервере.", true)
 		return 0, "", false
 	}
 
@@ -727,14 +727,14 @@ func (b *Bot) callerProfile(s *discordgo.Session, i *discordgo.Interaction) (int
 			b.respond(s, i, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content:    "⚠️ Ваш Discord не привязан к профилю.\n\nНажмите кнопку и укажите свой ник в игре.",
+					Content:    "Ваш Discord не привязан к профилю.\n\nНажмите кнопку и укажите свой ник в игре.",
 					Components: bindPromptComponents(),
 					Flags:      discordgo.MessageFlagsEphemeral,
 				},
 			})
 			return 0, "", false
 		}
-		b.reportFailure(s, i, "caller profile", "⚠️ Не удалось определить ваш профиль. Попробуйте позже.", err)
+		b.reportFailure(s, i, "caller profile", "Не удалось определить ваш профиль. Попробуйте позже.", err)
 		return 0, "", false
 	}
 	return id, name, true
@@ -746,12 +746,12 @@ func (b *Bot) callerProfile(s *discordgo.Session, i *discordgo.Interaction) (int
 
 func (b *Bot) handleFAQ(ctx context.Context, s *discordgo.Session, i *discordgo.Interaction) {
 	if b.services.FAQService == nil {
-		b.respondMessage(s, i, "⚠️ FAQ-сервис не настроен. Укажите DEEPSEEK_KEY в .env", true)
+		b.respondMessage(s, i, "FAQ-сервис не настроен. Укажите DEEPSEEK_KEY в .env", true)
 		return
 	}
 	question := i.ApplicationCommandData().Options[0].StringValue()
 	if len(strings.TrimSpace(question)) < 3 {
-		b.respondMessage(s, i, "⚠️ Задайте вопрос длиной хотя бы 3 символа.", true)
+		b.respondMessage(s, i, "Задайте вопрос длиной хотя бы 3 символа.", true)
 		return
 	}
 
@@ -763,14 +763,14 @@ func (b *Bot) handleFAQ(ctx context.Context, s *discordgo.Session, i *discordgo.
 
 func (b *Bot) handleFAQReload(ctx context.Context, s *discordgo.Session, i *discordgo.Interaction) {
 	if b.services.FAQService == nil {
-		b.respondMessage(s, i, "⚠️ FAQ-сервис не настроен.", true)
+		b.respondMessage(s, i, "FAQ-сервис не настроен.", true)
 		return
 	}
 	if err := b.services.FAQService.ReloadFAQ(); err != nil {
-		b.reportFailure(s, i, "faq_reload", "❌ Не удалось перезагрузить базу знаний FAQ.", err)
+		b.reportFailure(s, i, "faq_reload", "Не удалось перезагрузить базу знаний FAQ.", err)
 		return
 	}
-	b.respondMessage(s, i, "✅ База знаний FAQ перезагружена.", true)
+	b.respondMessage(s, i, "База знаний FAQ перезагружена.", true)
 }
 
 // handleFAQAutoAnswer responds to plain text messages in the FAQ channel automatically.
@@ -805,7 +805,7 @@ func (b *Bot) handleTelegramProfile(ctx context.Context, s *discordgo.Session, i
 	// contact details. /link and /whoami next to it were already ephemeral.
 	member := interactionMember(i)
 	if member == nil {
-		b.respondMessage(s, i, "⚠️ Эта команда работает только на сервере.", true)
+		b.respondMessage(s, i, "Эта команда работает только на сервере.", true)
 		return
 	}
 
@@ -827,14 +827,14 @@ func (b *Bot) handleTelegramProfile(ctx context.Context, s *discordgo.Session, i
 		}
 		if !strings.EqualFold(playerName, own) {
 			b.respondMessage(s, i,
-				"⛔ Чужой Telegram-профиль может посмотреть только админ. Свой — `/telegram_profile` без аргумента.", true)
+				"Чужой Telegram-профиль может посмотреть только админ. Свой — `/telegram_profile` без аргумента.", true)
 			return
 		}
 	}
 
 	profile, err := b.services.ProfileLinkService.GetLinkedProfile(ctx, playerName)
 	if err != nil {
-		b.reportFailure(s, i, "telegram_profile", "⚠️ Не удалось получить профиль.", err)
+		b.reportFailure(s, i, "telegram_profile", "Не удалось получить профиль.", err)
 		return
 	}
 	if profile == nil {
@@ -848,15 +848,15 @@ func (b *Bot) handleTelegramProfile(ctx context.Context, s *discordgo.Session, i
 	}
 
 	embed := &discordgo.MessageEmbed{
-		Title: fmt.Sprintf("📱 Telegram профиль: %s", playerName),
+		Title: fmt.Sprintf("Telegram профиль: %s", playerName),
 		Color: colorTelegramBlue,
 		Fields: []*discordgo.MessageEmbedField{
 			{Name: "Telegram", Value: tgInfo, Inline: false},
 			{Name: "Игровой ник", Value: valueOrDefault(profile.GameNickname, "Не указан"), Inline: true},
 			{Name: "Game ID", Value: valueOrDefault(profile.GameID, "—"), Inline: true},
 			{Name: "Zone ID", Value: valueOrDefault(profile.ZoneID, "—"), Inline: true},
-			{Name: "⭐ Звёзды", Value: fmt.Sprintf("%d", profile.Stars), Inline: true},
-			{Name: "🎮 Роль", Value: valueOrDefault(profile.MainRole, "Не указана"), Inline: true},
+			{Name: "Звёзды", Value: fmt.Sprintf("%d", profile.Stars), Inline: true},
+			{Name: "Роль", Value: valueOrDefault(profile.MainRole, "Не указана"), Inline: true},
 		},
 		Footer: &discordgo.MessageEmbedFooter{Text: "Valhalla Profile Sync"},
 	}
@@ -930,7 +930,7 @@ func (b *Bot) onDangerButton(s *discordgo.Session, i *discordgo.InteractionCreat
 		b.respond(s, i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseUpdateMessage,
 			Data: &discordgo.InteractionResponseData{
-				Content:    "✅ Операция отменена.",
+				Content:    "Операция отменена.",
 				Components: []discordgo.MessageComponent{},
 			},
 		})
@@ -940,13 +940,13 @@ func (b *Bot) onDangerButton(s *discordgo.Session, i *discordgo.InteractionCreat
 func (b *Bot) executeWipePlayer(ctx context.Context, s *discordgo.Session, i *discordgo.Interaction, playerID int) {
 	if err := b.services.MatchService.WipePlayerByID(ctx, playerID); err != nil {
 		b.logger.Error("wipe_player: failed to wipe player %d: %v", playerID, err)
-		b.updateWithError(s, i, fmt.Sprintf("❌ Не удалось удалить игрока с ID %d.", playerID))
+		b.updateWithError(s, i, fmt.Sprintf("Не удалось удалить игрока с ID %d.", playerID))
 		return
 	}
 	b.respond(s, i, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
-			Content:    fmt.Sprintf("✅ Игрок с ID **%d** и вся его статистика полностью удалены.", playerID),
+			Content:    fmt.Sprintf("Игрок с ID **%d** и вся его статистика полностью удалены.", playerID),
 			Components: []discordgo.MessageComponent{},
 		},
 	})
@@ -959,19 +959,19 @@ func (b *Bot) executeResetPlayer(ctx context.Context, s *discordgo.Session, i *d
 	name, err := b.services.MatchService.GetPlayerNameByID(ctx, playerID)
 	if err != nil {
 		b.logger.Error("reset_player: cannot resolve player %d: %v", playerID, err)
-		b.updateWithError(s, i, fmt.Sprintf("❌ Не удалось найти игрока с ID %d. Сброс отменён.", playerID))
+		b.updateWithError(s, i, fmt.Sprintf("Не удалось найти игрока с ID %d. Сброс отменён.", playerID))
 		return
 	}
 
 	if err := b.services.MatchService.ResetPlayer(ctx, name, "now"); err != nil {
 		b.logger.Error("reset_player: failed to reset %s (ID: %d): %v", name, playerID, err)
-		b.updateWithError(s, i, fmt.Sprintf("❌ Не удалось сбросить статистику игрока **%s**.", name))
+		b.updateWithError(s, i, fmt.Sprintf("Не удалось сбросить статистику игрока **%s**.", name))
 		return
 	}
 	b.respond(s, i, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
-			Content:    fmt.Sprintf("✅ Статистика игрока **%s** (ID: %d) сброшена.", name, playerID),
+			Content:    fmt.Sprintf("Статистика игрока **%s** (ID: %d) сброшена.", name, playerID),
 			Components: []discordgo.MessageComponent{},
 		},
 	})
@@ -997,20 +997,20 @@ func (b *Bot) executeWipe(ctx context.Context, s *discordgo.Session, i *discordg
 	b.deferResponse(s, i, true)
 	if err := b.services.MatchService.WipeAllData(ctx); err != nil {
 		b.logger.Error("wipe: failed to wipe all data: %v", err)
-		b.editContent(s, i, "❌ Ошибка при очистке. Подробности в логах.")
+		b.editContent(s, i, "Ошибка при очистке. Подробности в логах.")
 		return
 	}
-	b.editContent(s, i, "✅ База данных полностью очищена, Google Таблица сброшена.")
+	b.editContent(s, i, "База данных полностью очищена, Google Таблица сброшена.")
 }
 
 func (b *Bot) executeReset(ctx context.Context, s *discordgo.Session, i *discordgo.Interaction) {
 	b.deferResponse(s, i, true)
 	if err := b.services.MatchService.ResetGlobal(ctx); err != nil {
 		b.logger.Error("reset: failed to reset season: %v", err)
-		b.editContent(s, i, "❌ Не удалось сбросить сезон. Подробности в логах.")
+		b.editContent(s, i, "Не удалось сбросить сезон. Подробности в логах.")
 		return
 	}
-	b.editContent(s, i, "✅ Сезонная статистика всех игроков сброшена.")
+	b.editContent(s, i, "Сезонная статистика всех игроков сброшена.")
 }
 
 // parseIDFromPrefix extracts an int from a custom ID like "confirm_wipe_player_42".
@@ -1032,7 +1032,7 @@ func (b *Bot) rejectMalformedDangerButton(s *discordgo.Session, i *discordgo.Int
 	b.respond(s, i, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
-			Content:    "⚠️ Некорректная кнопка подтверждения. Повторите команду.",
+			Content:    "Некорректная кнопка подтверждения. Повторите команду.",
 			Components: []discordgo.MessageComponent{},
 		},
 	})
@@ -1054,7 +1054,7 @@ func (b *Bot) archiveThreadIfMatchFinished(ctx context.Context, s *discordgo.Ses
 	if err != nil {
 		b.logger.Warn("discord: cannot list participants of match #%d: %v", match.ID, err)
 	}
-	winMsg := fmt.Sprintf("🏁 **Матч #%d завершён.** Ветка будет архивирована.\nУчастники: %s",
+	winMsg := fmt.Sprintf("**Матч #%d завершён.** Ветка будет архивирована.\nУчастники: %s",
 		match.ID, strings.Join(names, ", "))
 	if _, err := s.ChannelMessageSend(threadID, winMsg); err != nil {
 		b.logger.Warn("discord: cannot post closing note to thread %s: %v", threadID, err)

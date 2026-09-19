@@ -374,7 +374,7 @@ func (s *MatchServiceImpl) GetHistoryByID(ctx context.Context, id int) ([]string
 			continue
 		}
 		p := m.Players[0]
-		line := fmt.Sprintf("🆔 %d | %s | ⚔️ %d/%d/%d | %s",
+		line := fmt.Sprintf("#%d | %s | %d/%d/%d | %s",
 			m.ID, p.Result, p.Kills, p.Deaths, p.Assists, m.CreatedAt.Format("02.01"))
 		lines = append(lines, line)
 	}

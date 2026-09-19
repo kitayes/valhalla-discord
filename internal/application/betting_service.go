@@ -241,9 +241,9 @@ func FormatPayoutSummary(res PayoutResult) string {
 	payouts, winningTeam := res.Payouts, res.WinningTeam
 	if len(payouts) == 0 {
 		if !res.HadBets() {
-			return fmt.Sprintf("🏁 Ставок не было. Команда %s победила!", winningTeam)
+			return fmt.Sprintf("Ставок не было. Команда %s победила!", winningTeam)
 		}
-		return fmt.Sprintf("🏁 Матч завершён! Победила **%s**\n\nНа неё никто не поставил — весь банк сгорел.", winningTeam)
+		return fmt.Sprintf("Матч завершён! Победила **%s**\n\nНа неё никто не поставил — весь банк сгорел.", winningTeam)
 	}
 
 	// Sorted, so the same payout renders the same message every time — a map
@@ -256,9 +256,9 @@ func FormatPayoutSummary(res PayoutResult) string {
 	sort.Slice(tgIDs, func(i, j int) bool { return tgIDs[i] < tgIDs[j] })
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "🏁 Матч завершён! Победила **%s**\n\nВыплаты победителям:\n", winningTeam)
+	fmt.Fprintf(&sb, "Матч завершён! Победила **%s**\n\nВыплаты победителям:\n", winningTeam)
 	for _, tgID := range tgIDs {
-		fmt.Fprintf(&sb, "• Пользователь `%d`: +%d 🔮 очков\n", tgID, payouts[tgID])
+		fmt.Fprintf(&sb, "• Пользователь `%d`: +%d очков\n", tgID, payouts[tgID])
 	}
 	return sb.String()
 }

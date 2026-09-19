@@ -19,8 +19,8 @@ import (
 const (
 	lobbyEmbedColor = 0x9B59B6
 
-	componentLabelMarkActive = "📌 Отметить активность / Войти в лобби"
-	componentLabelLeave      = "🚪 Выйти из лобби"
+	componentLabelMarkActive = "Отметить активность / Войти в лобби"
+	componentLabelLeave      = "Выйти из лобби"
 	componentIDMarkActive    = "lobby_mark_active"
 	componentIDLeave         = "lobby_leave"
 
@@ -95,7 +95,7 @@ func (b *Bot) handleMarkActive(ctx context.Context, s *discordgo.Session, i *dis
 		b.respond(s, i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
-				Content: "🔒 Лобби закрыто администратором. Ожидайте открытия.",
+				Content: "Лобби закрыто администратором. Ожидайте открытия.",
 				Flags:   discordgo.MessageFlagsEphemeral,
 			},
 		})
@@ -115,7 +115,7 @@ func (b *Bot) handleMarkActive(ctx context.Context, s *discordgo.Session, i *dis
 		b.respond(s, i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
-				Content: "⚠️ Ваш Discord не привязан к профилю игрока.\n\n" +
+				Content: "Ваш Discord не привязан к профилю игрока.\n\n" +
 					"Нажмите кнопку ниже и укажите свой ник в игре — тот, что показывает " +
 					"таблица результатов.",
 				Components: bindPromptComponents(),
@@ -155,7 +155,7 @@ func (b *Bot) handleMarkActive(ctx context.Context, s *discordgo.Session, i *dis
 
 	if place == application.PlaceWaitlist {
 		b.followupEphemeral(s, i.Interaction, fmt.Sprintf(
-			"ℹ️ Основное лобби заполнено. Вы в резерве (позиция %d). Вы автоматически займёте место при выходе игрока из основного состава.",
+			"Основное лобби заполнено. Вы в резерве (позиция %d). Вы автоматически займёте место при выходе игрока из основного состава.",
 			b.services.Lobby.WaitlistPosition(player.ID)))
 	}
 
@@ -180,12 +180,12 @@ func joinMessage(err error) string {
 	var banned *application.QueueBanError
 	switch {
 	case errors.As(err, &banned):
-		return fmt.Sprintf("⛔ Вы заблокированы в очереди до %s. Причина: %s",
+		return fmt.Sprintf("Вы заблокированы в очереди до %s. Причина: %s",
 			banned.Until.Format("02.01.2006 15:04"), banned.Reason)
 	case errors.Is(err, domain.ErrLobbyClosed):
-		return "🔒 Лобби закрыто. Дождитесь открытия следующей сессии."
+		return "Лобби закрыто. Дождитесь открытия следующей сессии."
 	default:
-		return "⚠️ Не удалось встать в очередь. Попробуйте ещё раз через минуту."
+		return "Не удалось встать в очередь. Попробуйте ещё раз через минуту."
 	}
 }
 
@@ -295,7 +295,7 @@ func (b *Bot) onCreateMixSelect(s *discordgo.Session, i *discordgo.InteractionCr
 		id := parseID(val)
 		if id == 0 {
 			b.logger.Error("mix: malformed player id %q in select menu", val)
-			b.respondMessage(s, i.Interaction, "⚠️ Некорректный выбор игроков. Повторите команду.", true)
+			b.respondMessage(s, i.Interaction, "Некорректный выбор игроков. Повторите команду.", true)
 			return
 		}
 		playerIDs = append(playerIDs, id)
@@ -306,7 +306,7 @@ func (b *Bot) onCreateMixSelect(s *discordgo.Session, i *discordgo.InteractionCr
 	nameMap, err := b.services.MatchService.GetPlayerNamesByIDs(ctx, playerIDs)
 	if err != nil {
 		b.logger.Error("mix: failed to resolve player names: %v", err)
-		b.respondMessage(s, i.Interaction, "⚠️ Не удалось получить список игроков. Попробуйте ещё раз.", true)
+		b.respondMessage(s, i.Interaction, "Не удалось получить список игроков. Попробуйте ещё раз.", true)
 		return
 	}
 	playerNames := make([]string, 0, len(playerIDs))
@@ -327,7 +327,7 @@ func (b *Bot) onCreateMixSelect(s *discordgo.Session, i *discordgo.InteractionCr
 		b.respond(s, i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
-				Content: fmt.Sprintf("✅ **Микс создан!**\n\n🗡️ Сигнатура: `%s`\n👥 Игроки: %s\n\n📸 Капитаны, скиньте скриншот результата в этот канал после игры, я его обработаю.",
+				Content: fmt.Sprintf("**Микс создан!**\n\nСигнатура: `%s`\nИгроки: %s\n\nКапитаны, скиньте скриншот результата в этот канал после игры, я его обработаю.",
 					signature, strings.Join(playerNames, ", ")),
 			},
 		})
@@ -336,7 +336,7 @@ func (b *Bot) onCreateMixSelect(s *discordgo.Session, i *discordgo.InteractionCr
 
 	// Send the confirmation message inside the new thread
 	_, err = s.ChannelMessageSend(thread.ID, fmt.Sprintf(
-		"✅ **Микс создан!**\n\n🗡️ Сигнатура: `%s`\n👥 Игроки: %s\n\n📸 Капитаны, скиньте скриншот результата **в эту ветку** после игры, я его обработаю.",
+		"**Микс создан!**\n\nСигнатура: `%s`\nИгроки: %s\n\nКапитаны, скиньте скриншот результата **в эту ветку** после игры, я его обработаю.",
 		signature, strings.Join(playerNames, ", "),
 	))
 	if err != nil {
@@ -347,7 +347,7 @@ func (b *Bot) onCreateMixSelect(s *discordgo.Session, i *discordgo.InteractionCr
 	b.respond(s, i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Content: fmt.Sprintf("✅ **Микс создан!**\n\n📁 Ветка: <#%s>\n👥 Игроки: %s\n\n📸 Скидывайте скриншоты в созданную ветку.",
+			Content: fmt.Sprintf("**Микс создан!**\n\nВетка: <#%s>\nИгроки: %s\n\nСкидывайте скриншоты в созданную ветку.",
 				thread.ID, strings.Join(playerNames, ", ")),
 			Flags: discordgo.MessageFlagsEphemeral,
 		},
@@ -368,7 +368,7 @@ func (b *Bot) buildLobbyEmbed() *discordgo.MessageEmbed {
 	description := b.services.Lobby.FormatPlayerList()
 
 	return &discordgo.MessageEmbed{
-		Title:       "⚔️ Игровое Лобби",
+		Title:       "Игровое Лобби",
 		Description: description,
 		Color:       lobbyEmbedColor,
 		Footer: &discordgo.MessageEmbedFooter{
@@ -394,14 +394,12 @@ func (b *Bot) buildLobbyComponents() []discordgo.MessageComponent {
 					Label:    componentLabelMarkActive,
 					Style:    joinStyle,
 					CustomID: componentIDMarkActive,
-					Emoji:    &discordgo.ComponentEmoji{Name: "📌"},
 					Disabled: !isOpen,
 				},
 				discordgo.Button{
 					Label:    componentLabelLeave,
 					Style:    leaveStyle,
 					CustomID: componentIDLeave,
-					Emoji:    &discordgo.ComponentEmoji{Name: "🚪"},
 					Disabled: !isOpen,
 				},
 			},
@@ -421,25 +419,25 @@ func (b *Bot) handleLobbyKick(ctx context.Context, s *discordgo.Session, i *disc
 		name = fmt.Sprintf("ID:%d", id)
 	}
 	if !b.services.Lobby.RemovePlayer(id) {
-		b.respondMessage(s, i, fmt.Sprintf("ℹ️ Игрока **%s** не было в лобби.", name), true)
+		b.respondMessage(s, i, fmt.Sprintf("Игрока **%s** не было в лобби.", name), true)
 		return
 	}
-	b.respondMessage(s, i, fmt.Sprintf("👢 Игрок **%s** кикнут из лобби.", name), false)
+	b.respondMessage(s, i, fmt.Sprintf("Игрок **%s** кикнут из лобби.", name), false)
 }
 
 func (b *Bot) handleLobbyClose(ctx context.Context, s *discordgo.Session, i *discordgo.Interaction) {
 	b.services.Lobby.CloseLobby()
-	b.respondMessage(s, i, "🔒 Лобби закрыто. Кнопки входа отключены.", false)
+	b.respondMessage(s, i, "Лобби закрыто. Кнопки входа отключены.", false)
 }
 
 func (b *Bot) handleLobbyOpen(ctx context.Context, s *discordgo.Session, i *discordgo.Interaction) {
 	b.services.Lobby.OpenLobby()
-	b.respondMessage(s, i, "🔓 Лобби открыто. Игроки могут регистрироваться.", false)
+	b.respondMessage(s, i, "Лобби открыто. Игроки могут регистрироваться.", false)
 }
 
 func (b *Bot) handleLobbyClear(ctx context.Context, s *discordgo.Session, i *discordgo.Interaction) {
 	b.services.Lobby.ClearAll()
-	b.respondMessage(s, i, "🧹 Лобби полностью очищено.", false)
+	b.respondMessage(s, i, "Лобби полностью очищено.", false)
 }
 
 func (b *Bot) handleLobbyStatus(ctx context.Context, s *discordgo.Session, i *discordgo.Interaction) {
@@ -480,7 +478,7 @@ func (b *Bot) handleQueueBan(ctx context.Context, s *discordgo.Session, i *disco
 			return
 		}
 		b.logger.Error("queue_ban: failed to resolve discord id for player %d: %v", playerID, err)
-		b.respondMessage(s, i, "⚠️ Ошибка обращения к базе. Повторите позже.", true)
+		b.respondMessage(s, i, "Ошибка обращения к базе. Повторите позже.", true)
 		return
 	}
 
@@ -492,12 +490,12 @@ func (b *Bot) handleQueueBan(ctx context.Context, s *discordgo.Session, i *disco
 
 	if err := b.services.Lobby.QueueBan(ctx, discordID, reason, duration); err != nil {
 		b.logger.Error("queue_ban: failed to ban player %d: %v", playerID, err)
-		b.respondMessage(s, i, "⚠️ Не удалось выдать бан. Повторите позже.", true)
+		b.respondMessage(s, i, "Не удалось выдать бан. Повторите позже.", true)
 		return
 	}
 
 	b.logger.Info("queue_ban: player %s (ID: %d, discord %s) banned for %s: %s", name, playerID, discordID, duration, reason)
-	b.respondMessage(s, i, fmt.Sprintf("⛔ Игрок **%s** забанен в очереди на %s. Причина: %s", name, durationStr, reason), false)
+	b.respondMessage(s, i, fmt.Sprintf("Игрок **%s** забанен в очереди на %s. Причина: %s", name, durationStr, reason), false)
 }
 
 // maxQueueBanDuration caps a ban so a typo cannot exile somebody until the next

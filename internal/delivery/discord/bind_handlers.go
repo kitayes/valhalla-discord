@@ -26,7 +26,7 @@ import (
 func (b *Bot) handleBind(ctx context.Context, s *discordgo.Session, i *discordgo.Interaction) {
 	member := interactionMember(i)
 	if member == nil {
-		b.respondMessage(s, i, "⚠️ Эта команда работает только на сервере.", true)
+		b.respondMessage(s, i, "Эта команда работает только на сервере.", true)
 		return
 	}
 
@@ -54,8 +54,8 @@ func (b *Bot) handleBind(ctx context.Context, s *discordgo.Session, i *discordgo
 
 func bindCreatedMessage(nickname string, playerID int) string {
 	return fmt.Sprintf(
-		"✅ Профиль **%s** создан и привязан к вашему Discord (ID: %d).\n\n"+
-			"⚠️ Ник должен совпадать с ником в игре — иначе результаты матчей не подтянутся. "+
+		"Профиль **%s** создан и привязан к вашему Discord (ID: %d).\n\n"+
+			"Внимание: ник должен совпадать с ником в игре — иначе результаты матчей не подтянутся. "+
 			"Если ошиблись, админ поправит через `/rename_player`.\n\n"+
 			"Теперь вам доступны кнопки лобби и ранговые роли.",
 		nickname, playerID)
@@ -63,7 +63,7 @@ func bindCreatedMessage(nickname string, playerID int) string {
 
 func bindClaimedMessage(nickname string, playerID int) string {
 	return fmt.Sprintf(
-		"✅ Ваш Discord привязан к профилю **%s** (ID: %d). Ваша статистика подтянута.\n\n"+
+		"Ваш Discord привязан к профилю **%s** (ID: %d). Ваша статистика подтянута.\n\n"+
 			"Теперь вам доступны кнопки лобби и ранговые роли.",
 		nickname, playerID)
 }
@@ -72,17 +72,17 @@ func bindClaimedMessage(nickname string, playerID int) string {
 func (b *Bot) handleWhoami(ctx context.Context, s *discordgo.Session, i *discordgo.Interaction) {
 	member := interactionMember(i)
 	if member == nil {
-		b.respondMessage(s, i, "⚠️ Эта команда работает только на сервере.", true)
+		b.respondMessage(s, i, "Эта команда работает только на сервере.", true)
 		return
 	}
 
 	id, name, err := b.services.MatchService.GetPlayerByDiscordID(ctx, member.User.ID)
 	if err != nil {
-		b.respondMessage(s, i, "❌ Ваш Discord пока не привязан к профилю.\n\nВыполните `/bind <ваш ник в игре>`.", true)
+		b.respondMessage(s, i, "Ваш Discord пока не привязан к профилю.\n\nВыполните `/bind <ваш ник в игре>`.", true)
 		return
 	}
 
-	b.respondMessage(s, i, fmt.Sprintf("✅ Ваш Discord привязан к профилю **%s** (ID: %d).", name, id), true)
+	b.respondMessage(s, i, fmt.Sprintf("Ваш Discord привязан к профилю **%s** (ID: %d).", name, id), true)
 }
 
 // handleBindPlayer binds another user's account. Admin-only, and allowed to
@@ -93,7 +93,7 @@ func (b *Bot) handleBindPlayer(ctx context.Context, s *discordgo.Session, i *dis
 
 	target := opts[1].UserValue(s)
 	if target == nil {
-		b.respondMessage(s, i, "⚠️ Не удалось определить пользователя.", true)
+		b.respondMessage(s, i, "Не удалось определить пользователя.", true)
 		return
 	}
 
@@ -107,7 +107,7 @@ func (b *Bot) handleBindPlayer(ctx context.Context, s *discordgo.Session, i *dis
 	if created {
 		verb = "привязан к новому профилю"
 	}
-	b.respondMessage(s, i, fmt.Sprintf("✅ <@%s> %s **%s** (ID: %d).", target.ID, verb, nickname, playerID), false)
+	b.respondMessage(s, i, fmt.Sprintf("<@%s> %s **%s** (ID: %d).", target.ID, verb, nickname, playerID), false)
 }
 
 // handleUnbindPlayer releases a profile's binding.
@@ -120,7 +120,7 @@ func (b *Bot) handleUnbindPlayer(ctx context.Context, s *discordgo.Session, i *d
 		return
 	}
 
-	b.respondMessage(s, i, fmt.Sprintf("✅ Профиль **%s** (ID: %d) отвязан от Discord.", name, playerID), false)
+	b.respondMessage(s, i, fmt.Sprintf("Профиль **%s** (ID: %d) отвязан от Discord.", name, playerID), false)
 }
 
 // bindFailureMessage renders a binding error for the user.
@@ -131,20 +131,20 @@ func (b *Bot) handleUnbindPlayer(ctx context.Context, s *discordgo.Session, i *d
 func bindFailureMessage(err error, nickname string) string {
 	switch {
 	case errors.Is(err, domain.ErrDiscordAlreadyBound):
-		return "⚠️ Ваш Discord уже привязан к другому профилю. Освободить его может админ через `/unbind_player`."
+		return "Ваш Discord уже привязан к другому профилю. Освободить его может админ через `/unbind_player`."
 	case errors.Is(err, domain.ErrProfileTaken):
-		return fmt.Sprintf("⚠️ Профиль **%s** уже занят другим Discord-аккаунтом. Если это вы — обратитесь к админу.", nickname)
+		return fmt.Sprintf("Профиль **%s** уже занят другим Discord-аккаунтом. Если это вы — обратитесь к админу.", nickname)
 	case errors.Is(err, domain.ErrPlayerNameEmpty):
-		return "⚠️ Ник не может быть пустым."
+		return "Ник не может быть пустым."
 	case errors.Is(err, domain.ErrPlayerNameTooLong):
-		return "⚠️ Слишком длинный ник."
+		return "Слишком длинный ник."
 	case errors.Is(err, domain.ErrInvalidPlayerName):
-		return "⚠️ Недопустимый ник."
+		return "Недопустимый ник."
 	case errors.Is(err, domain.ErrPlayerNotFound):
-		return fmt.Sprintf("⚠️ Профиль **%s** не найден.", nickname)
+		return fmt.Sprintf("Профиль **%s** не найден.", nickname)
 	case errors.Is(err, domain.ErrDiscordNotLinked):
-		return fmt.Sprintf("⚠️ У профиля **%s** нет привязанного Discord-аккаунта.", nickname)
+		return fmt.Sprintf("У профиля **%s** нет привязанного Discord-аккаунта.", nickname)
 	default:
-		return "⚠️ Не удалось выполнить привязку. Попробуйте позже."
+		return "Не удалось выполнить привязку. Попробуйте позже."
 	}
 }

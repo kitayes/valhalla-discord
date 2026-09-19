@@ -265,7 +265,7 @@ func (s *MatchDeskService) card(m *models.DeskMatch, side int, c models.DeskCont
 	}
 	buttons = append(buttons, []models.DeskButton{{Text: "Вызвать судью", Data: DeskCallback(m, "judge")}})
 	if s.webAppURL != "" {
-		buttons = append(buttons, []models.DeskButton{{Text: "🎮 Открыть в приложении", WebApp: &models.DeskWebApp{URL: s.webAppURL}}})
+		buttons = append(buttons, []models.DeskButton{{Text: "Открыть в приложении", WebApp: &models.DeskWebApp{URL: s.webAppURL}}})
 	}
 	chatID := int64(0)
 	if p := c.Captains[m.Teams[side]]; p.TelegramID != nil {

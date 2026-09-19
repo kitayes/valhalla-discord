@@ -272,19 +272,16 @@ func (s *EloService) AnnounceTierChanges(ctx context.Context, session *discordgo
 			s.logger.Warn("tier announce: no discord_id for player %d", ch.PlayerID)
 			continue
 		}
-
 		isPromotion := tierRank(ch.NewTier) > tierRank(ch.OldTier)
-		emoji := "🎉"
-		action := "ПОВЫШЕНИЕ РАНГА!"
+		action := "[ПОВЫШЕНИЕ РАНГА]"
 		color := 0x2ECC71
 		if !isPromotion {
-			emoji = "📉"
-			action = "ПОНИЖЕНИЕ РАНГА"
+			action = "[ПОНИЖЕНИЕ РАНГА]"
 			color = 0xE74C3C
 		}
 
 		embed := &discordgo.MessageEmbed{
-			Title: fmt.Sprintf("%s %s", emoji, action),
+			Title: action,
 			Description: fmt.Sprintf(
 				"Игрок <@%s> перешагнул отметку в **%d MMR** и получает ранг **%s**!\n\n"+
 					"Было: %s → Стало: %s",
