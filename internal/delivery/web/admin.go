@@ -124,6 +124,7 @@ func NewAdminServer(services *application.Service, logger application.Logger, po
 	mux.HandleFunc("/api/admin/disqualify_uncheck", tmaAuth(s.handleAdminDisqualifyUncheck))
 	mux.HandleFunc("/api/admin/tournament/create", tmaAuth(s.handleAdminTournamentCreate))
 	mux.HandleFunc("/api/admin/tournament/start", tmaAuth(s.handleAdminTournamentStart))
+	mux.HandleFunc("/api/admin/tournament/time", tmaAuth(s.handleAdminTournamentSetTime))
 	mux.HandleFunc("/api/admin/tournament/activate", tmaAuth(s.handleAdminTournamentActivate))
 	mux.HandleFunc("/api/admin/tournament/finish", tmaAuth(s.handleAdminTournamentFinish))
 

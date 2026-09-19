@@ -1780,3 +1780,40 @@ func (s *AdminServer) handleAdminTournamentStart(w http.ResponseWriter, r *http.
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "message": "Сетка успешно сформирована, турнир запущен!"})
 }
 
+func (s *AdminServer) handleAdminTournamentSetTime(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	user, ok := UserFromContext(r.Context())
+	if !ok || user == nil || !s.isAdmin(user.ID) {
+		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+		return
+	}
+	if s.services.TelegramService == nil {
+		http.Error(w, `{"error":"service unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		TournamentTime *string `json:"tournament_time"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		return
+	}
+	var tTime time.Time
+	if req.TournamentTime != nil && *req.TournamentTime != "" {
+		t, err := time.Parse(time.RFC3339, *req.TournamentTime)
+		if err != nil {
+			t, err = time.Parse("2006-01-02T15:04", *req.TournamentTime)
+		}
+		if err == nil {
+			tTime = t
+		}
+	}
+	s.services.TelegramService.SetTournamentTime(r.Context(), tTime)
+	s.sseBroker.Broadcast("tournaments_update", map[string]interface{}{"action": "time_updated"})
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "message": "Время начала турнира успешно сохранено!"})
+}
+

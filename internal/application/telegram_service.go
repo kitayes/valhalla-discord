@@ -893,9 +893,17 @@ func (s *TelegramServiceImpl) SetTournamentTime(ctx context.Context, t time.Time
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tournamentTime = t
-	s.logWrite("SetSetting", s.repo.SetSetting(ctx, "tournament_time", t.Format(time.RFC3339)))
+	if t.IsZero() {
+		s.logWrite("SetSetting", s.repo.SetSetting(ctx, "tournament_time", ""))
+	} else {
+		s.logWrite("SetSetting", s.repo.SetSetting(ctx, "tournament_time", t.Format(time.RFC3339)))
+	}
 	if active, _ := s.repo.GetActiveTournament(ctx); active != nil {
-		active.TournamentTime = &t
+		if t.IsZero() {
+			active.TournamentTime = nil
+		} else {
+			active.TournamentTime = &t
+		}
 		_ = s.repo.UpdateTournament(ctx, active)
 	}
 }

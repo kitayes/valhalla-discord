@@ -49,6 +49,7 @@ type mockTelegramSvc struct {
 	openReport *models.TelegramMatchReport
 	confirmed  []int
 	disputed   []int
+	tourneyTime time.Time
 }
 
 func (m *mockTelegramSvc) GetActiveTournament(ctx context.Context) (*models.TelegramTournament, error) {
@@ -201,8 +202,15 @@ func (m *mockTelegramSvc) DisqualifyUnchecked(ctx context.Context) ([]models.Tel
 	return []models.TelegramTeam{{ID: 2, Name: "Beta"}}, nil
 }
 
+func (m *mockTelegramSvc) SetTournamentTime(ctx context.Context, t time.Time) {
+	m.tourneyTime = t
+	if m.activeTourney != nil {
+		m.activeTourney.TournamentTime = &t
+	}
+}
+
 func (m *mockTelegramSvc) GetTournamentTime(ctx context.Context) time.Time {
-	return time.Time{}
+	return m.tourneyTime
 }
 
 func (m *mockTelegramSvc) RollbackMatch(ctx context.Context, matchID int) error {
@@ -997,6 +1005,32 @@ func TestTMAHandlers(t *testing.T) {
 		}
 		if !bracketBuilderCalled {
 			t.Errorf("expected bracketBuilder to be called")
+		}
+	})
+
+	t.Run("handleAdminTournamentSetTime", func(t *testing.T) {
+		// Non-admin forbidden
+		nonAdminCtx := context.WithValue(context.Background(), userCtxKey, &TelegramUser{ID: 11111})
+		body := bytes.NewBufferString(`{"tournament_time":"2026-09-25T18:00:00Z"}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/admin/tournament/time", body).WithContext(nonAdminCtx)
+		rec := httptest.NewRecorder()
+		server.handleAdminTournamentSetTime(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("expected 403, got %d", rec.Code)
+		}
+
+		// Admin sets time
+		adminCtx := context.WithValue(context.Background(), userCtxKey, &TelegramUser{ID: 99999})
+		body = bytes.NewBufferString(`{"tournament_time":"2026-09-25T18:00:00Z"}`)
+		req = httptest.NewRequest(http.MethodPost, "/api/admin/tournament/time", body).WithContext(adminCtx)
+		rec = httptest.NewRecorder()
+		server.handleAdminTournamentSetTime(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		expectedTime, _ := time.Parse(time.RFC3339, "2026-09-25T18:00:00Z")
+		if !tgSvc.tourneyTime.Equal(expectedTime) {
+			t.Errorf("expected tourneyTime %v, got %v", expectedTime, tgSvc.tourneyTime)
 		}
 	})
 }

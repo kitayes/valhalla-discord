@@ -1526,7 +1526,11 @@
                     <span style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 700; letter-spacing: 0.5px;">Текущий турнир</span>
                     <span class="status-pill status-ready" id="stageStatusBadge">Заявлены</span>
                 </div>
-                <div id="activeStageName" style="font-size: 14px; font-weight: 700; color: var(--text-main); margin-bottom: 8px;">—</div>
+                <div id="activeStageName" style="font-size: 14px; font-weight: 700; color: var(--text-main); margin-bottom: 4px;">—</div>
+                <div id="activeStageTime" style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px; display: none; align-items: center; gap: 4px;">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                    <span id="activeStageTimeText"></span>
+                </div>
                 <div style="display: flex; gap: 8px;" id="stageActionButtons">
                     <button class="btn btn-blue" id="btnRegisterStage" style="display:none; width: 100%; justify-content: center;" onclick="registerForActiveStage()">
                         <span>Заявить команду на турнир</span>
@@ -1712,6 +1716,11 @@
                 <div>
                     <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 700; margin-bottom: 4px;">Активный турнир:</div>
                     <div id="adminActiveTourneyName" style="font-size: 14px; font-weight: 800; color: var(--accent-blue);">—</div>
+                    <div id="adminTourneyTimeRow" style="font-size: 11px; color: var(--text-muted); margin-top: 4px; display: flex; align-items: center; gap: 4px;">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                        <span id="adminTourneyTimeText">Время старта: не задано</span>
+                        <button class="link-btn" onclick="openEditTourneyTimeModal()" style="margin-left: 6px; font-size: 11px; text-decoration: underline; color: var(--accent-blue); padding: 0; background: none; border: none; cursor: pointer;">Изменить</button>
+                    </div>
                 </div>
                 <span class="status-pill status-ready" id="adminTourneyStatusBadge" style="display: none;">РЕГИСТРАЦИЯ</span>
             </div>
@@ -2139,6 +2148,24 @@
         </div>
     </div>
 
+    <!-- Edit Tournament Time Modal -->
+    <div class="modal" id="editTourneyTimeModal">
+        <div class="modal-content">
+            <div class="modal-title">Время старта турнира</div>
+            <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
+                Укажите дату и время начала турнира. За 1 час до этого времени бот автоматически закроет регистрацию и сформирует турнирную сетку.
+            </p>
+            <div class="form-group" style="margin-bottom: 16px;">
+                <label class="form-label">Дата и время начала</label>
+                <input type="datetime-local" id="editTourneyTimeInput" class="form-input">
+            </div>
+            <div style="display: flex; gap: 8px;">
+                <button class="btn btn-blue" style="flex: 1; justify-content: center;" onclick="confirmEditTourneyTimeSubmit()">Сохранить</button>
+                <button class="btn btn-red-outline" style="flex: 1; justify-content: center;" onclick="closeEditTourneyTimeModal()">Отмена</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const tg = window.Telegram?.WebApp;
         let initData = "";
@@ -2149,6 +2176,28 @@
         let currentUserIsCaptain = false;
         let currentUserIsAdmin = false;
         let cachedTeammates = [];
+        let currentActiveTourneyTime = null;
+
+        function formatTourneyDisplayTime(dateStr) {
+            if (!dateStr) return '';
+            const d = new Date(dateStr);
+            if (isNaN(d.getTime())) return '';
+            return d.toLocaleString('ru-RU', {
+                day: '2-digit',
+                month: '2-digit',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        }
+
+        function formatDateTimeLocal(dateStr) {
+            if (!dateStr) return '';
+            const d = new Date(dateStr);
+            if (isNaN(d.getTime())) return '';
+            const pad = n => String(n).padStart(2, '0');
+            return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        }
 
         // Match State Tracking
         let currentActiveMatchID = 0;
@@ -2420,6 +2469,16 @@
                         if (data.active_tournament) {
                             stageBox.style.display = 'block';
                             document.getElementById('activeStageName').textContent = data.active_tournament.name;
+                            const stageTimeBox = document.getElementById('activeStageTime');
+                            const stageTimeText = document.getElementById('activeStageTimeText');
+                            if (stageTimeBox && stageTimeText) {
+                                if (data.active_tournament.tournament_time) {
+                                    stageTimeText.textContent = 'Старт: ' + formatTourneyDisplayTime(data.active_tournament.tournament_time);
+                                    stageTimeBox.style.display = 'flex';
+                                } else {
+                                    stageTimeBox.style.display = 'none';
+                                }
+                            }
                             const stageBadge = document.getElementById('stageStatusBadge');
                             const btnReg = document.getElementById('btnRegisterStage');
                             const btnUnreg = document.getElementById('btnUnregisterStage');
@@ -5207,6 +5266,17 @@
                     return `<option value="${t.id}" ${t.is_active ? 'selected' : ''}>${escapeHtml(t.name)} [${t.status}]</option>`;
                 }).join('');
                 if (activeTourney) {
+                    currentActiveTourneyTime = activeTourney.tournament_time || null;
+                    const timeRow = document.getElementById('adminTourneyTimeRow');
+                    const timeText = document.getElementById('adminTourneyTimeText');
+                    if (timeRow && timeText) {
+                        timeRow.style.display = 'flex';
+                        if (activeTourney.tournament_time) {
+                            timeText.textContent = 'Время старта: ' + formatTourneyDisplayTime(activeTourney.tournament_time);
+                        } else {
+                            timeText.textContent = 'Время старта: не задано';
+                        }
+                    }
                     if (statusBadge) {
                         statusBadge.style.display = 'inline-flex';
                         if (activeTourney.status === 'registration' || activeTourney.status === 'draft') {
@@ -5230,6 +5300,9 @@
                         btnFinish.style.display = (activeTourney.status === 'active') ? 'flex' : 'none';
                     }
                 } else {
+                    currentActiveTourneyTime = null;
+                    const timeRow = document.getElementById('adminTourneyTimeRow');
+                    if (timeRow) timeRow.style.display = 'none';
                     if (activeLabelEl) activeLabelEl.textContent = 'Нет активного турнира';
                     if (statusBadge) statusBadge.style.display = 'none';
                     if (btnStart) btnStart.style.display = 'none';
@@ -5348,6 +5421,43 @@
             }
         }
 
+        function openEditTourneyTimeModal() {
+            haptic('light');
+            const input = document.getElementById('editTourneyTimeInput');
+            if (input) {
+                input.value = currentActiveTourneyTime ? formatDateTimeLocal(currentActiveTourneyTime) : '';
+            }
+            document.getElementById('editTourneyTimeModal').classList.add('active');
+            updateBackButton();
+        }
+
+        function closeEditTourneyTimeModal() {
+            document.getElementById('editTourneyTimeModal').classList.remove('active');
+            updateBackButton();
+        }
+
+        async function confirmEditTourneyTimeSubmit() {
+            const inputVal = document.getElementById('editTourneyTimeInput')?.value;
+            let isoTime = null;
+            if (inputVal) {
+                isoTime = new Date(inputVal).toISOString();
+            }
+            haptic('success');
+            const res = await apiFetch('/api/admin/tournament/time', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tournament_time: isoTime })
+            });
+            closeEditTourneyTimeModal();
+            if (res && res.ok) {
+                showToast(res.message || 'Время старта турнира успешно сохранено!', true);
+                loadAdminTournaments();
+                loadProfile();
+            } else {
+                showToast(res?.error || 'Ошибка сохранения времени турнира', false);
+            }
+        }
+
         // Real-Time Server-Sent Events (SSE) Engine
         let sseConnection = null;
         function initSSE() {
@@ -5375,6 +5485,16 @@
 
                 sseConnection.addEventListener('team_update', () => {
                     loadProfile();
+                });
+
+                sseConnection.addEventListener('tournaments_update', () => {
+                    loadProfile();
+                    if (currentUserIsAdmin) {
+                        loadAdminTournaments();
+                        loadAdminDesk(true);
+                    }
+                    loadTournamentsForBracketSelect();
+                    loadBracket(true);
                 });
 
                 sseConnection.onerror = () => {
