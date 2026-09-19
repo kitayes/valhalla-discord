@@ -1393,6 +1393,57 @@ func (s *AdminServer) handleTransferCaptain(w http.ResponseWriter, r *http.Reque
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "message": "Капитанство передано"})
 }
 
+func (s *AdminServer) handleDeleteTeam(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	user, ok := UserFromContext(r.Context())
+	if !ok || user == nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	if err := s.services.TelegramService.DeleteTeamInApp(r.Context(), user.ID); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": err.Error()})
+		return
+	}
+
+	if s.sseBroker != nil {
+		s.sseBroker.Broadcast("team_update", map[string]interface{}{"user_id": user.ID, "deleted": true})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "message": "Команда успешно удалена"})
+}
+
+func (s *AdminServer) handleLeaveTeam(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	user, ok := UserFromContext(r.Context())
+	if !ok || user == nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	if err := s.services.TelegramService.LeaveTeam(r.Context(), user.ID); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": err.Error()})
+		return
+	}
+
+	if s.sseBroker != nil {
+		s.sseBroker.Broadcast("team_update", map[string]interface{}{"user_id": user.ID, "left": true})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "message": "Вы вышли из команды"})
+}
+
+
 func (s *AdminServer) handleBracketMatchDetails(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)

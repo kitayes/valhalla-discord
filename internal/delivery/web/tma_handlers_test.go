@@ -160,6 +160,27 @@ func (m *mockTelegramSvc) RollbackMatch(ctx context.Context, matchID int) error 
 	return nil
 }
 
+func (m *mockTelegramSvc) DeleteTeamInApp(_ context.Context, tgID int64) error {
+	if m.player == nil || !m.player.IsCaptain {
+		return errors.New("только капитан команды может удалить команду")
+	}
+	m.team = nil
+	m.teamMems = nil
+	m.player.TeamID = nil
+	m.player.IsCaptain = false
+	return nil
+}
+
+func (m *mockTelegramSvc) LeaveTeam(_ context.Context, tgID int64) error {
+	if m.player != nil && m.player.IsCaptain {
+		return errors.New("капитан не может покинуть команду")
+	}
+	if m.player != nil {
+		m.player.TeamID = nil
+	}
+	return nil
+}
+
 func (m *mockTelegramSvc) ChangeWinnerDirect(ctx context.Context, matchID int, winnerTeamName string, winScore, loseScore int) error {
 	return nil
 }
@@ -367,6 +388,51 @@ func TestTMAHandlers(t *testing.T) {
 		var resp map[string]interface{}
 		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || resp["ok"] != true {
 			t.Fatalf("expected ok: true, got %s", rec.Body.String())
+		}
+	})
+
+	t.Run("POST /api/team/delete deletes team", func(t *testing.T) {
+		user := &TelegramUser{ID: 12345}
+		ctx := context.WithValue(context.Background(), userCtxKey, user)
+
+		tgSvc.player = &models.TelegramPlayer{
+			TelegramID: &user.ID,
+			IsCaptain:  true,
+		}
+		tgSvc.team = &models.TelegramTeam{ID: 1, Name: "TestTeam"}
+
+		req := httptest.NewRequest(http.MethodPost, "/api/team/delete", nil).WithContext(ctx)
+		rec := httptest.NewRecorder()
+
+		server.handleDeleteTeam(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if tgSvc.team != nil {
+			t.Fatalf("expected team deleted, but team is still set")
+		}
+	})
+
+	t.Run("POST /api/team/leave leaves team", func(t *testing.T) {
+		user := &TelegramUser{ID: 99999}
+		ctx := context.WithValue(context.Background(), userCtxKey, user)
+
+		teamID := 1
+		tgSvc.player = &models.TelegramPlayer{
+			TelegramID: &user.ID,
+			TeamID:     &teamID,
+			IsCaptain:  false,
+		}
+
+		req := httptest.NewRequest(http.MethodPost, "/api/team/leave", nil).WithContext(ctx)
+		rec := httptest.NewRecorder()
+
+		server.handleLeaveTeam(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if tgSvc.player.TeamID != nil {
+			t.Fatalf("expected team_id nil, got %v", tgSvc.player.TeamID)
 		}
 	})
 

@@ -99,6 +99,8 @@ type TelegramService interface {
 	JoinTeamByToken(ctx context.Context, playerTgID int64, token string) error
 	KickTeamPlayer(ctx context.Context, captainTgID int64, playerID int) error
 	TransferCaptain(ctx context.Context, captainTgID int64, playerID int) error
+	DeleteTeamInApp(ctx context.Context, captainTgID int64) error
+	LeaveTeam(ctx context.Context, playerTgID int64) error
 
 	GetTeamCaptains(ctx context.Context, teamID int) ([]models.TelegramPlayer, error)
 	SetMatchNotifier(fn func(ctx context.Context, chatID int64, text string, hasWebAppBtn bool))
@@ -731,6 +733,49 @@ func (s *TelegramServiceImpl) TransferCaptain(ctx context.Context, captainTgID i
 		return fmt.Errorf("не удалось назначить нового капитана: %w", err)
 	}
 	return nil
+}
+
+// DeleteTeamInApp removes the team and detaches all members.
+func (s *TelegramServiceImpl) DeleteTeamInApp(ctx context.Context, captainTgID int64) error {
+	p, err := s.repo.GetPlayerByTelegramID(ctx, captainTgID)
+	if err != nil || p == nil || p.TeamID == nil {
+		return errors.New("вы не состоите в команде")
+	}
+	if !p.IsCaptain {
+		return errors.New("только капитан команды может удалить команду")
+	}
+	teamID := *p.TeamID
+	team, err := s.repo.GetTeamByID(ctx, teamID)
+	if err != nil || team == nil {
+		return errors.New("команда не найдена")
+	}
+	if team.IsCheckedIn {
+		return errors.New("удаление заблокировано: сначала снимите Check-in")
+	}
+	s.logWrite("ReleaseTeamMembers", s.repo.ReleaseTeamMembers(ctx, teamID))
+	if err := s.repo.DeleteTeam(ctx, teamID); err != nil {
+		return fmt.Errorf("не удалось удалить команду: %w", err)
+	}
+	return nil
+}
+
+// LeaveTeam detaches a non-captain player from their current team.
+func (s *TelegramServiceImpl) LeaveTeam(ctx context.Context, playerTgID int64) error {
+	p, err := s.repo.GetPlayerByTelegramID(ctx, playerTgID)
+	if err != nil || p == nil || p.TeamID == nil {
+		return errors.New("вы не состоите в команде")
+	}
+	if p.IsCaptain {
+		return errors.New("капитан не может покинуть команду. Передайте капитанство другому игроку или удалите команду")
+	}
+	team, err := s.repo.GetTeamByID(ctx, *p.TeamID)
+	if err != nil || team == nil {
+		return errors.New("команда не найдена")
+	}
+	if team.IsCheckedIn {
+		return errors.New("выход заблокирован: команда уже прошла Check-in")
+	}
+	return s.repo.UpdatePlayerFieldByID(ctx, p.ID, "team_id", nil)
 }
 
 
