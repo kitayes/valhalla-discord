@@ -947,6 +947,58 @@ func TestTMAHandlers(t *testing.T) {
 			t.Errorf("expected WaitingOpponents: Gamma vs Delta, got %q", resp.TournamentStatus.WaitingOpponents)
 		}
 	})
+
+	t.Run("handleBracket includes challonge_url", func(t *testing.T) {
+		tgSvc.activeTourney = &models.TelegramTournament{
+			ID:           1,
+			Name:         "Cup 1",
+			Status:       models.TournamentStatusActive,
+			ChallongeURL: "https://challonge.com/cup_1",
+			IsActive:     true,
+		}
+		req := httptest.NewRequest(http.MethodGet, "/api/bracket", nil)
+		rec := httptest.NewRecorder()
+		server.handleBracket(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rec.Code)
+		}
+		var resp BracketResponse
+		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.ChallongeURL != "https://challonge.com/cup_1" {
+			t.Errorf("expected challonge_url: https://challonge.com/cup_1, got %q", resp.ChallongeURL)
+		}
+	})
+
+	t.Run("handleAdminTournamentStart", func(t *testing.T) {
+		var bracketBuilderCalled bool
+		server.WithBracketBuilder(func(ctx context.Context, adminChatID int64) error {
+			bracketBuilderCalled = true
+			return nil
+		})
+
+		// Non-admin forbidden
+		nonAdminCtx := context.WithValue(context.Background(), userCtxKey, &TelegramUser{ID: 11111})
+		req := httptest.NewRequest(http.MethodPost, "/api/admin/tournament/start", nil).WithContext(nonAdminCtx)
+		rec := httptest.NewRecorder()
+		server.handleAdminTournamentStart(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("expected 403, got %d", rec.Code)
+		}
+
+		// Admin starts tournament
+		adminCtx := context.WithValue(context.Background(), userCtxKey, &TelegramUser{ID: 99999})
+		req = httptest.NewRequest(http.MethodPost, "/api/admin/tournament/start", nil).WithContext(adminCtx)
+		rec = httptest.NewRecorder()
+		server.handleAdminTournamentStart(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if !bracketBuilderCalled {
+			t.Errorf("expected bracketBuilder to be called")
+		}
+	})
 }
 
 type captureLogger struct{}

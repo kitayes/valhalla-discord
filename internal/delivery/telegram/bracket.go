@@ -297,6 +297,27 @@ func (b *Bot) buildBracket(ctx context.Context, tTime time.Time, adminChat int64
 	}
 }
 
+// BuildBracket builds the bracket for the active tournament and announces it to participants and tournament chat.
+func (b *Bot) BuildBracket(ctx context.Context, adminChat int64) (*application.BracketBuilt, error) {
+	if b.bracket == nil {
+		return nil, errors.New("генератор сетки недоступен")
+	}
+	tTime := b.service.GetTournamentTime(ctx)
+	if tTime.IsZero() {
+		tTime = time.Now()
+	}
+	built, err := b.bracket.Build(ctx, tTime)
+	if err != nil {
+		b.reportBracketError(ctx, "build", err)
+		return nil, err
+	}
+	b.announceBracket(ctx, built)
+	if adminChat != 0 {
+		b.sendMessage(adminChat, fmt.Sprintf("Сетка построена: %s\nМатчей в 1-м раунде: %d, автопроходов: %d.", built.URL, len(built.Round1), len(built.Byes)), "main_menu")
+	}
+	return built, nil
+}
+
 func (b *Bot) handleBracketCommand(ctx context.Context, chatID int64, text string) bool {
 	if b.bracket == nil {
 		return false

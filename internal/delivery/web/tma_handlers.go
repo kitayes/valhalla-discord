@@ -51,8 +51,9 @@ type RoundScheduleItem struct {
 }
 
 type BracketResponse struct {
-	Matches  []models.BracketMatch `json:"matches"`
-	Schedule []RoundScheduleItem   `json:"schedule,omitempty"`
+	Matches      []models.BracketMatch `json:"matches"`
+	Schedule     []RoundScheduleItem   `json:"schedule,omitempty"`
+	ChallongeURL string                `json:"challonge_url,omitempty"`
 }
 
 type TeamTournamentStatus struct {
@@ -206,19 +207,33 @@ func (s *AdminServer) handleBracket(w http.ResponseWriter, r *http.Request) {
 	var matches []models.BracketMatch
 	var err error
 	var tTime time.Time
+	var challongeURL string
 	if tourneyIDStr != "" && s.services.TelegramService != nil {
 		tID, _ := strconv.Atoi(tourneyIDStr)
 		if tID > 0 {
 			matches, err = s.services.TelegramService.GetBracketForTournament(r.Context(), tID)
 			tourney, _ := s.services.TelegramService.GetTournamentByID(r.Context(), tID)
-			if tourney != nil && tourney.TournamentTime != nil {
-				tTime = *tourney.TournamentTime
+			if tourney != nil {
+				if tourney.TournamentTime != nil {
+					tTime = *tourney.TournamentTime
+				}
+				challongeURL = tourney.ChallongeURL
 			}
 		}
 	}
 	if matches == nil && s.services.TelegramService != nil {
 		matches, err = s.services.TelegramService.GetBracket(r.Context())
 		tTime = s.services.TelegramService.GetTournamentTime(r.Context())
+		activeTourney, _ := s.services.TelegramService.GetActiveTournament(r.Context())
+		if activeTourney != nil {
+			challongeURL = activeTourney.ChallongeURL
+		}
+	}
+	if challongeURL == "" && s.services.Bracket != nil {
+		challongeURL = s.services.Bracket.URL(r.Context())
+	}
+	if challongeURL != "" && !strings.HasPrefix(challongeURL, "http://") && !strings.HasPrefix(challongeURL, "https://") {
+		challongeURL = "https://challonge.com/" + challongeURL
 	}
 	if err != nil {
 		http.Error(w, `{"error":"failed to load bracket"}`, http.StatusInternalServerError)
@@ -246,7 +261,7 @@ func (s *AdminServer) handleBracket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(BracketResponse{Matches: matches, Schedule: schedule})
+	_ = json.NewEncoder(w).Encode(BracketResponse{Matches: matches, Schedule: schedule, ChallongeURL: challongeURL})
 }
 
 func (s *AdminServer) handleActiveMatch(w http.ResponseWriter, r *http.Request) {
@@ -1716,5 +1731,52 @@ func (s *AdminServer) handleAdminTournamentFinish(w http.ResponseWriter, r *http
 	s.sseBroker.Broadcast("tournaments_update", map[string]interface{}{"action": "finished", "id": req.TournamentID})
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+}
+
+func (s *AdminServer) handleAdminTournamentStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	user, ok := UserFromContext(r.Context())
+	if !ok || user == nil || !s.isAdmin(user.ID) {
+		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+		return
+	}
+	if s.services.TelegramService == nil {
+		http.Error(w, `{"error":"service unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+	activeTourney, err := s.services.TelegramService.GetActiveTournament(r.Context())
+	if err != nil || activeTourney == nil {
+		http.Error(w, `{"error":"нет активного турнира"}`, http.StatusBadRequest)
+		return
+	}
+	if s.bracketBuilder != nil {
+		if err := s.bracketBuilder(r.Context(), user.ID); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+			return
+		}
+	} else if s.services.Bracket != nil {
+		tTime := s.services.TelegramService.GetTournamentTime(r.Context())
+		if tTime.IsZero() && activeTourney.TournamentTime != nil {
+			tTime = *activeTourney.TournamentTime
+		}
+		if tTime.IsZero() {
+			tTime = time.Now()
+		}
+		if _, err := s.services.Bracket.Build(r.Context(), tTime); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+			return
+		}
+	} else {
+		http.Error(w, `{"error":"генератор сетки недоступен"}`, http.StatusInternalServerError)
+		return
+	}
+	s.sseBroker.Broadcast("bracket_update", map[string]interface{}{"action": "built"})
+	s.sseBroker.Broadcast("tournaments_update", map[string]interface{}{"action": "started", "id": activeTourney.ID})
+	s.sseBroker.Broadcast("match_update", map[string]interface{}{"action": "refresh"})
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "message": "Сетка успешно сформирована, турнир запущен!"})
 }
 

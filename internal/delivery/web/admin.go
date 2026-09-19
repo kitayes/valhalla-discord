@@ -40,6 +40,7 @@ type AdminServer struct {
 	// downstream addresses photos by file ID, so this is the bridge between
 	// the two.
 	photoUploader func(ctx context.Context, data []byte, filename string) (string, error)
+	bracketBuilder func(ctx context.Context, adminChatID int64) error
 	sseBroker     *SSEBroker
 	srv           *http.Server
 	startedAt     time.Time
@@ -122,6 +123,7 @@ func NewAdminServer(services *application.Service, logger application.Logger, po
 	mux.HandleFunc("/api/admin/ping_debtors", tmaAuth(s.handleAdminPingDebtors))
 	mux.HandleFunc("/api/admin/disqualify_uncheck", tmaAuth(s.handleAdminDisqualifyUncheck))
 	mux.HandleFunc("/api/admin/tournament/create", tmaAuth(s.handleAdminTournamentCreate))
+	mux.HandleFunc("/api/admin/tournament/start", tmaAuth(s.handleAdminTournamentStart))
 	mux.HandleFunc("/api/admin/tournament/activate", tmaAuth(s.handleAdminTournamentActivate))
 	mux.HandleFunc("/api/admin/tournament/finish", tmaAuth(s.handleAdminTournamentFinish))
 
@@ -183,6 +185,11 @@ func (s *AdminServer) WithDebtorNotifier(fn func(ctx context.Context, adminChatI
 // one that is refused outright.
 func (s *AdminServer) WithPhotoUploader(fn func(ctx context.Context, data []byte, filename string) (string, error)) *AdminServer {
 	s.photoUploader = fn
+	return s
+}
+
+func (s *AdminServer) WithBracketBuilder(fn func(ctx context.Context, adminChatID int64) error) *AdminServer {
+	s.bracketBuilder = fn
 	return s
 }
 

@@ -1393,10 +1393,16 @@
                 Турнирная сетка
                 <span class="bracket-live-count" id="bracketLiveCount" style="display:none;"></span>
             </span>
-            <button class="btn-copy" onclick="loadBracket()">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg>
-                <span>Обновить</span>
-            </button>
+            <div style="display: flex; gap: 6px; align-items: center;">
+                <button class="btn-copy" id="btnOpenChallonge" onclick="openChallongeUrl()" style="display: none;" title="Открыть на Challonge">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                    <span>Challonge</span>
+                </button>
+                <button class="btn-copy" onclick="loadBracket()">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg>
+                    <span>Обновить</span>
+                </button>
+            </div>
         </div>
         <div id="bracketStageSelectorRow" style="margin-bottom: 12px; display: none;">
             <div style="display: flex; align-items: center; gap: 8px;">
@@ -1702,11 +1708,18 @@
             <span>Управление Турнирами</span>
         </div>
         <div class="card">
-            <div style="margin-bottom: 12px;">
-                <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 700; margin-bottom: 4px;">Активный турнир:</div>
-                <div id="adminActiveTourneyName" style="font-size: 14px; font-weight: 800; color: var(--accent-blue);">—</div>
+            <div style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: flex-start;">
+                <div>
+                    <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 700; margin-bottom: 4px;">Активный турнир:</div>
+                    <div id="adminActiveTourneyName" style="font-size: 14px; font-weight: 800; color: var(--accent-blue);">—</div>
+                </div>
+                <span class="status-pill status-ready" id="adminTourneyStatusBadge" style="display: none;">РЕГИСТРАЦИЯ</span>
             </div>
             <div style="display: flex; flex-direction: column; gap: 8px;">
+                <button class="btn btn-gold" id="btnStartTournament" onclick="startTournamentAdmin()" style="display: none; width: 100%; justify-content: center;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                    <span>Сформировать сетку и начать турнир</span>
+                </button>
                 <button class="btn btn-blue" onclick="openCreateTourneyModal()" style="width: 100%; justify-content: center;">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                     <span>Начать новый турнир</span>
@@ -1718,7 +1731,7 @@
                         <span>Переключить</span>
                     </button>
                 </div>
-                <button class="btn btn-green" onclick="finishCurrentTourneyAdmin()" style="width: 100%; justify-content: center;">
+                <button class="btn btn-green" id="btnFinishTourneyAdmin" onclick="finishCurrentTourneyAdmin()" style="width: 100%; justify-content: center;">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
                     <span>Завершить текущий турнир</span>
                 </button>
@@ -4192,6 +4205,7 @@
         // Bracket View
         let selectedBracketTournamentId = null;
         let cachedTournamentsList = [];
+        let currentChallongeUrl = "";
 
         async function loadTournamentsForBracketSelect() {
             const selectEl = document.getElementById('bracketStageSelect');
@@ -4225,6 +4239,16 @@
             loadBracket();
         }
 
+        function openChallongeUrl() {
+            if (!currentChallongeUrl) return;
+            haptic('light');
+            if (window.Telegram?.WebApp?.openLink) {
+                window.Telegram.WebApp.openLink(currentChallongeUrl);
+            } else {
+                window.open(currentChallongeUrl, '_blank');
+            }
+        }
+
         async function loadBracket(silent = false) {
             const list = document.getElementById('bracketList');
             if (!list) return;
@@ -4251,6 +4275,18 @@
                 url += '?tournament_id=' + selectedBracketTournamentId;
             }
             const data = await apiFetch(url);
+
+            // Update Challonge button
+            let challongeUrl = (data && data.challonge_url) || (currentTourney && currentTourney.challonge_url) || "";
+            if (challongeUrl && !challongeUrl.startsWith('http://') && !challongeUrl.startsWith('https://')) {
+                challongeUrl = 'https://challonge.com/' + challongeUrl;
+            }
+            currentChallongeUrl = challongeUrl;
+            const btnChallonge = document.getElementById('btnOpenChallonge');
+            if (btnChallonge) {
+                btnChallonge.style.display = currentChallongeUrl ? 'inline-flex' : 'none';
+            }
+
             if (!data || !data.matches || !data.matches.length) {
                 list.innerHTML = `<div class="card" style="text-align:center; color:var(--text-muted); font-size:13px;">Сетка ещё не сформирована</div>`;
                 const filterEl = document.getElementById('roundFilter');
@@ -5156,20 +5192,69 @@
         async function loadAdminTournaments() {
             const activeLabelEl = document.getElementById('adminActiveTourneyName');
             const selectEl = document.getElementById('adminSelectTourney');
+            const statusBadge = document.getElementById('adminTourneyStatusBadge');
+            const btnStart = document.getElementById('btnStartTournament');
+            const btnFinish = document.getElementById('btnFinishTourneyAdmin');
             if (!selectEl) return;
             const res = await apiFetch('/api/tournaments');
             if (res && res.tournaments) {
-                let activeFound = false;
+                let activeTourney = null;
                 selectEl.innerHTML = res.tournaments.map(t => {
                     if (t.is_active) {
-                        activeFound = true;
-                        if (activeLabelEl) activeLabelEl.textContent = `${t.name} (ID: ${t.id}, статус: ${t.status})`;
+                        activeTourney = t;
+                        if (activeLabelEl) activeLabelEl.textContent = t.name;
                     }
                     return `<option value="${t.id}" ${t.is_active ? 'selected' : ''}>${escapeHtml(t.name)} [${t.status}]</option>`;
                 }).join('');
-                if (!activeFound && activeLabelEl) {
-                    activeLabelEl.textContent = 'Нет активного турнира';
+                if (activeTourney) {
+                    if (statusBadge) {
+                        statusBadge.style.display = 'inline-flex';
+                        if (activeTourney.status === 'registration' || activeTourney.status === 'draft') {
+                            statusBadge.className = 'status-pill status-ready';
+                            statusBadge.textContent = 'РЕГИСТРАЦИЯ';
+                        } else if (activeTourney.status === 'active') {
+                            statusBadge.className = 'status-pill status-live';
+                            statusBadge.innerHTML = '<span class="status-dot live-pulse"></span> ТУРНИР ИДЁТ';
+                        } else if (activeTourney.status === 'completed') {
+                            statusBadge.className = 'status-pill status-eliminated';
+                            statusBadge.textContent = 'ЗАВЕРШЁН';
+                        } else {
+                            statusBadge.className = 'status-pill status-waiting';
+                            statusBadge.textContent = activeTourney.status.toUpperCase();
+                        }
+                    }
+                    if (btnStart) {
+                        btnStart.style.display = (activeTourney.status === 'registration' || activeTourney.status === 'draft') ? 'flex' : 'none';
+                    }
+                    if (btnFinish) {
+                        btnFinish.style.display = (activeTourney.status === 'active') ? 'flex' : 'none';
+                    }
+                } else {
+                    if (activeLabelEl) activeLabelEl.textContent = 'Нет активного турнира';
+                    if (statusBadge) statusBadge.style.display = 'none';
+                    if (btnStart) btnStart.style.display = 'none';
+                    if (btnFinish) btnFinish.style.display = 'none';
                 }
+            }
+        }
+
+        async function startTournamentAdmin() {
+            const confirmed = await appConfirm('Сформировать турнирную сетку и начать турнир? Участники получат уведомления о матчах 1-го раунда.');
+            if (!confirmed) return;
+            haptic('warning');
+            const res = await apiFetch('/api/admin/tournament/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            });
+            if (res && res.ok) {
+                showToast(res.message || 'Турнир запущен, сетка сформирована!', true);
+                loadAdminDesk();
+                loadAdminTournaments();
+                loadTournamentsForBracketSelect();
+                loadBracket();
+            } else {
+                showToast(res?.error || 'Ошибка запуска турнира', false);
             }
         }
 
