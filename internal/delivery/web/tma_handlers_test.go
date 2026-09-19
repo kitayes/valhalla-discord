@@ -41,7 +41,6 @@ type mockTelegramSvc struct {
 	activeTourney *models.TelegramTournament
 	tourneyTeam   *models.TournamentTeam
 	tournaments   []models.TelegramTournament
-	standings     []models.LeagueStanding
 	// reportedPhotoIDs records what the handler passed down on the last
 	// report, so tests can assert Telegram file IDs arrive here rather than
 	// the raw base64 the browser sent.
@@ -65,10 +64,6 @@ func (m *mockTelegramSvc) GetTournamentTeamStatus(ctx context.Context, captainTg
 
 func (m *mockTelegramSvc) GetAllTournaments(ctx context.Context) ([]models.TelegramTournament, error) {
 	return m.tournaments, nil
-}
-
-func (m *mockTelegramSvc) GetLeagueStandings(ctx context.Context) ([]models.LeagueStanding, error) {
-	return m.standings, nil
 }
 
 func (m *mockTelegramSvc) RegisterTeamForTournament(ctx context.Context, captainTgID int64, tournamentID int) error {

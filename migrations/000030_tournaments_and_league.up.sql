@@ -7,6 +7,8 @@ CREATE TABLE telegram_tournaments (
     challonge_id BIGINT,
     challonge_url TEXT NOT NULL DEFAULT '',
     challonge_for TIMESTAMPTZ,
+    winner_team_id INT REFERENCES telegram_teams(id) ON DELETE SET NULL,
+    winner_team_name VARCHAR(128) NOT NULL DEFAULT '',
     is_active BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -36,8 +38,8 @@ CREATE INDEX idx_bracket_matches_tourney ON telegram_bracket_matches(tournament_
 
 INSERT INTO telegram_tournaments (name, slug, status, tournament_time, challonge_id, challonge_url, challonge_for, is_active)
 VALUES (
-    'Valhalla League - Этап 1',
-    'valhalla_stage_1',
+    'Valhalla Tournament #1',
+    'valhalla_tournament_1',
     'registration',
     (SELECT NULLIF(value,'')::timestamptz FROM telegram_settings WHERE key='tournament_time'),
     (SELECT NULLIF(value,'')::bigint FROM telegram_settings WHERE key='challonge_tournament_id'),

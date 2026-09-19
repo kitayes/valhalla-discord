@@ -114,7 +114,6 @@ func NewAdminServer(services *application.Service, logger application.Logger, po
 	mux.HandleFunc("/api/team/transfer", tmaAuth(s.handleTransferCaptain))
 	mux.HandleFunc("/api/team/delete", tmaAuth(s.handleDeleteTeam))
 	mux.HandleFunc("/api/team/leave", tmaAuth(s.handleLeaveTeam))
-	mux.HandleFunc("/api/league/standings", tmaAuth(s.handleLeagueStandings))
 	mux.HandleFunc("/api/tournaments", tmaAuth(s.handleTournamentsList))
 	mux.HandleFunc("/api/tournament/register", tmaAuth(s.handleTournamentRegister))
 	mux.HandleFunc("/api/tournament/unregister", tmaAuth(s.handleTournamentUnregister))

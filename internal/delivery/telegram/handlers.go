@@ -29,11 +29,10 @@ func (b *Bot) handleAdminCommand(ctx context.Context, chatID int64, text string)
 			"/export_sheet - Составы и путь по сетке в Google Таблицу\n" +
 			"/list_solo - Список соло-игроков\n" +
 			"/export_solo - CSV соло-игроков\n\n" +
-			"/tournaments - Список этапов Лиги\n" +
-			"/new_tourney <название> - Создать новый этап Лиги\n" +
-			"/select_tourney <ID> - Выбрать активный этап\n" +
-			"/finish_tourney - Завершить этап и начислить очки\n" +
-			"/league_table - Текущая таблица Лиги\n\n" +
+			"/tournaments - Список всех турниров\n" +
+			"/new_tourney <название> - Создать и запустить новый турнир\n" +
+			"/select_tourney <ID> - Выбрать активный турнир\n" +
+			"/finish_tourney - Завершить текущий турнир\n\n" +
 			"/broadcast [текст] - Рассылка\n" +
 			"/set_tourney [дата] - Установить время\n" +
 			"/close_reg / /open_reg - Регистрация\n" +
@@ -224,30 +223,34 @@ func (b *Bot) handleAdminCommand(ctx context.Context, chatID int64, text string)
 		return
 	}
 
-	if text == "/tournaments" || text == "/stages" {
+	if text == "/tournaments" {
 		tourneys, err := b.service.GetAllTournaments(ctx)
 		if err != nil {
-			b.sendMessage(chatID, "Ошибка получения этапов: "+err.Error(), "main_menu")
+			b.sendMessage(chatID, "Ошибка получения турниров: "+err.Error(), "main_menu")
 			return
 		}
 		if len(tourneys) == 0 {
-			b.sendMessage(chatID, "Этапы Лиги ещё не созданы. Используйте: /new_tourney <название>", "main_menu")
+			b.sendMessage(chatID, "Турниры ещё не созданы. Создайте новый: /new_tourney <название>", "main_menu")
 			return
 		}
 		var sb strings.Builder
-		sb.WriteString("Этапы Лиги:\n\n")
+		sb.WriteString("Список турниров:\n\n")
 		for _, t := range tourneys {
 			activeTag := ""
 			if t.IsActive {
 				activeTag = " [АКТИВНЫЙ]"
 			}
-			tTimeStr := "не назначено"
+			tTimeStr := "время не назначено"
 			if t.TournamentTime != nil {
 				tTimeStr = t.TournamentTime.Format("02.01.2006 15:04")
 			}
-			sb.WriteString(fmt.Sprintf("ID %d: %s%s\n- Статус: %s | Старт: %s\n\n", t.ID, t.Name, activeTag, t.Status, tTimeStr))
+			winnerStr := ""
+			if t.WinnerTeamName != "" {
+				winnerStr = fmt.Sprintf(" | Победитель: %s", t.WinnerTeamName)
+			}
+			sb.WriteString(fmt.Sprintf("ID %d: %s%s\n- Статус: %s | Старт: %s%s\n\n", t.ID, t.Name, activeTag, t.Status, tTimeStr, winnerStr))
 		}
-		sb.WriteString("Переключить активный этап: /select_tourney <ID>")
+		sb.WriteString("Переключить активный турнир: /select_tourney <ID>")
 		b.sendMessage(chatID, sb.String(), "main_menu")
 		return
 	}
@@ -255,15 +258,15 @@ func (b *Bot) handleAdminCommand(ctx context.Context, chatID int64, text string)
 	if strings.HasPrefix(text, "/new_tourney ") {
 		name := strings.TrimSpace(strings.TrimPrefix(text, "/new_tourney "))
 		if name == "" {
-			b.sendMessage(chatID, "Укажите название этапа: /new_tourney <название>", "main_menu")
+			b.sendMessage(chatID, "Укажите название турнира: /new_tourney <название>", "main_menu")
 			return
 		}
 		t, err := b.service.CreateTournament(ctx, name, "", nil)
 		if err != nil {
-			b.sendMessage(chatID, "Ошибка создания этапа: "+err.Error(), "main_menu")
+			b.sendMessage(chatID, "Ошибка создания турнира: "+err.Error(), "main_menu")
 			return
 		}
-		msg := fmt.Sprintf("Этап '%s' успешно создан (ID: %d).\nСтатус: %s\n\nСделать активным: /select_tourney %d", t.Name, t.ID, t.Status, t.ID)
+		msg := fmt.Sprintf("Новый турнир '%s' успешно создан и запущен (ID: %d)!\nПредыдущий турнир завершён.\n\nЗадайте время старта командой:\n/set_tourney 20.05.2026 18:00", t.Name, t.ID)
 		b.sendMessage(chatID, msg, "main_menu")
 		return
 	}
@@ -277,45 +280,25 @@ func (b *Bot) handleAdminCommand(ctx context.Context, chatID int64, text string)
 		}
 		err = b.service.SetActiveTournament(ctx, id)
 		if err != nil {
-			b.sendMessage(chatID, "Ошибка активации этапа: "+err.Error(), "main_menu")
+			b.sendMessage(chatID, "Ошибка активации турнира: "+err.Error(), "main_menu")
 			return
 		}
-		b.sendMessage(chatID, fmt.Sprintf("Этап ID %d теперь активен.", id), "main_menu")
+		b.sendMessage(chatID, fmt.Sprintf("Турнир ID %d теперь активен.", id), "main_menu")
 		return
 	}
 
 	if text == "/finish_tourney" {
 		active, err := b.service.GetActiveTournament(ctx)
 		if err != nil || active == nil {
-			b.sendMessage(chatID, "Нет активного этапа для завершения.", "main_menu")
+			b.sendMessage(chatID, "Нет активного турнира для завершения.", "main_menu")
 			return
 		}
 		err = b.service.FinishTournament(ctx, active.ID)
 		if err != nil {
-			b.sendMessage(chatID, "Ошибка завершения этапа: "+err.Error(), "main_menu")
+			b.sendMessage(chatID, "Ошибка завершения турнира: "+err.Error(), "main_menu")
 			return
 		}
-		b.sendMessage(chatID, fmt.Sprintf("Этап '%s' (ID: %d) завершён! Очки Лиги начислены командам. Посмотреть таблицу: /league_table", active.Name, active.ID), "main_menu")
-		return
-	}
-
-	if text == "/league_table" || text == "/standings" {
-		standings, err := b.service.GetLeagueStandings(ctx)
-		if err != nil {
-			b.sendMessage(chatID, "Ошибка получения таблицы: "+err.Error(), "main_menu")
-			return
-		}
-		if len(standings) == 0 {
-			b.sendMessage(chatID, "Очки в Лиге ещё не начислены. Завершите хотя бы один этап турнира.", "main_menu")
-			return
-		}
-		var sb strings.Builder
-		sb.WriteString("Таблица Лиги:\n\n")
-		for idx, s := range standings {
-			sb.WriteString(fmt.Sprintf("#%d %s\n   Очки: %d | Игр: %d | 1/2/3: %d/%d/%d\n",
-				idx+1, s.TeamName, s.TotalPoints, s.TournamentsPlayed, s.FirstPlaces, s.SecondPlaces, s.ThirdPlaces))
-		}
-		b.sendMessage(chatID, sb.String(), "main_menu")
+		b.sendMessage(chatID, fmt.Sprintf("Турнир '%s' (ID: %d) завершён и перенесён в архив!", active.Name, active.ID), "main_menu")
 		return
 	}
 }
@@ -481,21 +464,6 @@ func (b *Bot) handleUserCommand(ctx context.Context, chatID int64, text string, 
 		response, kbType = b.handleProfile(ctx, chatID)
 	case "/report":
 		response, kbType = b.service.StartReport(ctx, chatID)
-	case "/league_table", "/standings":
-		standings, err := b.service.GetLeagueStandings(ctx)
-		if err != nil {
-			response = "Ошибка получения таблицы Лиги: " + err.Error()
-		} else if len(standings) == 0 {
-			response = "Очки в Лиге ещё не начислены. Завершите хотя бы один этап турнира."
-		} else {
-			var sb strings.Builder
-			sb.WriteString("Таблица Лиги:\n\n")
-			for idx, s := range standings {
-				sb.WriteString(fmt.Sprintf("#%d %s - %d очков (игр: %d)\n", idx+1, s.TeamName, s.TotalPoints, s.TournamentsPlayed))
-			}
-			response = sb.String()
-		}
-		kbType = "main_menu"
 
 	default:
 		response, kbType = b.service.HandleUserInput(ctx, chatID, text)

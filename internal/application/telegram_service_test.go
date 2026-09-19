@@ -536,8 +536,17 @@ func (r *fakeTelegramRepo) UpdateTournamentPlacements(ctx context.Context, tourn
 	return nil
 }
 
-func (r *fakeTelegramRepo) GetLeagueStandings(ctx context.Context) ([]models.LeagueStanding, error) {
-	return nil, nil
+func (r *fakeTelegramRepo) FinishTournamentRecord(ctx context.Context, tournamentID int, winnerTeamID *int, winnerTeamName string) error {
+	for _, t := range r.tournaments {
+		if t.ID == tournamentID {
+			t.Status = "completed"
+			t.IsActive = false
+			t.WinnerTeamID = winnerTeamID
+			t.WinnerTeamName = winnerTeamName
+			return nil
+		}
+	}
+	return nil
 }
 
 func newTelegramSvc() (*TelegramServiceImpl, *fakeTelegramRepo) {

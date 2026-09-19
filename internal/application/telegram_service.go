@@ -114,7 +114,6 @@ type TelegramService interface {
 	GetAllTournaments(ctx context.Context) ([]models.TelegramTournament, error)
 	SetActiveTournament(ctx context.Context, id int) error
 	FinishTournament(ctx context.Context, id int) error
-	GetLeagueStandings(ctx context.Context) ([]models.LeagueStanding, error)
 	RegisterTeamForTournament(ctx context.Context, captainTgID int64, tournamentID int) error
 	UnregisterTeamFromTournament(ctx context.Context, captainTgID int64, tournamentID int) error
 	GetBracketForTournament(ctx context.Context, tournamentID int) ([]models.BracketMatch, error)
@@ -1844,17 +1843,29 @@ func (s *TelegramServiceImpl) CreateTournament(ctx context.Context, name, slug s
 		Slug:           slug,
 		Status:         models.TournamentStatusRegistration,
 		TournamentTime: tTime,
-		IsActive:       false,
+		IsActive:       true,
 	}
-	// If no active tournament exists, make this one active
-	active, _ := s.repo.GetActiveTournament(ctx)
-	if active == nil {
-		t.IsActive = true
-	}
+
 	created, err := s.repo.CreateTournament(ctx, t)
 	if err != nil {
 		return nil, fmt.Errorf("не удалось создать турнир: %w", err)
 	}
+
+	if tTime != nil {
+		s.mu.Lock()
+		s.tournamentTime = *tTime
+		s.mu.Unlock()
+		_ = s.repo.SetSetting(ctx, "tournament_time", tTime.Format(time.RFC3339))
+	} else {
+		s.mu.Lock()
+		s.tournamentTime = time.Time{}
+		s.mu.Unlock()
+		_ = s.repo.SetSetting(ctx, "tournament_time", "")
+	}
+	_ = s.repo.SetSetting(ctx, settingChallongeID, "")
+	_ = s.repo.SetSetting(ctx, settingChallongeURL, "")
+	_ = s.repo.SetSetting(ctx, settingChallongeFor, "")
+
 	return created, nil
 }
 
@@ -1915,32 +1926,42 @@ func (s *TelegramServiceImpl) FinishTournament(ctx context.Context, id int) erro
 	}
 
 	placements, points := CalculatePlacements(matches, teams)
-	if err := s.repo.UpdateTournamentPlacements(ctx, id, placements, points); err != nil {
-		return fmt.Errorf("не удалось сохранить очки турнира: %w", err)
+	_ = s.repo.UpdateTournamentPlacements(ctx, id, placements, points)
+
+	var winnerID *int
+	var winnerName string
+	for teamID, place := range placements {
+		if place == 1 {
+			wID := teamID
+			winnerID = &wID
+			for _, t := range teams {
+				if t.ID == teamID {
+					winnerName = t.Name
+					break
+				}
+			}
+			break
+		}
 	}
 
-	if err := s.repo.UpdateTournamentStatus(ctx, id, models.TournamentStatusCompleted); err != nil {
-		return fmt.Errorf("не удалось обновить статус турнира: %w", err)
+	if err := s.repo.FinishTournamentRecord(ctx, id, winnerID, winnerName); err != nil {
+		return fmt.Errorf("не удалось завершить турнир: %w", err)
 	}
 
 	return nil
 }
 
-func (s *TelegramServiceImpl) GetLeagueStandings(ctx context.Context) ([]models.LeagueStanding, error) {
-	return s.repo.GetLeagueStandings(ctx)
-}
-
 func (s *TelegramServiceImpl) RegisterTeamForTournament(ctx context.Context, captainTgID int64, tournamentID int) error {
 	p, err := s.repo.GetPlayerByTelegramID(ctx, captainTgID)
 	if err != nil || p == nil || p.TeamID == nil || !p.IsCaptain {
-		return errors.New("только капитан может зарегистрировать команду на этап")
+		return errors.New("только капитан может зарегистрировать команду на турнир")
 	}
 	tourney, err := s.repo.GetTournamentByID(ctx, tournamentID)
 	if err != nil || tourney == nil {
 		return errors.New("турнир не найден")
 	}
 	if tourney.Status != models.TournamentStatusRegistration && tourney.Status != models.TournamentStatusDraft {
-		return errors.New("регистрация на этот этап закрыта")
+		return errors.New("регистрация на этот турнир закрыта")
 	}
 	return s.repo.RegisterTeamForTournament(ctx, tournamentID, *p.TeamID)
 }
@@ -1948,7 +1969,7 @@ func (s *TelegramServiceImpl) RegisterTeamForTournament(ctx context.Context, cap
 func (s *TelegramServiceImpl) UnregisterTeamFromTournament(ctx context.Context, captainTgID int64, tournamentID int) error {
 	p, err := s.repo.GetPlayerByTelegramID(ctx, captainTgID)
 	if err != nil || p == nil || p.TeamID == nil || !p.IsCaptain {
-		return errors.New("только капитан может снять команду с этапа")
+		return errors.New("только капитан может снять команду с турнира")
 	}
 	tourney, err := s.repo.GetTournamentByID(ctx, tournamentID)
 	if err != nil || tourney == nil {

@@ -1536,27 +1536,6 @@ func (s *AdminServer) handleTeamDetails(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-func (s *AdminServer) handleLeagueStandings(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
-		return
-	}
-	if s.services.TelegramService == nil {
-		http.Error(w, `{"error":"service unavailable"}`, http.StatusServiceUnavailable)
-		return
-	}
-	standings, err := s.services.TelegramService.GetLeagueStandings(r.Context())
-	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
-		return
-	}
-	if standings == nil {
-		standings = []models.LeagueStanding{}
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{"standings": standings})
-}
-
 func (s *AdminServer) handleTournamentsList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
@@ -1719,8 +1698,15 @@ func (s *AdminServer) handleAdminTournamentFinish(w http.ResponseWriter, r *http
 	var req struct {
 		TournamentID int `json:"tournament_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TournamentID <= 0 {
-		http.Error(w, `{"error":"invalid tournament_id"}`, http.StatusBadRequest)
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if req.TournamentID <= 0 && s.services.TelegramService != nil {
+		active, _ := s.services.TelegramService.GetActiveTournament(r.Context())
+		if active != nil {
+			req.TournamentID = active.ID
+		}
+	}
+	if req.TournamentID <= 0 {
+		http.Error(w, `{"error":"активный турнир не найден"}`, http.StatusBadRequest)
 		return
 	}
 	if err := s.services.TelegramService.FinishTournament(r.Context(), req.TournamentID); err != nil {
@@ -1728,7 +1714,6 @@ func (s *AdminServer) handleAdminTournamentFinish(w http.ResponseWriter, r *http
 		return
 	}
 	s.sseBroker.Broadcast("tournaments_update", map[string]interface{}{"action": "finished", "id": req.TournamentID})
-	s.sseBroker.Broadcast("league_update", map[string]interface{}{"action": "standings_changed"})
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
 }

@@ -709,17 +709,32 @@ func (r *TelegramPostgres) GetUnsyncedReports(ctx context.Context) ([]models.Tel
 }
 
 func (r *TelegramPostgres) CreateTournament(ctx context.Context, t *models.TelegramTournament) (*models.TelegramTournament, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if t.IsActive {
+		if _, err := tx.ExecContext(ctx, `UPDATE telegram_tournaments SET is_active = FALSE, status = 'completed' WHERE is_active = TRUE`); err != nil {
+			return nil, err
+		}
+	}
+
 	var out models.TelegramTournament
-	err := r.db.QueryRowContext(ctx, `
-		INSERT INTO telegram_tournaments (name, slug, status, tournament_time, challonge_id, challonge_url, challonge_for, is_active)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		RETURNING id, name, slug, status, tournament_time, challonge_id, challonge_url, challonge_for, is_active, created_at, updated_at
-	`, t.Name, t.Slug, t.Status, t.TournamentTime, t.ChallongeID, t.ChallongeURL, t.ChallongeFor, t.IsActive).Scan(
+	err = tx.QueryRowContext(ctx, `
+		INSERT INTO telegram_tournaments (name, slug, status, tournament_time, challonge_id, challonge_url, challonge_for, winner_team_id, winner_team_name, is_active)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		RETURNING id, name, slug, status, tournament_time, challonge_id, challonge_url, challonge_for, winner_team_id, winner_team_name, is_active, created_at, updated_at
+	`, t.Name, t.Slug, t.Status, t.TournamentTime, t.ChallongeID, t.ChallongeURL, t.ChallongeFor, t.WinnerTeamID, t.WinnerTeamName, t.IsActive).Scan(
 		&out.ID, &out.Name, &out.Slug, &out.Status, &out.TournamentTime,
-		&out.ChallongeID, &out.ChallongeURL, &out.ChallongeFor, &out.IsActive,
+		&out.ChallongeID, &out.ChallongeURL, &out.ChallongeFor, &out.WinnerTeamID, &out.WinnerTeamName, &out.IsActive,
 		&out.CreatedAt, &out.UpdatedAt,
 	)
 	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -728,13 +743,13 @@ func (r *TelegramPostgres) CreateTournament(ctx context.Context, t *models.Teleg
 func (r *TelegramPostgres) GetActiveTournament(ctx context.Context) (*models.TelegramTournament, error) {
 	var out models.TelegramTournament
 	err := r.db.QueryRowContext(ctx, `
-		SELECT id, name, slug, status, tournament_time, challonge_id, challonge_url, challonge_for, is_active, created_at, updated_at
+		SELECT id, name, slug, status, tournament_time, challonge_id, challonge_url, challonge_for, winner_team_id, winner_team_name, is_active, created_at, updated_at
 		FROM telegram_tournaments
 		WHERE is_active = TRUE
 		LIMIT 1
 	`).Scan(
 		&out.ID, &out.Name, &out.Slug, &out.Status, &out.TournamentTime,
-		&out.ChallongeID, &out.ChallongeURL, &out.ChallongeFor, &out.IsActive,
+		&out.ChallongeID, &out.ChallongeURL, &out.ChallongeFor, &out.WinnerTeamID, &out.WinnerTeamName, &out.IsActive,
 		&out.CreatedAt, &out.UpdatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -749,12 +764,12 @@ func (r *TelegramPostgres) GetActiveTournament(ctx context.Context) (*models.Tel
 func (r *TelegramPostgres) GetTournamentByID(ctx context.Context, id int) (*models.TelegramTournament, error) {
 	var out models.TelegramTournament
 	err := r.db.QueryRowContext(ctx, `
-		SELECT id, name, slug, status, tournament_time, challonge_id, challonge_url, challonge_for, is_active, created_at, updated_at
+		SELECT id, name, slug, status, tournament_time, challonge_id, challonge_url, challonge_for, winner_team_id, winner_team_name, is_active, created_at, updated_at
 		FROM telegram_tournaments
 		WHERE id = $1
 	`, id).Scan(
 		&out.ID, &out.Name, &out.Slug, &out.Status, &out.TournamentTime,
-		&out.ChallongeID, &out.ChallongeURL, &out.ChallongeFor, &out.IsActive,
+		&out.ChallongeID, &out.ChallongeURL, &out.ChallongeFor, &out.WinnerTeamID, &out.WinnerTeamName, &out.IsActive,
 		&out.CreatedAt, &out.UpdatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -768,7 +783,7 @@ func (r *TelegramPostgres) GetTournamentByID(ctx context.Context, id int) (*mode
 
 func (r *TelegramPostgres) GetAllTournaments(ctx context.Context) ([]models.TelegramTournament, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, name, slug, status, tournament_time, challonge_id, challonge_url, challonge_for, is_active, created_at, updated_at
+		SELECT id, name, slug, status, tournament_time, challonge_id, challonge_url, challonge_for, winner_team_id, winner_team_name, is_active, created_at, updated_at
 		FROM telegram_tournaments
 		ORDER BY id DESC
 	`)
@@ -781,7 +796,7 @@ func (r *TelegramPostgres) GetAllTournaments(ctx context.Context) ([]models.Tele
 	for rows.Next() {
 		var t models.TelegramTournament
 		if err := rows.Scan(&t.ID, &t.Name, &t.Slug, &t.Status, &t.TournamentTime,
-			&t.ChallongeID, &t.ChallongeURL, &t.ChallongeFor, &t.IsActive,
+			&t.ChallongeID, &t.ChallongeURL, &t.ChallongeFor, &t.WinnerTeamID, &t.WinnerTeamName, &t.IsActive,
 			&t.CreatedAt, &t.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -815,9 +830,19 @@ func (r *TelegramPostgres) UpdateTournament(ctx context.Context, t *models.Teleg
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE telegram_tournaments
 		SET name = $2, slug = $3, status = $4, tournament_time = $5,
-		    challonge_id = $6, challonge_url = $7, challonge_for = $8, is_active = $9, updated_at = NOW()
+		    challonge_id = $6, challonge_url = $7, challonge_for = $8,
+		    winner_team_id = $9, winner_team_name = $10, is_active = $11, updated_at = NOW()
 		WHERE id = $1
-	`, t.ID, t.Name, t.Slug, t.Status, t.TournamentTime, t.ChallongeID, t.ChallongeURL, t.ChallongeFor, t.IsActive)
+	`, t.ID, t.Name, t.Slug, t.Status, t.TournamentTime, t.ChallongeID, t.ChallongeURL, t.ChallongeFor, t.WinnerTeamID, t.WinnerTeamName, t.IsActive)
+	return err
+}
+
+func (r *TelegramPostgres) FinishTournamentRecord(ctx context.Context, tournamentID int, winnerTeamID *int, winnerTeamName string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE telegram_tournaments
+		SET status = 'completed', is_active = FALSE, winner_team_id = $2, winner_team_name = $3, updated_at = NOW()
+		WHERE id = $1
+	`, tournamentID, winnerTeamID, winnerTeamName)
 	return err
 }
 
@@ -974,46 +999,5 @@ func (r *TelegramPostgres) UpdateTournamentPlacements(ctx context.Context, tourn
 		}
 	}
 	return tx.Commit()
-}
-
-func (r *TelegramPostgres) GetLeagueStandings(ctx context.Context) ([]models.LeagueStanding, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT
-			t.id AS team_id,
-			t.name AS team_name,
-			COUNT(DISTINCT tt.tournament_id)::int AS tournaments_played,
-			COALESCE(SUM(tt.points), 0)::int AS total_points,
-			COUNT(DISTINCT CASE WHEN tt.placement = 1 THEN tt.tournament_id END)::int AS first_places,
-			COUNT(DISTINCT CASE WHEN tt.placement = 2 THEN tt.tournament_id END)::int AS second_places,
-			COUNT(DISTINCT CASE WHEN tt.placement = 3 THEN tt.tournament_id END)::int AS third_places,
-			COUNT(DISTINCT CASE WHEN bm.winner_id = t.id THEN bm.id END)::int AS matches_won,
-			COUNT(DISTINCT CASE WHEN bm.state = 'complete' AND (bm.team1_id = t.id OR bm.team2_id = t.id) AND bm.winner_id IS NOT NULL AND bm.winner_id != t.id THEN bm.id END)::int AS matches_lost
-		FROM telegram_teams t
-		LEFT JOIN telegram_tournament_teams tt ON tt.team_id = t.id
-		LEFT JOIN telegram_bracket_matches bm ON (bm.team1_id = t.id OR bm.team2_id = t.id)
-		GROUP BY t.id, t.name
-		ORDER BY total_points DESC, first_places DESC, second_places DESC, third_places DESC, matches_won DESC, t.name ASC
-	`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close() //nolint:errcheck
-
-	var standings []models.LeagueStanding
-	rank := 1
-	for rows.Next() {
-		var s models.LeagueStanding
-		if err := rows.Scan(
-			&s.TeamID, &s.TeamName, &s.TournamentsPlayed, &s.TotalPoints,
-			&s.FirstPlaces, &s.SecondPlaces, &s.ThirdPlaces,
-			&s.MatchesWon, &s.MatchesLost,
-		); err != nil {
-			return nil, err
-		}
-		s.Rank = rank
-		rank++
-		standings = append(standings, s)
-	}
-	return standings, rows.Err()
 }
 

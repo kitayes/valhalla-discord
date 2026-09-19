@@ -52,6 +52,8 @@ type TelegramTournament struct {
 	ChallongeID    *int64     `json:"challonge_id,omitempty"`
 	ChallongeURL   string     `json:"challonge_url"`
 	ChallongeFor   *time.Time `json:"challonge_for,omitempty"`
+	WinnerTeamID   *int       `json:"winner_team_id,omitempty"`
+	WinnerTeamName string     `json:"winner_team_name,omitempty"`
 	IsActive       bool       `json:"is_active"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
@@ -69,19 +71,6 @@ type TournamentTeam struct {
 	Placement              *int      `json:"placement,omitempty"`
 	Points                 int       `json:"points"`
 	CreatedAt              time.Time `json:"created_at"`
-}
-
-type LeagueStanding struct {
-	Rank              int    `json:"rank"`
-	TeamID            int    `json:"team_id"`
-	TeamName          string `json:"team_name"`
-	TournamentsPlayed int    `json:"tournaments_played"`
-	TotalPoints       int    `json:"total_points"`
-	FirstPlaces       int    `json:"first_places"`
-	SecondPlaces      int    `json:"second_places"`
-	ThirdPlaces       int    `json:"third_places"`
-	MatchesWon        int    `json:"matches_won"`
-	MatchesLost       int    `json:"matches_lost"`
 }
 
 type TelegramTeam struct {
