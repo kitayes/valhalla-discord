@@ -103,13 +103,38 @@ type Telegram interface {
 	// Bracket cache. ReplaceBracketMatches rewrites the table in one
 	// transaction; both_notified survives for rows whose team pair is unchanged.
 	ReplaceBracketMatches(ctx context.Context, matches []models.BracketMatch) error
+	ReplaceBracketMatchesForTournament(ctx context.Context, tournamentID int, matches []models.BracketMatch) error
 	GetBracketMatches(ctx context.Context) ([]models.BracketMatch, error)
+	GetBracketMatchesForTournament(ctx context.Context, tournamentID int) ([]models.BracketMatch, error)
 	MarkBracketNotified(ctx context.Context, ids []int) error
 	SetTeamParticipantID(ctx context.Context, teamID int, participantID int64) error
 	ClearTeamParticipantIDs(ctx context.Context) error
 	// Reports queued for Challonge: bracket_match_id set, synced_at NULL.
 	SetReportSynced(ctx context.Context, reportID int) error
 	GetUnsyncedReports(ctx context.Context) ([]models.TelegramMatchReport, error)
+
+	// League & Tournaments
+	CreateTournament(ctx context.Context, t *models.TelegramTournament) (*models.TelegramTournament, error)
+	GetActiveTournament(ctx context.Context) (*models.TelegramTournament, error)
+	GetTournamentByID(ctx context.Context, id int) (*models.TelegramTournament, error)
+	GetAllTournaments(ctx context.Context) ([]models.TelegramTournament, error)
+	SetActiveTournament(ctx context.Context, id int) error
+	UpdateTournament(ctx context.Context, t *models.TelegramTournament) error
+	UpdateTournamentStatus(ctx context.Context, id int, status string) error
+
+	// Tournament team participation
+	RegisterTeamForTournament(ctx context.Context, tournamentID, teamID int) error
+	UnregisterTeamFromTournament(ctx context.Context, tournamentID, teamID int) error
+	GetTournamentTeams(ctx context.Context, tournamentID int) ([]models.TelegramTeam, error)
+	GetTournamentTeam(ctx context.Context, tournamentID, teamID int) (*models.TournamentTeam, error)
+	SetTournamentCheckIn(ctx context.Context, tournamentID, teamID int, status bool) error
+	SetTournamentTeamStatus(ctx context.Context, tournamentID, teamID int, status string) error
+	SetTournamentTeamParticipantID(ctx context.Context, tournamentID, teamID int, participantID int64) error
+	ClearTournamentTeamParticipantIDs(ctx context.Context, tournamentID int) error
+	UpdateTournamentPlacements(ctx context.Context, tournamentID int, placements map[int]int, points map[int]int) error
+
+	// League Standings
+	GetLeagueStandings(ctx context.Context) ([]models.LeagueStanding, error)
 }
 
 type LobbyMatch interface {

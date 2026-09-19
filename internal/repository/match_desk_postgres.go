@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"time"
 )
 
@@ -22,6 +23,17 @@ func (r *TelegramPostgres) UpdateMatchDesk(ctx context.Context, change func(*mod
 	err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT value FROM telegram_settings WHERE key='challonge_tournament_id'),''), COALESCE((SELECT value FROM telegram_settings WHERE key='challonge_tournament_for'),'')`).Scan(&tournament, &starts)
 	if err != nil {
 		return err
+	}
+	if tournament == "" {
+		var cID sql.NullInt64
+		var cFor sql.NullTime
+		_ = tx.QueryRowContext(ctx, `SELECT challonge_id, challonge_for FROM telegram_tournaments WHERE is_active = TRUE LIMIT 1`).Scan(&cID, &cFor)
+		if cID.Valid && cID.Int64 != 0 {
+			tournament = strconv.FormatInt(cID.Int64, 10)
+		}
+		if cFor.Valid {
+			starts = cFor.Time.UTC().Format(time.RFC3339)
+		}
 	}
 	if tournament == "" {
 		return errors.New("сетка ещё не построена")

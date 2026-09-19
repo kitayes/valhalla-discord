@@ -34,6 +34,56 @@ const (
 	TeamStatusDisqualified = "disqualified"
 )
 
+// Tournament statuses.
+const (
+	TournamentStatusDraft        = "draft"
+	TournamentStatusRegistration = "registration"
+	TournamentStatusActive       = "active"
+	TournamentStatusCompleted    = "completed"
+	TournamentStatusArchived     = "archived"
+)
+
+type TelegramTournament struct {
+	ID             int        `json:"id"`
+	Name           string     `json:"name"`
+	Slug           string     `json:"slug"`
+	Status         string     `json:"status"`
+	TournamentTime *time.Time `json:"tournament_time,omitempty"`
+	ChallongeID    *int64     `json:"challonge_id,omitempty"`
+	ChallongeURL   string     `json:"challonge_url"`
+	ChallongeFor   *time.Time `json:"challonge_for,omitempty"`
+	IsActive       bool       `json:"is_active"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+type TournamentTeam struct {
+	ID                     int       `json:"id"`
+	TournamentID           int       `json:"tournament_id"`
+	TeamID                 int       `json:"team_id"`
+	TeamName               string    `json:"team_name,omitempty"`
+	IsCheckedIn            bool      `json:"is_checked_in"`
+	Status                 string    `json:"status"`
+	ChallongeParticipantID *int64    `json:"challonge_participant_id,omitempty"`
+	Seed                   *int      `json:"seed,omitempty"`
+	Placement              *int      `json:"placement,omitempty"`
+	Points                 int       `json:"points"`
+	CreatedAt              time.Time `json:"created_at"`
+}
+
+type LeagueStanding struct {
+	Rank              int    `json:"rank"`
+	TeamID            int    `json:"team_id"`
+	TeamName          string `json:"team_name"`
+	TournamentsPlayed int    `json:"tournaments_played"`
+	TotalPoints       int    `json:"total_points"`
+	FirstPlaces       int    `json:"first_places"`
+	SecondPlaces      int    `json:"second_places"`
+	ThirdPlaces       int    `json:"third_places"`
+	MatchesWon        int    `json:"matches_won"`
+	MatchesLost       int    `json:"matches_lost"`
+}
+
 type TelegramTeam struct {
 	ID          int    `json:"id"`
 	Name        string `json:"name"`
@@ -109,6 +159,7 @@ const (
 // slot is not decided yet.
 type BracketMatch struct {
 	ID               int    `json:"id"`
+	TournamentID     *int   `json:"tournament_id,omitempty"`
 	ChallongeMatchID int64  `json:"challonge_match_id"`
 	Round            int    `json:"round"`
 	PlayOrder        int    `json:"play_order"`

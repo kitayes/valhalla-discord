@@ -14,14 +14,16 @@ import (
 )
 
 type MeResponse struct {
-	User             *TelegramUser           `json:"user"`
-	Player           *models.TelegramPlayer  `json:"player,omitempty"`
-	Team             *models.TelegramTeam    `json:"team,omitempty"`
-	Teammates        []models.TelegramPlayer `json:"teammates,omitempty"`
-	IsAdmin          bool                    `json:"is_admin"`
-	RegistrationOpen bool                    `json:"registration_open"`
+	User             *TelegramUser              `json:"user"`
+	Player           *models.TelegramPlayer     `json:"player,omitempty"`
+	Team             *models.TelegramTeam       `json:"team,omitempty"`
+	Teammates        []models.TelegramPlayer    `json:"teammates,omitempty"`
+	IsAdmin          bool                       `json:"is_admin"`
+	RegistrationOpen bool                       `json:"registration_open"`
 	// BotUsername lets the app build t.me links without hardcoding the bot.
-	BotUsername string `json:"bot_username,omitempty"`
+	BotUsername      string                     `json:"bot_username,omitempty"`
+	ActiveTournament *models.TelegramTournament `json:"active_tournament,omitempty"`
+	TournamentTeam   *models.TournamentTeam     `json:"tournament_team,omitempty"`
 }
 
 // inviteStartPrefix marks a /start payload that carries an invite token:
@@ -179,6 +181,17 @@ func (s *AdminServer) handleMe(w http.ResponseWriter, r *http.Request) {
 		resp.Teammates = teammates
 	}
 
+	if s.services.TelegramService != nil {
+		activeTourney, _ := s.services.TelegramService.GetActiveTournament(r.Context())
+		if activeTourney != nil {
+			resp.ActiveTournament = activeTourney
+			if team != nil {
+				tt, _ := s.services.TelegramService.GetTournamentTeamStatus(r.Context(), user.ID, activeTourney.ID)
+				resp.TournamentTeam = tt
+			}
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
 }
@@ -189,7 +202,24 @@ func (s *AdminServer) handleBracket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	matches, err := s.services.TelegramService.GetBracket(r.Context())
+	tourneyIDStr := r.URL.Query().Get("tournament_id")
+	var matches []models.BracketMatch
+	var err error
+	var tTime time.Time
+	if tourneyIDStr != "" && s.services.TelegramService != nil {
+		tID, _ := strconv.Atoi(tourneyIDStr)
+		if tID > 0 {
+			matches, err = s.services.TelegramService.GetBracketForTournament(r.Context(), tID)
+			tourney, _ := s.services.TelegramService.GetTournamentByID(r.Context(), tID)
+			if tourney != nil && tourney.TournamentTime != nil {
+				tTime = *tourney.TournamentTime
+			}
+		}
+	}
+	if matches == nil && s.services.TelegramService != nil {
+		matches, err = s.services.TelegramService.GetBracket(r.Context())
+		tTime = s.services.TelegramService.GetTournamentTime(r.Context())
+	}
 	if err != nil {
 		http.Error(w, `{"error":"failed to load bracket"}`, http.StatusInternalServerError)
 		return
@@ -200,7 +230,6 @@ func (s *AdminServer) handleBracket(w http.ResponseWriter, r *http.Request) {
 
 	var schedule []RoundScheduleItem
 	if len(matches) > 0 && s.services.TelegramService != nil {
-		tTime := s.services.TelegramService.GetTournamentTime(r.Context())
 		totalRounds := application.TotalRounds(matches)
 		for rNum := 1; rNum <= totalRounds; rNum++ {
 			fmtStr := "BO1"
@@ -1505,5 +1534,202 @@ func (s *AdminServer) handleTeamDetails(w http.ResponseWriter, r *http.Request) 
 		"team":    team,
 		"members": members,
 	})
+}
+
+func (s *AdminServer) handleLeagueStandings(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	if s.services.TelegramService == nil {
+		http.Error(w, `{"error":"service unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+	standings, err := s.services.TelegramService.GetLeagueStandings(r.Context())
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+	if standings == nil {
+		standings = []models.LeagueStanding{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"standings": standings})
+}
+
+func (s *AdminServer) handleTournamentsList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	if s.services.TelegramService == nil {
+		http.Error(w, `{"error":"service unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+	list, err := s.services.TelegramService.GetAllTournaments(r.Context())
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+	if list == nil {
+		list = []models.TelegramTournament{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"tournaments": list})
+}
+
+func (s *AdminServer) handleTournamentRegister(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	user, ok := UserFromContext(r.Context())
+	if !ok || user == nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+	var req struct {
+		TournamentID int `json:"tournament_id"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if req.TournamentID <= 0 && s.services.TelegramService != nil {
+		active, _ := s.services.TelegramService.GetActiveTournament(r.Context())
+		if active != nil {
+			req.TournamentID = active.ID
+		}
+	}
+	if req.TournamentID <= 0 {
+		http.Error(w, `{"error":"турнир не выбран"}`, http.StatusBadRequest)
+		return
+	}
+	if err := s.services.TelegramService.RegisterTeamForTournament(r.Context(), user.ID, req.TournamentID); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	s.sseBroker.Broadcast("team_update", map[string]interface{}{"action": "tournament_register", "user_id": user.ID})
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+}
+
+func (s *AdminServer) handleTournamentUnregister(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	user, ok := UserFromContext(r.Context())
+	if !ok || user == nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+	var req struct {
+		TournamentID int `json:"tournament_id"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if req.TournamentID <= 0 && s.services.TelegramService != nil {
+		active, _ := s.services.TelegramService.GetActiveTournament(r.Context())
+		if active != nil {
+			req.TournamentID = active.ID
+		}
+	}
+	if req.TournamentID <= 0 {
+		http.Error(w, `{"error":"турнир не выбран"}`, http.StatusBadRequest)
+		return
+	}
+	if err := s.services.TelegramService.UnregisterTeamFromTournament(r.Context(), user.ID, req.TournamentID); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	s.sseBroker.Broadcast("team_update", map[string]interface{}{"action": "tournament_unregister", "user_id": user.ID})
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+}
+
+func (s *AdminServer) handleAdminTournamentCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	user, ok := UserFromContext(r.Context())
+	if !ok || user == nil || !s.isAdmin(user.ID) {
+		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+		return
+	}
+	var req struct {
+		Name           string  `json:"name"`
+		Slug           string  `json:"slug"`
+		TournamentTime *string `json:"tournament_time"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		return
+	}
+	var tTime *time.Time
+	if req.TournamentTime != nil && *req.TournamentTime != "" {
+		t, err := time.Parse(time.RFC3339, *req.TournamentTime)
+		if err == nil {
+			tTime = &t
+		}
+	}
+	created, err := s.services.TelegramService.CreateTournament(r.Context(), req.Name, req.Slug, tTime)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	s.sseBroker.Broadcast("tournaments_update", map[string]interface{}{"action": "created", "id": created.ID})
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "tournament": created})
+}
+
+func (s *AdminServer) handleAdminTournamentActivate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	user, ok := UserFromContext(r.Context())
+	if !ok || user == nil || !s.isAdmin(user.ID) {
+		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+		return
+	}
+	var req struct {
+		TournamentID int `json:"tournament_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TournamentID <= 0 {
+		http.Error(w, `{"error":"invalid tournament_id"}`, http.StatusBadRequest)
+		return
+	}
+	if err := s.services.TelegramService.SetActiveTournament(r.Context(), req.TournamentID); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	s.sseBroker.Broadcast("tournaments_update", map[string]interface{}{"action": "activated", "id": req.TournamentID})
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+}
+
+func (s *AdminServer) handleAdminTournamentFinish(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	user, ok := UserFromContext(r.Context())
+	if !ok || user == nil || !s.isAdmin(user.ID) {
+		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+		return
+	}
+	var req struct {
+		TournamentID int `json:"tournament_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TournamentID <= 0 {
+		http.Error(w, `{"error":"invalid tournament_id"}`, http.StatusBadRequest)
+		return
+	}
+	if err := s.services.TelegramService.FinishTournament(r.Context(), req.TournamentID); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	s.sseBroker.Broadcast("tournaments_update", map[string]interface{}{"action": "finished", "id": req.TournamentID})
+	s.sseBroker.Broadcast("league_update", map[string]interface{}{"action": "standings_changed"})
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
 }
 

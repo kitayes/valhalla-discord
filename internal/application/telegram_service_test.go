@@ -20,20 +20,30 @@ type fakeTelegramRepo struct {
 	settings     map[string]string
 	reports      []models.TelegramMatchReport
 	nextID       int
-	bracket      []models.BracketMatch
-	participants map[int]int64 // teamID -> challonge participant id
+	bracket         []models.BracketMatch
+	participants    map[int]int64 // teamID -> challonge participant id
+	tournaments     []*models.TelegramTournament
+	tournamentTeams map[string]*models.TournamentTeam
 	// failSetting, when set for a key, makes SetSetting return that error
 	// instead of writing, so tests can exercise write-failure paths.
 	failSetting map[string]error
 }
 
 func newFakeTelegramRepo() *fakeTelegramRepo {
+	activeT := &models.TelegramTournament{
+		ID:       1,
+		Name:     "Этап 1",
+		Status:   models.TournamentStatusRegistration,
+		IsActive: true,
+	}
 	return &fakeTelegramRepo{
-		players:      map[int64]*models.TelegramPlayer{},
-		teams:        map[int]*models.TelegramTeam{},
-		settings:     map[string]string{},
-		nextID:       1,
-		participants: map[int]int64{},
+		players:         map[int64]*models.TelegramPlayer{},
+		teams:           map[int]*models.TelegramTeam{},
+		settings:        map[string]string{},
+		nextID:          1,
+		participants:    map[int]int64{},
+		tournaments:     []*models.TelegramTournament{activeT},
+		tournamentTeams: map[string]*models.TournamentTeam{},
 	}
 }
 
@@ -363,6 +373,171 @@ func (r *fakeTelegramRepo) GetUnsyncedReports(context.Context) ([]models.Telegra
 		}
 	}
 	return out, nil
+}
+
+func (r *fakeTelegramRepo) ReplaceBracketMatchesForTournament(ctx context.Context, tournamentID int, matches []models.BracketMatch) error {
+	return r.ReplaceBracketMatches(ctx, matches)
+}
+
+func (r *fakeTelegramRepo) GetBracketMatchesForTournament(ctx context.Context, tournamentID int) ([]models.BracketMatch, error) {
+	return r.GetBracketMatches(ctx)
+}
+
+func (r *fakeTelegramRepo) CreateTournament(ctx context.Context, t *models.TelegramTournament) (*models.TelegramTournament, error) {
+	t.ID = len(r.tournaments) + 1
+	r.tournaments = append(r.tournaments, t)
+	return t, nil
+}
+
+func (r *fakeTelegramRepo) GetActiveTournament(ctx context.Context) (*models.TelegramTournament, error) {
+	for _, t := range r.tournaments {
+		if t.IsActive {
+			return t, nil
+		}
+	}
+	return nil, nil
+}
+
+func (r *fakeTelegramRepo) GetTournamentByID(ctx context.Context, id int) (*models.TelegramTournament, error) {
+	for _, t := range r.tournaments {
+		if t.ID == id {
+			return t, nil
+		}
+	}
+	return nil, nil
+}
+
+func (r *fakeTelegramRepo) GetAllTournaments(ctx context.Context) ([]models.TelegramTournament, error) {
+	out := make([]models.TelegramTournament, len(r.tournaments))
+	for i, t := range r.tournaments {
+		out[i] = *t
+	}
+	return out, nil
+}
+
+func (r *fakeTelegramRepo) SetActiveTournament(ctx context.Context, id int) error {
+	for _, t := range r.tournaments {
+		t.IsActive = (t.ID == id)
+	}
+	return nil
+}
+
+func (r *fakeTelegramRepo) UpdateTournament(ctx context.Context, t *models.TelegramTournament) error {
+	for i, existing := range r.tournaments {
+		if existing.ID == t.ID {
+			r.tournaments[i] = t
+			return nil
+		}
+	}
+	return nil
+}
+
+func (r *fakeTelegramRepo) UpdateTournamentStatus(ctx context.Context, id int, status string) error {
+	for _, t := range r.tournaments {
+		if t.ID == id {
+			t.Status = status
+			return nil
+		}
+	}
+	return nil
+}
+
+func (r *fakeTelegramRepo) RegisterTeamForTournament(ctx context.Context, tournamentID, teamID int) error {
+	key := fmt.Sprintf("%d:%d", tournamentID, teamID)
+	r.tournamentTeams[key] = &models.TournamentTeam{
+		TournamentID: tournamentID,
+		TeamID:       teamID,
+		Status:       "registered",
+	}
+	return nil
+}
+
+func (r *fakeTelegramRepo) UnregisterTeamFromTournament(ctx context.Context, tournamentID, teamID int) error {
+	key := fmt.Sprintf("%d:%d", tournamentID, teamID)
+	delete(r.tournamentTeams, key)
+	return nil
+}
+
+func (r *fakeTelegramRepo) GetTournamentTeams(ctx context.Context, tournamentID int) ([]models.TelegramTeam, error) {
+	var ids []int
+	for id := range r.teams {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	var out []models.TelegramTeam
+	for _, id := range ids {
+		t := r.teams[id]
+		teamCopy := *t
+		key := fmt.Sprintf("%d:%d", tournamentID, t.ID)
+		if tt, ok := r.tournamentTeams[key]; ok {
+			teamCopy.IsCheckedIn = tt.IsCheckedIn
+		}
+		teamCopy.Players, _ = r.GetTeamMembers(ctx, t.ID)
+		out = append(out, teamCopy)
+	}
+	return out, nil
+}
+
+func (r *fakeTelegramRepo) GetTournamentTeam(ctx context.Context, tournamentID, teamID int) (*models.TournamentTeam, error) {
+	key := fmt.Sprintf("%d:%d", tournamentID, teamID)
+	return r.tournamentTeams[key], nil
+}
+
+func (r *fakeTelegramRepo) SetTournamentCheckIn(ctx context.Context, tournamentID, teamID int, status bool) error {
+	key := fmt.Sprintf("%d:%d", tournamentID, teamID)
+	if tt, ok := r.tournamentTeams[key]; ok {
+		tt.IsCheckedIn = status
+	}
+	if t, ok := r.teams[teamID]; ok {
+		t.IsCheckedIn = status
+	}
+	return nil
+}
+
+func (r *fakeTelegramRepo) SetTournamentTeamStatus(ctx context.Context, tournamentID, teamID int, status string) error {
+	key := fmt.Sprintf("%d:%d", tournamentID, teamID)
+	if tt, ok := r.tournamentTeams[key]; ok {
+		tt.Status = status
+	}
+	if t, ok := r.teams[teamID]; ok {
+		t.Status = status
+	}
+	return nil
+}
+
+func (r *fakeTelegramRepo) SetTournamentTeamParticipantID(ctx context.Context, tournamentID, teamID int, participantID int64) error {
+	key := fmt.Sprintf("%d:%d", tournamentID, teamID)
+	if tt, ok := r.tournamentTeams[key]; ok {
+		tt.ChallongeParticipantID = &participantID
+	}
+	return r.SetTeamParticipantID(ctx, teamID, participantID)
+}
+
+func (r *fakeTelegramRepo) ClearTournamentTeamParticipantIDs(ctx context.Context, tournamentID int) error {
+	for _, tt := range r.tournamentTeams {
+		if tt.TournamentID == tournamentID {
+			tt.ChallongeParticipantID = nil
+		}
+	}
+	return r.ClearTeamParticipantIDs(ctx)
+}
+
+func (r *fakeTelegramRepo) UpdateTournamentPlacements(ctx context.Context, tournamentID int, placements map[int]int, points map[int]int) error {
+	for teamID, placement := range placements {
+		key := fmt.Sprintf("%d:%d", tournamentID, teamID)
+		if tt, ok := r.tournamentTeams[key]; ok {
+			p := placement
+			tt.Placement = &p
+			if pts, okPts := points[teamID]; okPts {
+				tt.Points = pts
+			}
+		}
+	}
+	return nil
+}
+
+func (r *fakeTelegramRepo) GetLeagueStandings(ctx context.Context) ([]models.LeagueStanding, error) {
+	return nil, nil
 }
 
 func newTelegramSvc() (*TelegramServiceImpl, *fakeTelegramRepo) {

@@ -34,10 +34,14 @@ func (s *mockDeskStore) UpdateMatchDesk(_ context.Context, f func(*models.MatchD
 
 type mockTelegramSvc struct {
 	application.TelegramService
-	bracket  []models.BracketMatch
-	player   *models.TelegramPlayer
-	team     *models.TelegramTeam
-	teamMems []models.TelegramPlayer
+	bracket       []models.BracketMatch
+	player        *models.TelegramPlayer
+	team          *models.TelegramTeam
+	teamMems      []models.TelegramPlayer
+	activeTourney *models.TelegramTournament
+	tourneyTeam   *models.TournamentTeam
+	tournaments   []models.TelegramTournament
+	standings     []models.LeagueStanding
 	// reportedPhotoIDs records what the handler passed down on the last
 	// report, so tests can assert Telegram file IDs arrive here rather than
 	// the raw base64 the browser sent.
@@ -46,6 +50,56 @@ type mockTelegramSvc struct {
 	openReport *models.TelegramMatchReport
 	confirmed  []int
 	disputed   []int
+}
+
+func (m *mockTelegramSvc) GetActiveTournament(ctx context.Context) (*models.TelegramTournament, error) {
+	if m.activeTourney != nil {
+		return m.activeTourney, nil
+	}
+	return &models.TelegramTournament{ID: 1, Name: "Этап 1", Status: models.TournamentStatusRegistration, IsActive: true}, nil
+}
+
+func (m *mockTelegramSvc) GetTournamentTeamStatus(ctx context.Context, captainTgID int64, tournamentID int) (*models.TournamentTeam, error) {
+	return m.tourneyTeam, nil
+}
+
+func (m *mockTelegramSvc) GetAllTournaments(ctx context.Context) ([]models.TelegramTournament, error) {
+	return m.tournaments, nil
+}
+
+func (m *mockTelegramSvc) GetLeagueStandings(ctx context.Context) ([]models.LeagueStanding, error) {
+	return m.standings, nil
+}
+
+func (m *mockTelegramSvc) RegisterTeamForTournament(ctx context.Context, captainTgID int64, tournamentID int) error {
+	m.tourneyTeam = &models.TournamentTeam{TournamentID: tournamentID, Status: "registered"}
+	return nil
+}
+
+func (m *mockTelegramSvc) UnregisterTeamFromTournament(ctx context.Context, captainTgID int64, tournamentID int) error {
+	m.tourneyTeam = nil
+	return nil
+}
+
+func (m *mockTelegramSvc) CreateTournament(ctx context.Context, name, slug string, tTime *time.Time) (*models.TelegramTournament, error) {
+	t := models.TelegramTournament{ID: len(m.tournaments) + 1, Name: name, Status: models.TournamentStatusRegistration}
+	m.tournaments = append(m.tournaments, t)
+	return &t, nil
+}
+
+func (m *mockTelegramSvc) SetActiveTournament(ctx context.Context, id int) error {
+	for i := range m.tournaments {
+		m.tournaments[i].IsActive = (m.tournaments[i].ID == id)
+	}
+	return nil
+}
+
+func (m *mockTelegramSvc) FinishTournament(ctx context.Context, id int) error {
+	return nil
+}
+
+func (m *mockTelegramSvc) GetBracketForTournament(ctx context.Context, tournamentID int) ([]models.BracketMatch, error) {
+	return m.bracket, nil
 }
 
 func (m *mockTelegramSvc) GetOpenReportForMatch(context.Context, int) (*models.TelegramMatchReport, error) {

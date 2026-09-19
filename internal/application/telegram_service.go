@@ -106,6 +106,19 @@ type TelegramService interface {
 	SetMatchNotifier(fn func(ctx context.Context, chatID int64, text string, hasWebAppBtn bool))
 	GetTeamDetails(ctx context.Context, teamID int) (*models.TelegramTeam, []models.TelegramPlayer, error)
 	GetBracketMatchDetails(ctx context.Context, matchID int) (*BracketMatchDetails, error)
+
+	// League & Tournaments
+	CreateTournament(ctx context.Context, name, slug string, tTime *time.Time) (*models.TelegramTournament, error)
+	GetActiveTournament(ctx context.Context) (*models.TelegramTournament, error)
+	GetTournamentByID(ctx context.Context, id int) (*models.TelegramTournament, error)
+	GetAllTournaments(ctx context.Context) ([]models.TelegramTournament, error)
+	SetActiveTournament(ctx context.Context, id int) error
+	FinishTournament(ctx context.Context, id int) error
+	GetLeagueStandings(ctx context.Context) ([]models.LeagueStanding, error)
+	RegisterTeamForTournament(ctx context.Context, captainTgID int64, tournamentID int) error
+	UnregisterTeamFromTournament(ctx context.Context, captainTgID int64, tournamentID int) error
+	GetBracketForTournament(ctx context.Context, tournamentID int) ([]models.BracketMatch, error)
+	GetTournamentTeamStatus(ctx context.Context, captainTgID int64, tournamentID int) (*models.TournamentTeam, error)
 }
 
 type BracketMatchDetails struct {
@@ -319,6 +332,9 @@ func (s *TelegramServiceImpl) ToggleCheckIn(ctx context.Context, tgID int64) str
 		}
 	}
 	checkedIn := !t.IsCheckedIn
+	if activeTourney, _ := s.repo.GetActiveTournament(ctx); activeTourney != nil {
+		_ = s.repo.SetTournamentCheckIn(ctx, activeTourney.ID, t.ID, checkedIn)
+	}
 	if err := s.repo.SetCheckIn(ctx, t.ID, checkedIn); err != nil {
 		s.logWrite("SetCheckIn", err)
 		return "Не удалось изменить статус. Попробуйте ещё раз."
@@ -879,6 +895,10 @@ func (s *TelegramServiceImpl) SetTournamentTime(ctx context.Context, t time.Time
 	defer s.mu.Unlock()
 	s.tournamentTime = t
 	s.logWrite("SetSetting", s.repo.SetSetting(ctx, "tournament_time", t.Format(time.RFC3339)))
+	if active, _ := s.repo.GetActiveTournament(ctx); active != nil {
+		active.TournamentTime = &t
+		_ = s.repo.UpdateTournament(ctx, active)
+	}
 }
 
 func (s *TelegramServiceImpl) GetTournamentTime(ctx context.Context) time.Time {
@@ -886,6 +906,9 @@ func (s *TelegramServiceImpl) GetTournamentTime(ctx context.Context) time.Time {
 	defer s.mu.RUnlock()
 	if !s.tournamentTime.IsZero() {
 		return s.tournamentTime
+	}
+	if active, _ := s.repo.GetActiveTournament(ctx); active != nil && active.TournamentTime != nil {
+		return *active.TournamentTime
 	}
 	val, _ := s.repo.GetSetting(ctx, "tournament_time")
 	if val != "" {
@@ -896,9 +919,19 @@ func (s *TelegramServiceImpl) GetTournamentTime(ctx context.Context) time.Time {
 }
 
 func (s *TelegramServiceImpl) GetUncheckedTeams(ctx context.Context) ([]models.TelegramTeam, error) {
-	allTeams, err := s.repo.GetAllTeams(ctx)
-	if err != nil {
-		return nil, err
+	var allTeams []models.TelegramTeam
+	if active, _ := s.repo.GetActiveTournament(ctx); active != nil {
+		tTeams, err := s.repo.GetTournamentTeams(ctx, active.ID)
+		if err == nil && len(tTeams) > 0 {
+			allTeams = tTeams
+		}
+	}
+	if len(allTeams) == 0 {
+		var err error
+		allTeams, err = s.repo.GetAllTeams(ctx)
+		if err != nil {
+			return nil, err
+		}
 	}
 	var unchecked []models.TelegramTeam
 	for _, t := range allTeams {
@@ -917,8 +950,12 @@ func (s *TelegramServiceImpl) DisqualifyUnchecked(ctx context.Context) ([]models
 	if err != nil {
 		return nil, err
 	}
+	active, _ := s.repo.GetActiveTournament(ctx)
 	for _, t := range teams {
 		s.logWrite("SetTeamStatus", s.repo.SetTeamStatus(ctx, t.ID, models.TeamStatusDisqualified))
+		if active != nil {
+			_ = s.repo.SetTournamentTeamStatus(ctx, active.ID, t.ID, models.TeamStatusDisqualified)
+		}
 	}
 	return teams, nil
 }
@@ -1175,9 +1212,19 @@ func (s *TelegramServiceImpl) GetTeamForPlayer(ctx context.Context, tgID int64) 
 }
 
 func (s *TelegramServiceImpl) GetCheckInSummary(ctx context.Context) (*models.CheckInSummary, error) {
-	teams, err := s.repo.GetAllTeams(ctx)
-	if err != nil {
-		return nil, err
+	var teams []models.TelegramTeam
+	if active, _ := s.repo.GetActiveTournament(ctx); active != nil {
+		tTeams, err := s.repo.GetTournamentTeams(ctx, active.ID)
+		if err == nil && len(tTeams) > 0 {
+			teams = tTeams
+		}
+	}
+	if len(teams) == 0 {
+		var err error
+		teams, err = s.repo.GetAllTeams(ctx)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	summary := &models.CheckInSummary{
@@ -1782,6 +1829,147 @@ func (s *TelegramServiceImpl) GetBracketMatchDetails(ctx context.Context, matchI
 	}
 
 	return details, nil
+}
+
+func (s *TelegramServiceImpl) CreateTournament(ctx context.Context, name, slug string, tTime *time.Time) (*models.TelegramTournament, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, errors.New("название турнира не может быть пустым")
+	}
+	if slug == "" {
+		slug = "tourney_" + time.Now().UTC().Format("20060102_150405")
+	}
+	t := &models.TelegramTournament{
+		Name:           name,
+		Slug:           slug,
+		Status:         models.TournamentStatusRegistration,
+		TournamentTime: tTime,
+		IsActive:       false,
+	}
+	// If no active tournament exists, make this one active
+	active, _ := s.repo.GetActiveTournament(ctx)
+	if active == nil {
+		t.IsActive = true
+	}
+	created, err := s.repo.CreateTournament(ctx, t)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось создать турнир: %w", err)
+	}
+	return created, nil
+}
+
+func (s *TelegramServiceImpl) GetActiveTournament(ctx context.Context) (*models.TelegramTournament, error) {
+	return s.repo.GetActiveTournament(ctx)
+}
+
+func (s *TelegramServiceImpl) GetTournamentByID(ctx context.Context, id int) (*models.TelegramTournament, error) {
+	return s.repo.GetTournamentByID(ctx, id)
+}
+
+func (s *TelegramServiceImpl) GetAllTournaments(ctx context.Context) ([]models.TelegramTournament, error) {
+	return s.repo.GetAllTournaments(ctx)
+}
+
+func (s *TelegramServiceImpl) SetActiveTournament(ctx context.Context, id int) error {
+	t, err := s.repo.GetTournamentByID(ctx, id)
+	if err != nil || t == nil {
+		return errors.New("турнир не найден")
+	}
+	if err := s.repo.SetActiveTournament(ctx, id); err != nil {
+		return err
+	}
+	if t.TournamentTime != nil {
+		s.mu.Lock()
+		s.tournamentTime = *t.TournamentTime
+		s.mu.Unlock()
+		_ = s.repo.SetSetting(ctx, "tournament_time", t.TournamentTime.Format(time.RFC3339))
+	}
+	if t.ChallongeID != nil {
+		_ = s.repo.SetSetting(ctx, settingChallongeID, strconv.FormatInt(*t.ChallongeID, 10))
+	} else {
+		_ = s.repo.SetSetting(ctx, settingChallongeID, "")
+	}
+	_ = s.repo.SetSetting(ctx, settingChallongeURL, t.ChallongeURL)
+	if t.ChallongeFor != nil {
+		_ = s.repo.SetSetting(ctx, settingChallongeFor, t.ChallongeFor.Format(time.RFC3339))
+	} else {
+		_ = s.repo.SetSetting(ctx, settingChallongeFor, "")
+	}
+	return nil
+}
+
+func (s *TelegramServiceImpl) FinishTournament(ctx context.Context, id int) error {
+	tourney, err := s.repo.GetTournamentByID(ctx, id)
+	if err != nil || tourney == nil {
+		return errors.New("турнир не найден")
+	}
+
+	matches, err := s.repo.GetBracketMatchesForTournament(ctx, id)
+	if err != nil {
+		return fmt.Errorf("не удалось получить матчи турнира: %w", err)
+	}
+
+	teams, err := s.repo.GetTournamentTeams(ctx, id)
+	if err != nil {
+		return fmt.Errorf("не удалось получить команды турнира: %w", err)
+	}
+
+	placements, points := CalculatePlacements(matches, teams)
+	if err := s.repo.UpdateTournamentPlacements(ctx, id, placements, points); err != nil {
+		return fmt.Errorf("не удалось сохранить очки турнира: %w", err)
+	}
+
+	if err := s.repo.UpdateTournamentStatus(ctx, id, models.TournamentStatusCompleted); err != nil {
+		return fmt.Errorf("не удалось обновить статус турнира: %w", err)
+	}
+
+	return nil
+}
+
+func (s *TelegramServiceImpl) GetLeagueStandings(ctx context.Context) ([]models.LeagueStanding, error) {
+	return s.repo.GetLeagueStandings(ctx)
+}
+
+func (s *TelegramServiceImpl) RegisterTeamForTournament(ctx context.Context, captainTgID int64, tournamentID int) error {
+	p, err := s.repo.GetPlayerByTelegramID(ctx, captainTgID)
+	if err != nil || p == nil || p.TeamID == nil || !p.IsCaptain {
+		return errors.New("только капитан может зарегистрировать команду на этап")
+	}
+	tourney, err := s.repo.GetTournamentByID(ctx, tournamentID)
+	if err != nil || tourney == nil {
+		return errors.New("турнир не найден")
+	}
+	if tourney.Status != models.TournamentStatusRegistration && tourney.Status != models.TournamentStatusDraft {
+		return errors.New("регистрация на этот этап закрыта")
+	}
+	return s.repo.RegisterTeamForTournament(ctx, tournamentID, *p.TeamID)
+}
+
+func (s *TelegramServiceImpl) UnregisterTeamFromTournament(ctx context.Context, captainTgID int64, tournamentID int) error {
+	p, err := s.repo.GetPlayerByTelegramID(ctx, captainTgID)
+	if err != nil || p == nil || p.TeamID == nil || !p.IsCaptain {
+		return errors.New("только капитан может снять команду с этапа")
+	}
+	tourney, err := s.repo.GetTournamentByID(ctx, tournamentID)
+	if err != nil || tourney == nil {
+		return errors.New("турнир не найден")
+	}
+	if tourney.Status != models.TournamentStatusRegistration && tourney.Status != models.TournamentStatusDraft {
+		return errors.New("нельзя снять команду: этап уже активен")
+	}
+	return s.repo.UnregisterTeamFromTournament(ctx, tournamentID, *p.TeamID)
+}
+
+func (s *TelegramServiceImpl) GetBracketForTournament(ctx context.Context, tournamentID int) ([]models.BracketMatch, error) {
+	return s.repo.GetBracketMatchesForTournament(ctx, tournamentID)
+}
+
+func (s *TelegramServiceImpl) GetTournamentTeamStatus(ctx context.Context, captainTgID int64, tournamentID int) (*models.TournamentTeam, error) {
+	p, err := s.repo.GetPlayerByTelegramID(ctx, captainTgID)
+	if err != nil || p == nil || p.TeamID == nil {
+		return nil, nil
+	}
+	return s.repo.GetTournamentTeam(ctx, tournamentID, *p.TeamID)
 }
 
 

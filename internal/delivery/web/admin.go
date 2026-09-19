@@ -114,10 +114,17 @@ func NewAdminServer(services *application.Service, logger application.Logger, po
 	mux.HandleFunc("/api/team/transfer", tmaAuth(s.handleTransferCaptain))
 	mux.HandleFunc("/api/team/delete", tmaAuth(s.handleDeleteTeam))
 	mux.HandleFunc("/api/team/leave", tmaAuth(s.handleLeaveTeam))
+	mux.HandleFunc("/api/league/standings", tmaAuth(s.handleLeagueStandings))
+	mux.HandleFunc("/api/tournaments", tmaAuth(s.handleTournamentsList))
+	mux.HandleFunc("/api/tournament/register", tmaAuth(s.handleTournamentRegister))
+	mux.HandleFunc("/api/tournament/unregister", tmaAuth(s.handleTournamentUnregister))
 	mux.HandleFunc("/api/admin/desk", tmaAuth(s.handleAdminDesk))
 	mux.HandleFunc("/api/admin/match_action", tmaAuth(s.handleAdminMatchAction))
 	mux.HandleFunc("/api/admin/ping_debtors", tmaAuth(s.handleAdminPingDebtors))
 	mux.HandleFunc("/api/admin/disqualify_uncheck", tmaAuth(s.handleAdminDisqualifyUncheck))
+	mux.HandleFunc("/api/admin/tournament/create", tmaAuth(s.handleAdminTournamentCreate))
+	mux.HandleFunc("/api/admin/tournament/activate", tmaAuth(s.handleAdminTournamentActivate))
+	mux.HandleFunc("/api/admin/tournament/finish", tmaAuth(s.handleAdminTournamentFinish))
 
 	s.srv = &http.Server{
 		Addr:    ":" + port,

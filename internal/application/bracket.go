@@ -274,9 +274,20 @@ func (s *BracketService) Build(ctx context.Context, forTournament time.Time) (*B
 }
 
 func (s *BracketService) build(ctx context.Context, forTournament time.Time) (*BracketBuilt, error) {
-	teams, err := s.repo.GetAllTeams(ctx)
-	if err != nil {
-		return nil, err
+	activeTourney, _ := s.repo.GetActiveTournament(ctx)
+	var teams []models.TelegramTeam
+	if activeTourney != nil {
+		tTeams, err := s.repo.GetTournamentTeams(ctx, activeTourney.ID)
+		if err == nil && len(tTeams) > 0 {
+			teams = tTeams
+		}
+	}
+	if len(teams) == 0 {
+		var err error
+		teams, err = s.repo.GetAllTeams(ctx)
+		if err != nil {
+			return nil, err
+		}
 	}
 	seeded := SeedTeams(teams)
 	var incomplete []models.TelegramTeam
@@ -299,12 +310,20 @@ func (s *BracketService) build(ctx context.Context, forTournament time.Time) (*B
 	if err := s.repo.ClearTeamParticipantIDs(ctx); err != nil {
 		return nil, err
 	}
-	if err := s.repo.ReplaceBracketMatches(ctx, nil); err != nil {
-		return nil, err
+	if activeTourney != nil {
+		_ = s.repo.ClearTournamentTeamParticipantIDs(ctx, activeTourney.ID)
+		_ = s.repo.ReplaceBracketMatchesForTournament(ctx, activeTourney.ID, nil)
+	} else {
+		if err := s.repo.ReplaceBracketMatches(ctx, nil); err != nil {
+			return nil, err
+		}
 	}
 
 	slug := "valhalla_" + s.now().UTC().Format("20060102_150405")
 	name := "Valhalla " + forTournament.Format("02.01.2006")
+	if activeTourney != nil && activeTourney.Name != "" {
+		name = activeTourney.Name
+	}
 	tr, err := s.provider.CreateTournament(ctx, name, slug)
 	if err != nil {
 		return nil, err
@@ -324,6 +343,14 @@ func (s *BracketService) build(ctx context.Context, forTournament time.Time) (*B
 	if err := s.repo.SetSetting(ctx, settingChallongeFor, forTournament.UTC().Format(time.RFC3339)); err != nil {
 		return nil, err
 	}
+	if activeTourney != nil {
+		activeTourney.ChallongeID = &tr.ID
+		activeTourney.ChallongeURL = tr.URL
+		nowFor := forTournament.UTC()
+		activeTourney.ChallongeFor = &nowFor
+		activeTourney.Status = models.TournamentStatusActive
+		_ = s.repo.UpdateTournament(ctx, activeTourney)
+	}
 
 	ps := make([]challonge.NewParticipant, 0, len(seeded))
 	byName := make(map[string]int, len(seeded))
@@ -342,6 +369,9 @@ func (s *BracketService) build(ctx context.Context, forTournament time.Time) (*B
 		}
 		if err := s.repo.SetTeamParticipantID(ctx, teamID, p.ID); err != nil {
 			return nil, err
+		}
+		if activeTourney != nil {
+			_ = s.repo.SetTournamentTeamParticipantID(ctx, activeTourney.ID, teamID, p.ID)
 		}
 	}
 	if err := s.provider.Start(ctx, tr.ID); err != nil {
@@ -385,15 +415,24 @@ func (s *BracketService) Sync(ctx context.Context) ([]models.BracketMatch, error
 	return s.sync(ctx, tID)
 }
 
-// sync is Sync without the lock, for callers that already hold it.
 func (s *BracketService) sync(ctx context.Context, tID int64) ([]models.BracketMatch, error) {
 	raw, err := s.provider.ListMatches(ctx, tID)
 	if err != nil {
 		return nil, err
 	}
-	teams, err := s.repo.GetAllTeams(ctx)
-	if err != nil {
-		return nil, err
+	activeTourney, _ := s.repo.GetActiveTournament(ctx)
+	var teams []models.TelegramTeam
+	if activeTourney != nil {
+		tTeams, err := s.repo.GetTournamentTeams(ctx, activeTourney.ID)
+		if err == nil && len(tTeams) > 0 {
+			teams = tTeams
+		}
+	}
+	if len(teams) == 0 {
+		teams, err = s.repo.GetAllTeams(ctx)
+		if err != nil {
+			return nil, err
+		}
 	}
 	byPID := make(map[int64]int, len(teams))
 	for _, t := range teams {
@@ -401,9 +440,15 @@ func (s *BracketService) sync(ctx context.Context, tID int64) ([]models.BracketM
 			byPID[*t.ChallongeParticipantID] = t.ID
 		}
 	}
+	var tIDPtr *int
+	if activeTourney != nil {
+		tIDPtr = &activeTourney.ID
+	}
 	ms := make([]models.BracketMatch, 0, len(raw))
 	for _, m := range raw {
-		ms = append(ms, bracketMatchFromRemote(m, byPID))
+		bm := bracketMatchFromRemote(m, byPID)
+		bm.TournamentID = tIDPtr
+		ms = append(ms, bm)
 	}
 	return s.replaceAndReady(ctx, ms)
 }
@@ -917,4 +962,72 @@ func (s *BracketService) FlushPendingReports(ctx context.Context) ([]models.Brac
 		out = append(out, ready...)
 	}
 	return out, nil
+}
+
+// Points distribution for tournament placements in the League.
+var DefaultPlacementPoints = map[int]int{
+	1: 100, // 1st place
+	2: 70,  // 2nd place
+	3: 50,  // 3-4th place (semi-finalists)
+	5: 20,  // 5-8th place (quarter-finalists)
+	9: 10,  // 9-16th place
+	0: 5,   // Participation (check-in / registered)
+}
+
+// CalculatePlacements derives final team placements and league points from bracket matches and team list.
+func CalculatePlacements(matches []models.BracketMatch, teams []models.TelegramTeam) (map[int]int, map[int]int) {
+	placements := make(map[int]int)
+	points := make(map[int]int)
+	if len(matches) == 0 {
+		return placements, points
+	}
+
+	totalRounds := TotalRounds(matches)
+
+	var finalMatch *models.BracketMatch
+	for i := range matches {
+		if matches[i].Round == totalRounds && matches[i].WinnerID != nil {
+			finalMatch = &matches[i]
+			break
+		}
+	}
+
+	if finalMatch != nil && finalMatch.WinnerID != nil {
+		winnerID := *finalMatch.WinnerID
+		loserID := finalMatch.Opponent(winnerID)
+		placements[winnerID] = 1
+		points[winnerID] = DefaultPlacementPoints[1]
+		if loserID != nil {
+			placements[*loserID] = 2
+			points[*loserID] = DefaultPlacementPoints[2]
+		}
+	}
+
+	for r := totalRounds - 1; r >= 1; r-- {
+		place := 3
+		if r == totalRounds-2 {
+			place = 5
+		} else if r <= totalRounds-3 {
+			place = 9
+		}
+		pts := DefaultPlacementPoints[place]
+		for _, m := range matches {
+			if m.Round == r && m.WinnerID != nil {
+				loserID := m.Opponent(*m.WinnerID)
+				if loserID != nil && placements[*loserID] == 0 {
+					placements[*loserID] = place
+					points[*loserID] = pts
+				}
+			}
+		}
+	}
+
+	for _, t := range teams {
+		if placements[t.ID] == 0 {
+			placements[t.ID] = 17
+			points[t.ID] = DefaultPlacementPoints[0]
+		}
+	}
+
+	return placements, points
 }
