@@ -218,6 +218,24 @@ func (s *BracketService) CaptainChatIDs(ctx context.Context, teamID int) []int64
 	return ids
 }
 
+// TeamChatIDs returns the Telegram chats to notify for all members of a team.
+func (s *BracketService) TeamChatIDs(ctx context.Context, teamID int) []int64 {
+	members, err := s.repo.GetTeamMembers(ctx, teamID)
+	if err != nil {
+		s.logger.Warn("bracket: get team members for team %d: %v", teamID, err)
+		return nil
+	}
+	var ids []int64
+	seen := make(map[int64]bool)
+	for _, member := range members {
+		if member.TelegramID != nil && *member.TelegramID > 0 && !seen[*member.TelegramID] {
+			seen[*member.TelegramID] = true
+			ids = append(ids, *member.TelegramID)
+		}
+	}
+	return ids
+}
+
 // HasResults reports whether any match has been played. Byes complete
 // matches too, so only matches with both teams count.
 func (s *BracketService) HasResults(ctx context.Context) (bool, error) {

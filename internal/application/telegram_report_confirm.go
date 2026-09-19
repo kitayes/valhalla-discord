@@ -32,8 +32,8 @@ func (s *TelegramServiceImpl) ConfirmReport(ctx context.Context, actorTgID int64
 	if err := s.applyReport(ctx, rep, models.ReportConfirmed); err != nil {
 		return err
 	}
-	s.notifyCaptain(ctx, rep.ReporterTelegramID,
-		fmt.Sprintf("Соперник подтвердил результат матча: %s %s %s. Сетка обновлена.", rep.WinnerTeamName, rep.Score, rep.LoserTeamName), true)
+	s.notifyTeamOfReporter(ctx, rep.ReporterTelegramID, rep,
+		fmt.Sprintf("Соперник подтвердил результат матча: %s %s %s. Сетка обновлена.", rep.WinnerTeamName, rep.Score, rep.LoserTeamName))
 	return nil
 }
 
@@ -50,8 +50,8 @@ func (s *TelegramServiceImpl) DisputeReport(ctx context.Context, actorTgID int64
 	if err := s.repo.SetReportStatus(ctx, rep.ID, models.ReportDisputed); err != nil {
 		return fmt.Errorf("не удалось сохранить возражение: %w", err)
 	}
-	s.notifyCaptain(ctx, rep.ReporterTelegramID,
-		fmt.Sprintf("Соперник оспорил результат %s %s %s. Матч передан судье — приложите скриншоты, если ещё не сделали.", rep.WinnerTeamName, rep.Score, rep.LoserTeamName), true)
+	s.notifyTeamOfReporter(ctx, rep.ReporterTelegramID, rep,
+		fmt.Sprintf("Соперник оспорил результат %s %s %s. Матч передан судье — приложите скриншоты, если ещё не сделали.", rep.WinnerTeamName, rep.Score, rep.LoserTeamName))
 	return nil
 }
 
@@ -70,9 +70,9 @@ func (s *TelegramServiceImpl) AutoConfirmExpiredReports(ctx context.Context) ([]
 			continue
 		}
 		done = append(done, *rep)
-		s.notifyCaptain(ctx, rep.ReporterTelegramID,
+		s.notifyTeamOfReporter(ctx, rep.ReporterTelegramID, rep,
 			fmt.Sprintf("Результат %s %s %s принят: соперник не возразил за %d минут. Сетка обновлена.",
-				rep.WinnerTeamName, rep.Score, rep.LoserTeamName, int(ReportConfirmWindow.Minutes())), true)
+				rep.WinnerTeamName, rep.Score, rep.LoserTeamName, int(ReportConfirmWindow.Minutes())))
 	}
 	return done, nil
 }
@@ -160,7 +160,7 @@ func (s *TelegramServiceImpl) closeOpenReport(ctx context.Context, matchID int) 
 	s.logWrite("SetReportStatus", s.repo.SetReportStatus(ctx, open.ID, models.ReportOverridden))
 }
 
-// notifyPendingReport tells the opposing captain a result is waiting on them.
+// notifyPendingReport tells the opposing team a result is waiting on them.
 func (s *TelegramServiceImpl) notifyPendingReport(ctx context.Context, rep *models.TelegramMatchReport, m *models.BracketMatch, reporterTeamID int) {
 	oppID := rep.LoserTeamID
 	if reporterTeamID == rep.LoserTeamID {
@@ -168,13 +168,40 @@ func (s *TelegramServiceImpl) notifyPendingReport(ctx context.Context, rep *mode
 	}
 	text := fmt.Sprintf("Матч #%d: соперник внёс результат %s %s %s.\n\nПодтвердите или оспорьте его в приложении. Без ответа результат будет принят через %d минут.",
 		m.PlayOrder, rep.WinnerTeamName, rep.Score, rep.LoserTeamName, int(ReportConfirmWindow.Minutes()))
-	caps, err := s.GetTeamCaptains(ctx, oppID)
+	members, err := s.repo.GetTeamMembers(ctx, oppID)
 	if err != nil {
 		return
 	}
-	for _, c := range caps {
-		s.notifyCaptain(ctx, *c.TelegramID, text, true)
+	seen := make(map[int64]bool)
+	for _, m := range members {
+		if m.TelegramID != nil && *m.TelegramID > 0 && !seen[*m.TelegramID] {
+			seen[*m.TelegramID] = true
+			s.notifyCaptain(ctx, *m.TelegramID, text, true)
+		}
 	}
+}
+
+func (s *TelegramServiceImpl) notifyTeamOfReporter(ctx context.Context, reporterTgID int64, rep *models.TelegramMatchReport, text string) {
+	var teamID int
+	if reporter, _ := s.repo.GetPlayerByTelegramID(ctx, reporterTgID); reporter != nil && reporter.TeamID != nil {
+		teamID = *reporter.TeamID
+	} else if rep != nil {
+		teamID = rep.WinnerTeamID
+	}
+	if teamID > 0 {
+		members, err := s.repo.GetTeamMembers(ctx, teamID)
+		if err == nil {
+			seen := make(map[int64]bool)
+			for _, m := range members {
+				if m.TelegramID != nil && *m.TelegramID > 0 && !seen[*m.TelegramID] {
+					seen[*m.TelegramID] = true
+					s.notifyCaptain(ctx, *m.TelegramID, text, true)
+				}
+			}
+			return
+		}
+	}
+	s.notifyCaptain(ctx, reporterTgID, text, true)
 }
 
 func (s *TelegramServiceImpl) notifyCaptain(ctx context.Context, chatID int64, text string, webApp bool) {

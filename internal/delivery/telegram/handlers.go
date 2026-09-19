@@ -239,6 +239,10 @@ func (b *Bot) handleUserCommand(ctx context.Context, chatID int64, text string, 
 	}
 
 	if strings.HasPrefix(text, "/edit_player") {
+		if !b.isAdmin(chatID) {
+			b.SendMatchNotification(chatID, "Редактирование состава команды доступно в турнирном приложении.", true)
+			return
+		}
 		parts := strings.Fields(text)
 		if len(parts) != 2 {
 			b.sendMessage(chatID, "Используйте: /edit_player [номер]", "empty")
@@ -263,12 +267,12 @@ func (b *Bot) handleUserCommand(ctx context.Context, chatID int64, text string, 
 
 	if strings.HasPrefix(text, "/start") {
 		go b.EnsureChatMenuButton(chatID)
-		welcomeText :="Добро пожаловать в Valhalla Cup Bot!\n\nИспользуйте кнопку ниже для перехода в турнирное приложение или команды меню:"
+		welcomeText := "Добро пожаловать в Valhalla Cup Bot!\n\nВсе функции турнира (регистрация, состав команды, чекин, отчёты и сетка) доступны в турнирном приложении."
 		if b.isAdmin(chatID) {
-			welcomeText += "\n\nВы вошли как Администратор. Используйте команду /admin или кнопку меню для открытия панели управления."
+			welcomeText += "\n\nВы вошли как Администратор. Используйте команду /admin для открытия панели управления."
 		}
 		if b.webAppURL != "" {
-			welcomeText += fmt.Sprintf("\n\n🌐 Прямая ссылка (для браузера / Linux Desktop):\n%s", b.webAppURL)
+			welcomeText += fmt.Sprintf("\n\nПрямая ссылка (для браузера / Linux Desktop):\n%s", b.webAppURL)
 			msg := tgbotapi.NewMessage(chatID, welcomeText)
 			msg.ReplyMarkup = struct {
 				Keyboard [][]struct {
@@ -286,7 +290,7 @@ func (b *Bot) handleUserCommand(ctx context.Context, chatID int64, text string, 
 				}{
 					{
 						{
-							Text: "🎮 Открыть Valhalla App",
+							Text: "Открыть Valhalla App",
 							WebApp: struct {
 								URL string `json:"url"`
 							}{URL: b.webAppURL},
@@ -295,7 +299,11 @@ func (b *Bot) handleUserCommand(ctx context.Context, chatID int64, text string, 
 				},
 			}
 			_, _ = b.bot.Send(msg)
-			b.sendMessage(chatID, "Выберите действие в меню:", "main_menu")
+			if b.isAdmin(chatID) {
+				b.sendMessage(chatID, "Панель администратора:", "main_menu")
+			} else {
+				b.sendMessage(chatID, "Для работы с турниром используйте кнопку приложения выше или кнопку «Турнир» слева внизу.", "remove")
+			}
 			return
 		}
 		b.sendMessage(chatID, welcomeText, "main_menu")
@@ -308,7 +316,7 @@ func (b *Bot) handleUserCommand(ctx context.Context, chatID int64, text string, 
 			b.sendMessage(chatID, "Веб-приложение турнира пока не сконфигурировано (WEB_APP_URL не задан).", "main_menu")
 			return
 		}
-		appMsg := fmt.Sprintf("Нажмите кнопку ниже для перехода в турнирное приложение:\n\n🌐 Прямая ссылка (для браузера / Linux Desktop):\n%s", b.webAppURL)
+		appMsg := fmt.Sprintf("Нажмите кнопку ниже для перехода в турнирное приложение:\n\nПрямая ссылка (для браузера / Linux Desktop):\n%s", b.webAppURL)
 		msg := tgbotapi.NewMessage(chatID, appMsg)
 		msg.ReplyMarkup = struct {
 			Keyboard [][]struct {
@@ -326,7 +334,7 @@ func (b *Bot) handleUserCommand(ctx context.Context, chatID int64, text string, 
 			}{
 				{
 					{
-						Text: "🎮 Открыть Valhalla App",
+						Text: "Открыть Valhalla App",
 						WebApp: struct {
 							URL string `json:"url"`
 						}{URL: b.webAppURL},
@@ -336,6 +344,18 @@ func (b *Bot) handleUserCommand(ctx context.Context, chatID int64, text string, 
 		}
 		_, _ = b.bot.Send(msg)
 		return
+	}
+
+	if !b.isAdmin(chatID) {
+		switch text {
+		case "/reg_team", "/reg_solo", "/my_team", "/checkin", "/report", "/profile", "/delete_team":
+			appText := "Все действия турнира (регистрация, состав команды, чекин, отчёты и профиль) доступны в турнирном приложении."
+			if b.webAppURL != "" {
+				appText += fmt.Sprintf("\n\nПрямая ссылка:\n%s", b.webAppURL)
+			}
+			b.SendMatchNotification(chatID, appText, true)
+			return
+		}
 	}
 
 	var response, kbType string

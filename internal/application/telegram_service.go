@@ -1446,27 +1446,29 @@ func (s *TelegramServiceImpl) sendMatchResultNotifications(ctx context.Context, 
 		loserName = loserTeam.Name
 	}
 
-	winnerCaps, _ := s.GetTeamCaptains(ctx, winnerID)
-	loserCaps, _ := s.GetTeamCaptains(ctx, loserID)
+	winnerMembers, _ := s.repo.GetTeamMembers(ctx, winnerID)
+	loserMembers, _ := s.repo.GetTeamMembers(ctx, loserID)
 
-	// 1. Notify loser captains
-	loserMsg := fmt.Sprintf("Матч #%d завершён.\n\nРезультат: %s vs %s (%d:%d).\nВаша команда выбывает из турнира.",
-		finishedMatch.PlayOrder, winnerName, loserName, winScore, loseScore)
-	for _, c := range loserCaps {
-		if c.TelegramID != nil && *c.TelegramID > 0 {
-			s.notifyMatchFunc(ctx, *c.TelegramID, loserMsg, false)
+	notifyTeamMembers := func(members []models.TelegramPlayer, msg string, hasWebApp bool) {
+		seen := make(map[int64]bool)
+		for _, m := range members {
+			if m.TelegramID != nil && *m.TelegramID > 0 && !seen[*m.TelegramID] {
+				seen[*m.TelegramID] = true
+				s.notifyMatchFunc(ctx, *m.TelegramID, msg, hasWebApp)
+			}
 		}
 	}
+
+	// 1. Notify loser team members
+	loserMsg := fmt.Sprintf("Матч #%d завершён.\n\nРезультат: %s vs %s (%d:%d).\nВаша команда выбывает из турнира.",
+		finishedMatch.PlayOrder, winnerName, loserName, winScore, loseScore)
+	notifyTeamMembers(loserMembers, loserMsg, false)
 
 	// 2. If this was the Grand Final
 	if isFinal {
 		finalMsg := fmt.Sprintf("Победа в финале!\n\nКоманда «%s» одержала победу в гранд-финале турнира со счётом %d:%d.",
 			winnerName, winScore, loseScore)
-		for _, c := range winnerCaps {
-			if c.TelegramID != nil && *c.TelegramID > 0 {
-				s.notifyMatchFunc(ctx, *c.TelegramID, finalMsg, true)
-			}
-		}
+		notifyTeamMembers(winnerMembers, finalMsg, true)
 		return
 	}
 
@@ -1477,25 +1479,17 @@ func (s *TelegramServiceImpl) sendMatchResultNotifications(ctx context.Context, 
 		if waitingTeam != nil {
 			waitingName = waitingTeam.Name
 		}
-		waitingCaps, _ := s.GetTeamCaptains(ctx, *waitingTeamID)
+		waitingMembers, _ := s.repo.GetTeamMembers(ctx, *waitingTeamID)
 
 		// Message to winner:
 		winnerMsg := fmt.Sprintf("Победа со счётом %d:%d.\n\nКоманда «%s» выходит в Раунд %d.\nСледующий соперник: «%s» (Матч #%d).\n\nПерейдите в приложение для подтверждения готовности к игре.",
 			winScore, loseScore, winnerName, nextMatch.Round, waitingName, nextMatch.PlayOrder)
-		for _, c := range winnerCaps {
-			if c.TelegramID != nil && *c.TelegramID > 0 {
-				s.notifyMatchFunc(ctx, *c.TelegramID, winnerMsg, true)
-			}
-		}
+		notifyTeamMembers(winnerMembers, winnerMsg, true)
 
 		// Message to waiting team (THEIR OPPONENT JUST FINISHED!):
 		waitingMsg := fmt.Sprintf("Ваш следующий соперник определился: «%s».\n\nРаунд %d, Матч #%d: «%s» vs «%s».\nМатч готов к проведению. Подтвердите готовность в приложении.",
 			winnerName, nextMatch.Round, nextMatch.PlayOrder, waitingName, winnerName)
-		for _, c := range waitingCaps {
-			if c.TelegramID != nil && *c.TelegramID > 0 {
-				s.notifyMatchFunc(ctx, *c.TelegramID, waitingMsg, true)
-			}
-		}
+		notifyTeamMembers(waitingMembers, waitingMsg, true)
 		return
 	}
 
@@ -1503,11 +1497,7 @@ func (s *TelegramServiceImpl) sendMatchResultNotifications(ctx context.Context, 
 	if nextMatch != nil {
 		winnerWaitMsg := fmt.Sprintf("Победа со счётом %d:%d.\n\nКоманда «%s» выходит в Раунд %d (Матч #%d).\nОжидаем завершения параллельного матча соперников. Уведомление придёт после определения пары.",
 			winScore, loseScore, winnerName, nextMatch.Round, nextMatch.PlayOrder)
-		for _, c := range winnerCaps {
-			if c.TelegramID != nil && *c.TelegramID > 0 {
-				s.notifyMatchFunc(ctx, *c.TelegramID, winnerWaitMsg, true)
-			}
-		}
+		notifyTeamMembers(winnerMembers, winnerWaitMsg, true)
 	}
 }
 

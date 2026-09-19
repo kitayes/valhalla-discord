@@ -208,11 +208,19 @@ func (b *Bot) handleCallbackQuery(parent context.Context, callback *tgbotapi.Cal
 	}
 
 	if strings.HasPrefix(callback.Data, "rep:") {
+		if !b.isAdmin(callback.From.ID) {
+			b.apiRespond(callback, "Отчёты о матчах подаются через турнирное приложение.", true)
+			return
+		}
 		b.handleReportCallback(ctx, callback)
 		return
 	}
 
 	if strings.HasPrefix(callback.Data, callbackRegPrefix+callbackSep) {
+		if !b.isAdmin(callback.From.ID) {
+			b.apiRespond(callback, "Регистрация и управление составом доступны в турнирном приложении.", true)
+			return
+		}
 		b.handleRegCallback(ctx, callback)
 		return
 	}
@@ -431,15 +439,29 @@ func (b *Bot) broadcastCheckInReminder(ctx context.Context) {
 
 	for _, team := range teams {
 		for _, p := range team.Players {
-			if p.IsCaptain && p.TelegramID != nil {
-				if len(team.Players) < application.MainRosterSlots {
-					msg := fmt.Sprintf("ВНИМАНИЕ, Капитан!\nВ вашей команде '%s' не хватает игроков (%d из %d).\n\nСрочно доберите состав (минимум %d игроков) до %s, иначе — ТЕХНИЧЕСКОЕ ПОРАЖЕНИЕ.",
-						team.Name, len(team.Players), application.MainRosterSlots, application.MainRosterSlots, tTime.In(b.location).Add(technicalDefeatGrace).Format("15:04"))
-					b.sendMessage(*p.TelegramID, msg, "empty")
+			if p.TelegramID != nil && *p.TelegramID > 0 {
+				if p.IsCaptain {
+					if len(team.Players) < application.MainRosterSlots {
+						msg := fmt.Sprintf("ВНИМАНИЕ, Капитан!\nВ вашей команде '%s' не хватает игроков (%d из %d).\n\nСрочно доберите состав (минимум %d игроков) до %s, иначе — ТЕХНИЧЕСКОЕ ПОРАЖЕНИЕ.",
+							team.Name, len(team.Players), application.MainRosterSlots, application.MainRosterSlots, tTime.In(b.location).Add(technicalDefeatGrace).Format("15:04"))
+						b.sendMessage(*p.TelegramID, msg, "empty")
+					} else {
+						msg := fmt.Sprintf("ВНИМАНИЕ, Капитан!\nВаша команда '%s' не прошла Check-in.\n\nПодтвердите участие в приложении до %s, иначе — ТЕХНИЧЕСКОЕ ПОРАЖЕНИЕ.",
+							team.Name, tTime.In(b.location).Add(technicalDefeatGrace).Format("15:04"))
+						if b.webAppURL != "" {
+							b.SendMatchNotification(*p.TelegramID, msg, true)
+						} else {
+							b.sendMessage(*p.TelegramID, msg, application.KbRegCheckin)
+						}
+					}
 				} else {
-					msg := fmt.Sprintf("ВНИМАНИЕ, Капитан!\nВаша команда '%s' не прошла Check-in.\n\nНажмите кнопку ниже до %s, иначе — ТЕХНИЧЕСКОЕ ПОРАЖЕНИЕ.",
+					msg := fmt.Sprintf("ВНИМАНИЕ!\nВаша команда '%s' ещё не прошла Check-in.\nНапомните капитану подтвердить участие в приложении до %s, иначе — ТЕХНИЧЕСКОЕ ПОРАЖЕНИЕ.",
 						team.Name, tTime.In(b.location).Add(technicalDefeatGrace).Format("15:04"))
-					b.sendMessage(*p.TelegramID, msg, application.KbRegCheckin)
+					if b.webAppURL != "" {
+						b.SendMatchNotification(*p.TelegramID, msg, true)
+					} else {
+						b.sendMessage(*p.TelegramID, msg, "empty")
+					}
 				}
 			}
 		}
@@ -463,8 +485,8 @@ func (b *Bot) processTechnicalDefeat(ctx context.Context) {
 		report.WriteString(fmt.Sprintf("- %s\n", team.Name))
 
 		for _, p := range team.Players {
-			if p.IsCaptain && p.TelegramID != nil {
-				b.sendMessage(*p.TelegramID, "ТЕХНИЧЕСКОЕ ПОРАЖЕНИЕ.\nВы не подтвердили участие вовремя. Ваша команда снята с турнира.", "empty")
+			if p.TelegramID != nil && *p.TelegramID > 0 {
+				b.sendMessage(*p.TelegramID, "ТЕХНИЧЕСКОЕ ПОРАЖЕНИЕ.\nКоманда не подтвердила участие вовремя и снята с турнира.", "empty")
 			}
 		}
 	}
@@ -517,12 +539,8 @@ func (b *Bot) EnsureChatMenuButton(chatID int64) {
 func (b *Bot) SetBotCommands() {
 	commands := []map[string]string{
 		{"command": "start", "description": "Главное меню и приложение"},
-		{"command": "app", "description": "Открыть турнирное приложение (Web App)"},
-		{"command": "my_team", "description": "Моя команда и состав"},
-		{"command": "profile", "description": "Мой профиль игрока"},
+		{"command": "app", "description": "Открыть турнирное приложение"},
 		{"command": "bracket", "description": "Турнирная сетка"},
-		{"command": "checkin", "description": "Подтвердить участие команды (Check-in)"},
-		{"command": "report", "description": "Внести счёт матча"},
 	}
 	data, _ := json.Marshal(map[string]interface{}{"commands": commands})
 	resp, err := http.Post(

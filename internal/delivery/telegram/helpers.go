@@ -40,6 +40,21 @@ func (b *Bot) trySendMessage(chatID int64, text string, kbType string) error {
 	}
 	msg := tgbotapi.NewMessage(chatID, text)
 
+	if !b.isAdmin(chatID) {
+		// Non-admins must use the Mini Web App. Do not send registration/report inline keyboards.
+		if _, ok := regKeyboard(kbType); ok || kbType == application.KbReportOpponent || kbType == "checkin_status_admin" {
+			_, err := b.bot.Send(msg)
+			return err
+		}
+		if kbType == "main_menu" || kbType == "remove" {
+			msg.ReplyMarkup = tgbotapi.NewRemoveKeyboard(true)
+			_, err := b.bot.Send(msg)
+			return err
+		}
+		_, err := b.bot.Send(msg)
+		return err
+	}
+
 	if kbType == application.KbReportOpponent {
 		msg.ReplyMarkup = b.reportOpponentKeyboard(context.Background(), chatID)
 		_, err := b.bot.Send(msg)
@@ -65,27 +80,16 @@ func (b *Bot) trySendMessage(chatID int64, text string, kbType string) error {
 	case "main_menu":
 		rows := [][]tgbotapi.KeyboardButton{
 			tgbotapi.NewKeyboardButtonRow(
-				tgbotapi.NewKeyboardButton("/app"),
-				tgbotapi.NewKeyboardButton("/profile"),
-				tgbotapi.NewKeyboardButton("/my_team"),
-			),
-			tgbotapi.NewKeyboardButtonRow(
-				tgbotapi.NewKeyboardButton("/reg_team"),
-			),
-			tgbotapi.NewKeyboardButtonRow(
-				tgbotapi.NewKeyboardButton("/checkin"),
-				tgbotapi.NewKeyboardButton("/report"),
-			),
-			tgbotapi.NewKeyboardButtonRow(tgbotapi.NewKeyboardButton("/bracket")),
-			tgbotapi.NewKeyboardButtonRow(tgbotapi.NewKeyboardButton("/match"), tgbotapi.NewKeyboardButton("/judge")),
-			tgbotapi.NewKeyboardButtonRow(
-				tgbotapi.NewKeyboardButton("/delete_team"),
-			),
-		}
-		if b.isAdmin(chatID) {
-			rows = append(rows, tgbotapi.NewKeyboardButtonRow(
 				tgbotapi.NewKeyboardButton("/admin"),
-			))
+			),
+			tgbotapi.NewKeyboardButtonRow(
+				tgbotapi.NewKeyboardButton("/checkin_status"),
+				tgbotapi.NewKeyboardButton("/reports"),
+			),
+			tgbotapi.NewKeyboardButtonRow(
+				tgbotapi.NewKeyboardButton("/list_teams"),
+				tgbotapi.NewKeyboardButton("/bracket"),
+			),
 		}
 		kb := tgbotapi.NewReplyKeyboard(rows...)
 		kb.ResizeKeyboard = true
