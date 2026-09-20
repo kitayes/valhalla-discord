@@ -2199,6 +2199,7 @@
         let currentTeamCheckedIn = false;
         let currentUserIsCaptain = false;
         let currentUserIsAdmin = false;
+        let cachedTeam = null;
         let cachedTeammates = [];
         let currentActiveTourneyTime = null;
 
@@ -2389,12 +2390,25 @@
 
         function appConfirm(message) {
             return new Promise((resolve) => {
-                if (window.Telegram?.WebApp?.showConfirm) {
-                    window.Telegram.WebApp.showConfirm(message, (confirmed) => {
-                        resolve(Boolean(confirmed));
-                    });
-                } else {
+                const tgApp = window.Telegram?.WebApp;
+                if (tgApp && typeof tgApp.showConfirm === 'function' && typeof tgApp.isVersionAtLeast === 'function' && tgApp.isVersionAtLeast('6.2')) {
+                    try {
+                        let resolved = false;
+                        tgApp.showConfirm(message, (confirmed) => {
+                            if (!resolved) {
+                                resolved = true;
+                                resolve(Boolean(confirmed));
+                            }
+                        });
+                        return;
+                    } catch (e) {
+                        console.warn('Telegram showConfirm error:', e);
+                    }
+                }
+                try {
                     resolve(window.confirm(message));
+                } catch (e) {
+                    resolve(true);
                 }
             });
         }
@@ -2448,6 +2462,7 @@
                 document.getElementById('teamProfileCard').style.display = 'block';
                 document.getElementById('rosterCard').style.display = 'block';
                 document.getElementById('teamProfileName').textContent = 'Valhalla Tigers';
+                cachedTeam = { id: 1, name: 'Valhalla Tigers' };
                 cachedTeammates = [
                     { id: 1, nickname: 'TigerLeader', is_captain: true, game_id: '11223344', zone_id: '1001', role: 'Mid' },
                     { id: 2, nickname: 'ShadowBlade', is_captain: false, game_id: '22334455', zone_id: '1001', role: 'Roam' },
@@ -2474,6 +2489,7 @@
                     if (adminTab) adminTab.style.display = 'flex';
                 }
                 if (data.team) {
+                    cachedTeam = data.team;
                     document.getElementById('noTeamCard').style.display = 'none';
                     document.getElementById('teamProfileCard').style.display = 'block';
                     document.getElementById('rosterCard').style.display = 'block';
@@ -2547,6 +2563,9 @@
                         }
                     }
                 } else {
+                    cachedTeam = null;
+                    cachedTeammates = [];
+                    currentUserIsCaptain = false;
                     document.getElementById('noTeamCard').style.display = 'block';
                     document.getElementById('teamProfileCard').style.display = 'none';
                     document.getElementById('rosterCard').style.display = 'none';
@@ -2724,15 +2743,17 @@
             const btnLeave = document.getElementById('btnLeaveTeam');
             if (btnDelete) {
                 btnDelete.style.display = isCaptain ? 'flex' : 'none';
-                btnDelete.disabled = isChecked;
-                btnDelete.style.opacity = isChecked ? '0.5' : '1';
-                btnDelete.title = isChecked ? 'Сначала отмените Check-in' : '';
+                btnDelete.disabled = false;
+                btnDelete.style.opacity = '1';
+                btnDelete.style.cursor = 'pointer';
+                btnDelete.title = '';
             }
             if (btnLeave) {
                 btnLeave.style.display = !isCaptain ? 'flex' : 'none';
-                btnLeave.disabled = isChecked;
-                btnLeave.style.opacity = isChecked ? '0.5' : '1';
-                btnLeave.title = isChecked ? 'Команда уже прошла Check-in' : '';
+                btnLeave.disabled = false;
+                btnLeave.style.opacity = '1';
+                btnLeave.style.cursor = 'pointer';
+                btnLeave.title = '';
             }
         }
 
@@ -3007,28 +3028,35 @@
         async function deleteTeam() {
             if (_isDeletingTeam) return;
             haptic('light');
-            if (currentTeamCheckedIn) {
-                showToast('Сначала снимите Check-in для удаления команды', false);
-                return;
-            }
-            const teamName = (cachedTeam && cachedTeam.name) || 'свою команду';
+            const teamName = (cachedTeam && cachedTeam.name) || (document.getElementById('teamProfileName')?.textContent) || 'свою команду';
             const confirmed = await appConfirm(`Удалить команду «${teamName}»? Состав будет распущен, а слоты освобождены.`);
             if (!confirmed) return;
+
             if (!initData) {
-                showToast('Удаление доступно только в Telegram', false);
+                showToast('Команда удалена (демо-режим)', true);
+                cachedTeam = null;
+                cachedTeammates = [];
+                currentUserIsCaptain = false;
+                document.getElementById('noTeamCard').style.display = 'block';
+                document.getElementById('teamProfileCard').style.display = 'none';
+                document.getElementById('rosterCard').style.display = 'none';
                 return;
             }
+
             _isDeletingTeam = true;
             try {
                 const res = await apiFetch('/api/team/delete', { method: 'POST' });
                 if (res && res.ok) {
-                    showToast('Команда удалена', true);
+                    showToast(res.message || 'Команда удалена', true);
                     cachedTeam = null;
                     cachedTeammates = [];
-                    loadProfile();
+                    currentUserIsCaptain = false;
+                    await loadProfile();
                 } else {
                     showToast((res && (res.error || res.message)) || 'Ошибка при удалении команды', false);
                 }
+            } catch (err) {
+                showToast('Ошибка соединения при удалении команды', false);
             } finally {
                 _isDeletingTeam = false;
             }
@@ -3038,28 +3066,33 @@
         async function leaveTeam() {
             if (_isLeavingTeam) return;
             haptic('light');
-            if (currentTeamCheckedIn) {
-                showToast('Выход заблокирован: команда уже прошла Check-in', false);
-                return;
-            }
-            const teamName = (cachedTeam && cachedTeam.name) || 'команду';
+            const teamName = (cachedTeam && cachedTeam.name) || (document.getElementById('teamProfileName')?.textContent) || 'команду';
             const confirmed = await appConfirm(`Вы действительно хотите покинуть команду «${teamName}»?`);
             if (!confirmed) return;
+
             if (!initData) {
-                showToast('Выход доступно только в Telegram', false);
+                showToast('Вы покинули команду (демо-режим)', true);
+                cachedTeam = null;
+                cachedTeammates = [];
+                document.getElementById('noTeamCard').style.display = 'block';
+                document.getElementById('teamProfileCard').style.display = 'none';
+                document.getElementById('rosterCard').style.display = 'none';
                 return;
             }
+
             _isLeavingTeam = true;
             try {
                 const res = await apiFetch('/api/team/leave', { method: 'POST' });
                 if (res && res.ok) {
-                    showToast('Вы покинули команду', true);
+                    showToast(res.message || 'Вы покинули команду', true);
                     cachedTeam = null;
                     cachedTeammates = [];
-                    loadProfile();
+                    await loadProfile();
                 } else {
                     showToast((res && (res.error || res.message)) || 'Ошибка при выходе из команды', false);
                 }
+            } catch (err) {
+                showToast('Ошибка соединения при выходе из команды', false);
             } finally {
                 _isLeavingTeam = false;
             }

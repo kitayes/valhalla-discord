@@ -764,10 +764,16 @@ func (s *TelegramServiceImpl) DeleteTeamInApp(ctx context.Context, captainTgID i
 	if err != nil || team == nil {
 		return errors.New("команда не найдена")
 	}
-	if team.IsCheckedIn {
-		return errors.New("удаление заблокировано: сначала снимите Check-in")
+	if activeTourney, _ := s.repo.GetActiveTournament(ctx); activeTourney != nil {
+		if activeTourney.Status == models.TournamentStatusActive {
+			return errors.New("удаление заблокировано: турнир уже идёт. Обратитесь к организаторам")
+		}
+		_ = s.repo.UnregisterTeamFromTournament(ctx, activeTourney.ID, teamID)
 	}
-	s.logWrite("ReleaseTeamMembers", s.repo.ReleaseTeamMembers(ctx, teamID))
+
+	if err := s.repo.ReleaseTeamMembers(ctx, teamID); err != nil {
+		s.logWrite("ReleaseTeamMembers", err)
+	}
 	if err := s.repo.DeleteTeam(ctx, teamID); err != nil {
 		return fmt.Errorf("не удалось удалить команду: %w", err)
 	}
@@ -787,8 +793,10 @@ func (s *TelegramServiceImpl) LeaveTeam(ctx context.Context, playerTgID int64) e
 	if err != nil || team == nil {
 		return errors.New("команда не найдена")
 	}
-	if team.IsCheckedIn {
-		return errors.New("выход заблокирован: команда уже прошла Check-in")
+	if activeTourney, _ := s.repo.GetActiveTournament(ctx); activeTourney != nil {
+		if activeTourney.Status == models.TournamentStatusActive {
+			return errors.New("выход заблокирован: турнир уже идёт. Обратитесь к организаторам")
+		}
 	}
 	return s.repo.UpdatePlayerFieldByID(ctx, p.ID, "team_id", nil)
 }

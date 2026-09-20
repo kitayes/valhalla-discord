@@ -97,8 +97,12 @@ func setField(p *models.TelegramPlayer, col string, v interface{}) {
 	case "stars":
 		p.Stars = v.(int)
 	case "team_id":
-		id := v.(int)
-		p.TeamID = &id
+		if v == nil {
+			p.TeamID = nil
+		} else {
+			id := v.(int)
+			p.TeamID = &id
+		}
 	case "is_captain":
 		p.IsCaptain = v.(bool)
 	case "game_nickname":
@@ -873,6 +877,107 @@ func TestSetWinnerRollbackAndChangeWinner(t *testing.T) {
 	err = svc.RollbackMatch(ctx, 1)
 	if err == nil || !strings.Contains(err.Error(), "следующего раунда уже завершён") {
 		t.Fatalf("expected rollback error when downstream match complete, got: %v", err)
+	}
+}
+
+func TestDeleteTeamInApp(t *testing.T) {
+	ctx := context.Background()
+	svc, repo := newTelegramSvc()
+
+	// Create captain and team
+	capTgID := int64(999)
+	teamID := 1
+	repo.players[capTgID] = &models.TelegramPlayer{
+		ID:         1,
+		TelegramID: &capTgID,
+		IsCaptain:  true,
+		TeamID:     &teamID,
+	}
+	repo.teams[teamID] = &models.TelegramTeam{
+		ID:          teamID,
+		Name:        "TestTeam",
+		IsCheckedIn: true,
+	}
+
+	// 1. Non-captain cannot delete
+	memberTgID := int64(888)
+	repo.players[memberTgID] = &models.TelegramPlayer{
+		ID:         2,
+		TelegramID: &memberTgID,
+		IsCaptain:  false,
+		TeamID:     &teamID,
+	}
+	err := svc.DeleteTeamInApp(ctx, memberTgID)
+	if err == nil || !strings.Contains(err.Error(), "только капитан") {
+		t.Fatalf("expected error for non-captain, got: %v", err)
+	}
+
+	// 2. Active tournament blocks deletion
+	tourney := &models.TelegramTournament{
+		ID:       1,
+		Name:     "ActiveTourney",
+		Status:   models.TournamentStatusActive,
+		IsActive: true,
+	}
+	repo.tournaments = []*models.TelegramTournament{tourney}
+	err = svc.DeleteTeamInApp(ctx, capTgID)
+	if err == nil || !strings.Contains(err.Error(), "турнир уже идёт") {
+		t.Fatalf("expected error during active tournament, got: %v", err)
+	}
+
+	// 3. Tournament in registration allows deletion even if checked in
+	tourney.Status = models.TournamentStatusRegistration
+	err = svc.DeleteTeamInApp(ctx, capTgID)
+	if err != nil {
+		t.Fatalf("expected successful delete, got: %v", err)
+	}
+	if _, exists := repo.teams[teamID]; exists {
+		t.Fatalf("expected team deleted from repo")
+	}
+	if repo.players[capTgID].TeamID != nil {
+		t.Fatalf("expected captain team_id nil, got: %v", repo.players[capTgID].TeamID)
+	}
+	if repo.players[capTgID].IsCaptain {
+		t.Fatalf("expected captain is_captain false")
+	}
+}
+
+func TestLeaveTeam(t *testing.T) {
+	ctx := context.Background()
+	svc, repo := newTelegramSvc()
+
+	teamID := 1
+	repo.teams[teamID] = &models.TelegramTeam{ID: teamID, Name: "TestTeam"}
+
+	capTgID := int64(999)
+	repo.players[capTgID] = &models.TelegramPlayer{
+		ID:         1,
+		TelegramID: &capTgID,
+		IsCaptain:  true,
+		TeamID:     &teamID,
+	}
+
+	memTgID := int64(888)
+	repo.players[memTgID] = &models.TelegramPlayer{
+		ID:         2,
+		TelegramID: &memTgID,
+		IsCaptain:  false,
+		TeamID:     &teamID,
+	}
+
+	// Captain cannot leave directly
+	err := svc.LeaveTeam(ctx, capTgID)
+	if err == nil || !strings.Contains(err.Error(), "капитан не может покинуть") {
+		t.Fatalf("expected captain leave error, got: %v", err)
+	}
+
+	// Member leaves successfully
+	err = svc.LeaveTeam(ctx, memTgID)
+	if err != nil {
+		t.Fatalf("expected member to leave, got: %v", err)
+	}
+	if repo.players[memTgID].TeamID != nil {
+		t.Fatalf("expected member team_id nil")
 	}
 }
 
