@@ -10,9 +10,28 @@ import (
 
 // FormatRoundTitle provides capitalized, user-friendly round names for UI.
 func FormatRoundTitle(round, total int) string {
+	return FormatRoundTitleWithContext(round, total, "")
+}
+
+// FormatRoundTitleWithContext provides capitalized round names taking tournament type and bracket side into account.
+func FormatRoundTitleWithContext(round, total int, tourneyType string) string {
+	if tourneyType == models.TournamentTypeRoundRobin || tourneyType == models.TournamentTypeSwiss {
+		r := round
+		if r < 0 {
+			r = -r
+		}
+		return fmt.Sprintf("Тур %d", r)
+	}
+
+	if round < 0 {
+		return fmt.Sprintf("Нижняя сетка, Раунд %d", -round)
+	}
 	lbl := StageLabel(round, total)
 	if lbl == "финал" {
-		return "Гранд-Финал"
+		if tourneyType == models.TournamentTypeDoubleElimination {
+			return "Гранд-Финал"
+		}
+		return "Финал"
 	}
 	if lbl == "полуфинал" {
 		return "Полуфинал"
@@ -23,12 +42,34 @@ func FormatRoundTitle(round, total int) string {
 	return fmt.Sprintf("Раунд %d", round)
 }
 
+// RoundSortKey maps round numbers to a display order.
+// For double elimination (hasNegative=true):
+// Winners bracket rounds come first (1, 2, ... total-1).
+// Losers bracket rounds come next (-1, -2, -3, ...).
+// Grand final comes last (total, total+1).
+func RoundSortKey(round, total int, hasNegative bool) int {
+	if !hasNegative {
+		return round
+	}
+	if round < 0 {
+		return 1000 + (-round)
+	}
+	if round >= total && total > 1 {
+		return 2000 + (round - total)
+	}
+	return round
+}
+
 // FormatScheduledTime formats the estimated start time for a given round based on tournament start.
 func FormatScheduledTime(startsAt time.Time, round int, loc *time.Location) string {
 	if startsAt.IsZero() {
 		return "По готовности"
 	}
-	t := startsAt.Add(time.Duration((round-1)*35) * time.Minute)
+	effectiveRound := round
+	if round < 0 {
+		effectiveRound = -round + 1
+	}
+	t := startsAt.Add(time.Duration((effectiveRound-1)*35) * time.Minute)
 	if loc != nil {
 		t = t.In(loc)
 	}

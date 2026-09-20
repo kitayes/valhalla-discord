@@ -108,7 +108,7 @@ type TelegramService interface {
 	GetBracketMatchDetails(ctx context.Context, matchID int) (*BracketMatchDetails, error)
 
 	// League & Tournaments
-	CreateTournament(ctx context.Context, name, slug string, tTime *time.Time) (*models.TelegramTournament, error)
+	CreateTournament(ctx context.Context, name, slug string, tTime *time.Time, tournamentType string, holdThirdPlace bool, seedingType string) (*models.TelegramTournament, error)
 	GetActiveTournament(ctx context.Context) (*models.TelegramTournament, error)
 	GetTournamentByID(ctx context.Context, id int) (*models.TelegramTournament, error)
 	GetAllTournaments(ctx context.Context) ([]models.TelegramTournament, error)
@@ -1838,7 +1838,7 @@ func (s *TelegramServiceImpl) GetBracketMatchDetails(ctx context.Context, matchI
 	return details, nil
 }
 
-func (s *TelegramServiceImpl) CreateTournament(ctx context.Context, name, slug string, tTime *time.Time) (*models.TelegramTournament, error) {
+func (s *TelegramServiceImpl) CreateTournament(ctx context.Context, name, slug string, tTime *time.Time, tournamentType string, holdThirdPlace bool, seedingType string) (*models.TelegramTournament, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, errors.New("название турнира не может быть пустым")
@@ -1846,10 +1846,19 @@ func (s *TelegramServiceImpl) CreateTournament(ctx context.Context, name, slug s
 	if slug == "" {
 		slug = "tourney_" + time.Now().UTC().Format("20060102_150405")
 	}
+	if tournamentType == "" {
+		tournamentType = models.TournamentTypeSingleElimination
+	}
+	if seedingType == "" {
+		seedingType = models.SeedingTypeStars
+	}
 	t := &models.TelegramTournament{
 		Name:           name,
 		Slug:           slug,
 		Status:         models.TournamentStatusRegistration,
+		TournamentType: tournamentType,
+		HoldThirdPlace: holdThirdPlace,
+		SeedingType:    seedingType,
 		TournamentTime: tTime,
 		IsActive:       true,
 	}

@@ -88,14 +88,14 @@ func newSyntheticChallonge() *syntheticChallonge {
 	}
 }
 
-func (s *syntheticChallonge) CreateTournament(_ context.Context, name, slug string) (challonge.Tournament, error) {
+func (s *syntheticChallonge) CreateTournament(_ context.Context, params challonge.CreateTournamentParams) (challonge.Tournament, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failErr != nil {
 		return challonge.Tournament{}, s.failErr
 	}
 	s.nextID++
-	return challonge.Tournament{ID: s.nextID, Slug: slug, URL: "https://challonge.com/" + slug}, nil
+	return challonge.Tournament{ID: s.nextID, Slug: params.Slug, URL: "https://challonge.com/" + params.Slug}, nil
 }
 
 func (s *syntheticChallonge) BulkAddParticipants(_ context.Context, tournamentID int64, ps []challonge.NewParticipant) ([]challonge.Participant, error) {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -208,6 +209,7 @@ func (s *AdminServer) handleBracket(w http.ResponseWriter, r *http.Request) {
 	var err error
 	var tTime time.Time
 	var challongeURL string
+	var tourneyType string
 	if tourneyIDStr != "" && s.services.TelegramService != nil {
 		tID, _ := strconv.Atoi(tourneyIDStr)
 		if tID > 0 {
@@ -218,6 +220,7 @@ func (s *AdminServer) handleBracket(w http.ResponseWriter, r *http.Request) {
 					tTime = *tourney.TournamentTime
 				}
 				challongeURL = tourney.ChallongeURL
+				tourneyType = tourney.TournamentType
 			}
 		}
 	}
@@ -227,6 +230,7 @@ func (s *AdminServer) handleBracket(w http.ResponseWriter, r *http.Request) {
 		activeTourney, _ := s.services.TelegramService.GetActiveTournament(r.Context())
 		if activeTourney != nil {
 			challongeURL = activeTourney.ChallongeURL
+			tourneyType = activeTourney.TournamentType
 		}
 	}
 	if challongeURL == "" && s.services.Bracket != nil {
@@ -246,14 +250,31 @@ func (s *AdminServer) handleBracket(w http.ResponseWriter, r *http.Request) {
 	var schedule []RoundScheduleItem
 	if len(matches) > 0 && s.services.TelegramService != nil {
 		totalRounds := application.TotalRounds(matches)
-		for rNum := 1; rNum <= totalRounds; rNum++ {
+		roundSet := make(map[int]bool)
+		var hasNegative bool
+		for _, m := range matches {
+			roundSet[m.Round] = true
+			if m.Round < 0 {
+				hasNegative = true
+			}
+		}
+		var distinctRounds []int
+		for rNum := range roundSet {
+			distinctRounds = append(distinctRounds, rNum)
+		}
+		sort.Slice(distinctRounds, func(i, j int) bool {
+			return application.RoundSortKey(distinctRounds[i], totalRounds, hasNegative) <
+				application.RoundSortKey(distinctRounds[j], totalRounds, hasNegative)
+		})
+
+		for _, rNum := range distinctRounds {
 			fmtStr := "BO1"
-			if rNum >= totalRounds-1 && totalRounds > 1 {
+			if rNum == totalRounds || (rNum == totalRounds-1 && totalRounds > 1 && !hasNegative) {
 				fmtStr = "BO3"
 			}
 			schedule = append(schedule, RoundScheduleItem{
 				Round:         rNum,
-				RoundName:     application.FormatRoundTitle(rNum, totalRounds),
+				RoundName:     application.FormatRoundTitleWithContext(rNum, totalRounds, tourneyType),
 				ScheduledTime: application.FormatScheduledTime(tTime, rNum, time.FixedZone("MSK", 3*3600)),
 				MatchFormat:   fmtStr,
 			})
@@ -1651,6 +1672,9 @@ func (s *AdminServer) handleAdminTournamentCreate(w http.ResponseWriter, r *http
 	var req struct {
 		Name           string  `json:"name"`
 		Slug           string  `json:"slug"`
+		TournamentType string  `json:"tournament_type"`
+		HoldThirdPlace bool    `json:"hold_third_place"`
+		SeedingType    string  `json:"seeding_type"`
 		TournamentTime *string `json:"tournament_time"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1664,7 +1688,7 @@ func (s *AdminServer) handleAdminTournamentCreate(w http.ResponseWriter, r *http
 			tTime = &t
 		}
 	}
-	created, err := s.services.TelegramService.CreateTournament(r.Context(), req.Name, req.Slug, tTime)
+	created, err := s.services.TelegramService.CreateTournament(r.Context(), req.Name, req.Slug, tTime, req.TournamentType, req.HoldThirdPlace, req.SeedingType)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
 		return

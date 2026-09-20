@@ -24,6 +24,7 @@ type fakeChallonge struct {
 
 type fakeTourney struct {
 	slug         string
+	params       challonge.CreateTournamentParams
 	participants []challonge.Participant
 	matches      []*fakeMatch
 	started      bool
@@ -46,13 +47,13 @@ func (f *fakeChallonge) call(name string) error {
 	return f.fail[name]
 }
 
-func (f *fakeChallonge) CreateTournament(_ context.Context, name, slug string) (challonge.Tournament, error) {
+func (f *fakeChallonge) CreateTournament(_ context.Context, params challonge.CreateTournamentParams) (challonge.Tournament, error) {
 	if err := f.call("CreateTournament"); err != nil {
 		return challonge.Tournament{}, err
 	}
 	f.nextID++
-	f.tourneys[f.nextID] = &fakeTourney{slug: slug}
-	return challonge.Tournament{ID: f.nextID, Slug: slug, URL: "https://challonge.com/" + slug}, nil
+	f.tourneys[f.nextID] = &fakeTourney{slug: params.Slug, params: params}
+	return challonge.Tournament{ID: f.nextID, Slug: params.Slug, URL: "https://challonge.com/" + params.Slug}, nil
 }
 
 func (f *fakeChallonge) BulkAddParticipants(_ context.Context, tID int64, ps []challonge.NewParticipant) ([]challonge.Participant, error) {
@@ -359,6 +360,31 @@ func TestSeedTeamsExcludesIncompleteMainRosters(t *testing.T) {
 	got := SeedTeams(teams)
 	if len(got) != 1 || got[0].Team.Name != "Complete" {
 		t.Fatalf("SeedTeams = %+v, want only Complete", got)
+	}
+}
+
+func TestSeedTeamsWithStrategyRandom(t *testing.T) {
+	teams := []models.TelegramTeam{
+		{ID: 1, Name: "T1", Status: models.TeamStatusActive, Players: []models.TelegramPlayer{{Stars: 10}, {Stars: 10}, {Stars: 10}, {Stars: 10}, {Stars: 10}}},
+		{ID: 2, Name: "T2", Status: models.TeamStatusActive, Players: []models.TelegramPlayer{{Stars: 50}, {Stars: 50}, {Stars: 50}, {Stars: 50}, {Stars: 50}}},
+		{ID: 3, Name: "T3", Status: models.TeamStatusActive, Players: []models.TelegramPlayer{{Stars: 30}, {Stars: 30}, {Stars: 30}, {Stars: 30}, {Stars: 30}}},
+		{ID: 4, Name: "Disq", Status: models.TeamStatusDisqualified, Players: []models.TelegramPlayer{{Stars: 99}}},
+	}
+	got := SeedTeamsWithStrategy(teams, models.SeedingTypeRandom)
+	if len(got) != 3 {
+		t.Fatalf("len(got) = %d, want 3", len(got))
+	}
+	seenSeeds := make(map[int]bool)
+	seenTeams := make(map[string]bool)
+	for _, s := range got {
+		if seenSeeds[s.Seed] {
+			t.Errorf("duplicate seed %d", s.Seed)
+		}
+		seenSeeds[s.Seed] = true
+		seenTeams[s.Team.Name] = true
+	}
+	if !seenTeams["T1"] || !seenTeams["T2"] || !seenTeams["T3"] {
+		t.Errorf("missing teams in random seed: %+v", got)
 	}
 }
 

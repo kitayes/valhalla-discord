@@ -261,7 +261,7 @@ func (b *Bot) handleAdminCommand(ctx context.Context, chatID int64, text string)
 			b.sendMessage(chatID, "Укажите название турнира: /new_tourney <название>", "main_menu")
 			return
 		}
-		t, err := b.service.CreateTournament(ctx, name, "", nil)
+		t, err := b.service.CreateTournament(ctx, name, "", nil, models.TournamentTypeSingleElimination, false, models.SeedingTypeStars)
 		if err != nil {
 			b.sendMessage(chatID, "Ошибка создания турнира: "+err.Error(), "main_menu")
 			return

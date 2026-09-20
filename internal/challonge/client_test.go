@@ -36,7 +36,11 @@ func TestHeadersAndCreateTournament(t *testing.T) {
 		w.WriteHeader(http.StatusCreated)
 		io.WriteString(w, `{"data":{"id":"30201","type":"tournament","attributes":{"name":"Valhalla","url":"valhalla_x","tournament_type":"single elimination"}}}`)
 	})
-	tr, err := c.CreateTournament(context.Background(), "Valhalla", "valhalla_x")
+	tr, err := c.CreateTournament(context.Background(), CreateTournamentParams{
+		Name:           "Valhalla",
+		Slug:           "valhalla_x",
+		TournamentType: "single elimination",
+	})
 	if err != nil {
 		t.Fatalf("CreateTournament: %v", err)
 	}
@@ -69,7 +73,7 @@ func TestSubdomainGoesToQueryAndURL(t *testing.T) {
 		io.WriteString(w, `{"data":{"id":"1","attributes":{"url":"cup"}}}`)
 	})
 	c.subdomain = "valhalla"
-	tr, err := c.CreateTournament(context.Background(), "Cup", "cup")
+	tr, err := c.CreateTournament(context.Background(), CreateTournamentParams{Name: "Cup", Slug: "cup"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,6 +82,32 @@ func TestSubdomainGoesToQueryAndURL(t *testing.T) {
 	}
 	if tr.URL != "https://valhalla.challonge.com/cup" {
 		t.Errorf("URL = %s", tr.URL)
+	}
+}
+
+func TestCreateTournamentOptions(t *testing.T) {
+	c, _, bodies := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		io.WriteString(w, `{"data":{"id":"42","type":"tournament","attributes":{"name":"Cup","url":"cup_slug","tournament_type":"double elimination"}}}`)
+	})
+	_, err := c.CreateTournament(context.Background(), CreateTournamentParams{
+		Name:                "Cup",
+		Slug:                "cup_slug",
+		TournamentType:      "double elimination",
+		HoldThirdPlaceMatch: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	_ = json.Unmarshal([]byte((*bodies)[0]), &body)
+	attrs := body["data"].(map[string]any)["attributes"].(map[string]any)
+	if attrs["tournament_type"] != "double elimination" {
+		t.Errorf("tournament_type = %v", attrs["tournament_type"])
+	}
+	// hold_third_place_match should not be sent for non-single-elimination
+	if _, ok := attrs["hold_third_place_match"]; ok {
+		t.Errorf("hold_third_place_match should not be set for double elimination")
 	}
 }
 
@@ -295,7 +325,7 @@ func TestLive(t *testing.T) {
 	ctx := context.Background()
 	c := New(key, os.Getenv("CHALLONGE_SUBDOMAIN"), http.DefaultClient)
 	slug := fmt.Sprintf("bw_live_%d", time.Now().Unix())
-	tr, err := c.CreateTournament(ctx, "blackwatch live test", slug)
+	tr, err := c.CreateTournament(ctx, CreateTournamentParams{Name: "blackwatch live test", Slug: slug})
 	if err != nil {
 		t.Fatalf("CreateTournament: %v", err)
 	}

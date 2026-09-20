@@ -37,6 +37,13 @@ type QuotaError struct {
 func (e *QuotaError) Error() string { return ErrQuotaExceeded.Error() }
 func (e *QuotaError) Unwrap() error { return ErrQuotaExceeded }
 
+type CreateTournamentParams struct {
+	Name                string
+	Slug                string
+	TournamentType      string // "single elimination", "double elimination", "round robin", "swiss"
+	HoldThirdPlaceMatch bool
+}
+
 type Tournament struct {
 	ID   int64
 	Slug string
@@ -80,8 +87,6 @@ func New(apiKey, subdomain string, httpClient *http.Client) *Client {
 	}
 	return &Client{http: httpClient, baseURL: defaultBaseURL, apiKey: apiKey, subdomain: subdomain, sleep: sleepContext}
 }
-
-// --- wire types -----------------------------------------------------------
 
 type envelope[T any] struct {
 	Data   T          `json:"data"`
@@ -140,13 +145,21 @@ type matchAttrs struct {
 
 // --- requests ---------------------------------------------------------------
 
-func (c *Client) CreateTournament(ctx context.Context, name, slug string) (Tournament, error) {
-	body := map[string]any{"data": map[string]any{"type": "tournament", "attributes": map[string]any{
-		"name":            name,
-		"url":             slug,
-		"tournament_type": "single elimination",
+func (c *Client) CreateTournament(ctx context.Context, params CreateTournamentParams) (Tournament, error) {
+	tType := params.TournamentType
+	if tType == "" {
+		tType = "single elimination"
+	}
+	attrs := map[string]any{
+		"name":            params.Name,
+		"url":             params.Slug,
+		"tournament_type": tType,
 		"private":         false,
-	}}}
+	}
+	if params.HoldThirdPlaceMatch && tType == "single elimination" {
+		attrs["hold_third_place_match"] = true
+	}
+	body := map[string]any{"data": map[string]any{"type": "tournament", "attributes": attrs}}
 	var out envelope[resource[tournamentAttrs]]
 	if err := c.do(ctx, http.MethodPost, "/tournaments.json", body, &out); err != nil {
 		return Tournament{}, err

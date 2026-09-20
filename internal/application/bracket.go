@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"sort"
 	"strconv"
 	"sync"
@@ -16,7 +17,7 @@ import (
 // BracketProvider is the slice of Challonge the bracket needs. *challonge.Client
 // satisfies it; tests use an in-memory engine.
 type BracketProvider interface {
-	CreateTournament(ctx context.Context, name, slug string) (challonge.Tournament, error)
+	CreateTournament(ctx context.Context, params challonge.CreateTournamentParams) (challonge.Tournament, error)
 	BulkAddParticipants(ctx context.Context, tournamentID int64, ps []challonge.NewParticipant) ([]challonge.Participant, error)
 	Start(ctx context.Context, tournamentID int64) error
 	ListMatches(ctx context.Context, tournamentID int64) ([]challonge.Match, error)
@@ -87,6 +88,11 @@ func mainRosterSize(team models.TelegramTeam) int {
 // (substitutes excluded); ties go to the earlier-registered team. Byes in
 // Challonge go to the top seeds, so the strongest teams skip round 1.
 func SeedTeams(teams []models.TelegramTeam) []SeededTeam {
+	return SeedTeamsWithStrategy(teams, models.SeedingTypeStars)
+}
+
+// SeedTeamsWithStrategy orders active teams by the given strategy ("stars" or "random").
+func SeedTeamsWithStrategy(teams []models.TelegramTeam, strategy string) []SeededTeam {
 	var out []SeededTeam
 	for _, t := range teams {
 		if t.Status == models.TeamStatusDisqualified {
@@ -104,15 +110,24 @@ func SeedTeams(teams []models.TelegramTeam) []SeededTeam {
 			n++
 		}
 		avg := 0.0
-		avg = float64(sum) / float64(n)
+		if n > 0 {
+			avg = float64(sum) / float64(n)
+		}
 		out = append(out, SeededTeam{Team: t, AvgStars: avg})
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].AvgStars != out[j].AvgStars {
-			return out[i].AvgStars > out[j].AvgStars
-		}
-		return out[i].Team.ID < out[j].Team.ID
-	})
+	if strategy == models.SeedingTypeRandom {
+		r := rand.New(rand.NewSource(time.Now().UnixNano()))
+		r.Shuffle(len(out), func(i, j int) {
+			out[i], out[j] = out[j], out[i]
+		})
+	} else {
+		sort.SliceStable(out, func(i, j int) bool {
+			if out[i].AvgStars != out[j].AvgStars {
+				return out[i].AvgStars > out[j].AvgStars
+			}
+			return out[i].Team.ID < out[j].Team.ID
+		})
+	}
 	for i := range out {
 		out[i].Seed = i + 1
 	}
@@ -289,7 +304,19 @@ func (s *BracketService) build(ctx context.Context, forTournament time.Time) (*B
 			return nil, err
 		}
 	}
-	seeded := SeedTeams(teams)
+	seedingType := models.SeedingTypeStars
+	tournamentType := models.TournamentTypeSingleElimination
+	holdThirdPlace := false
+	if activeTourney != nil {
+		if activeTourney.SeedingType != "" {
+			seedingType = activeTourney.SeedingType
+		}
+		if activeTourney.TournamentType != "" {
+			tournamentType = activeTourney.TournamentType
+		}
+		holdThirdPlace = activeTourney.HoldThirdPlace
+	}
+	seeded := SeedTeamsWithStrategy(teams, seedingType)
 	var incomplete []models.TelegramTeam
 	for _, team := range teams {
 		if team.Status != models.TeamStatusDisqualified && mainRosterSize(team) < MainRosterSlots {
@@ -323,8 +350,16 @@ func (s *BracketService) build(ctx context.Context, forTournament time.Time) (*B
 	name := "Valhalla " + forTournament.Format("02.01.2006")
 	if activeTourney != nil && activeTourney.Name != "" {
 		name = activeTourney.Name
+		if activeTourney.Slug != "" {
+			slug = activeTourney.Slug
+		}
 	}
-	tr, err := s.provider.CreateTournament(ctx, name, slug)
+	tr, err := s.provider.CreateTournament(ctx, challonge.CreateTournamentParams{
+		Name:                name,
+		Slug:                slug,
+		TournamentType:      tournamentType,
+		HoldThirdPlaceMatch: holdThirdPlace,
+	})
 	if err != nil {
 		return nil, err
 	}

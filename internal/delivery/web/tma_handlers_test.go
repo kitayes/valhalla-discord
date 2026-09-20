@@ -77,8 +77,15 @@ func (m *mockTelegramSvc) UnregisterTeamFromTournament(ctx context.Context, capt
 	return nil
 }
 
-func (m *mockTelegramSvc) CreateTournament(ctx context.Context, name, slug string, tTime *time.Time) (*models.TelegramTournament, error) {
-	t := models.TelegramTournament{ID: len(m.tournaments) + 1, Name: name, Status: models.TournamentStatusRegistration}
+func (m *mockTelegramSvc) CreateTournament(ctx context.Context, name, slug string, tTime *time.Time, tournamentType string, holdThirdPlace bool, seedingType string) (*models.TelegramTournament, error) {
+	t := models.TelegramTournament{
+		ID:             len(m.tournaments) + 1,
+		Name:           name,
+		Status:         models.TournamentStatusRegistration,
+		TournamentType: tournamentType,
+		HoldThirdPlace: holdThirdPlace,
+		SeedingType:    seedingType,
+	}
 	m.tournaments = append(m.tournaments, t)
 	return &t, nil
 }

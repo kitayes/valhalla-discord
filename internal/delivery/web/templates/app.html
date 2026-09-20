@@ -1721,6 +1721,10 @@
                         <span id="adminTourneyTimeText">Время старта: не задано</span>
                         <button class="link-btn" onclick="openEditTourneyTimeModal()" style="margin-left: 6px; font-size: 11px; text-decoration: underline; color: var(--accent-blue); padding: 0; background: none; border: none; cursor: pointer;">Изменить</button>
                     </div>
+                    <div id="adminTourneyFormatRow" style="font-size: 11px; color: var(--text-muted); margin-top: 4px; display: none; align-items: center; gap: 4px;">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                        <span id="adminTourneyFormatText">Формат: Single Elimination</span>
+                    </div>
                 </div>
                 <span class="status-pill status-ready" id="adminTourneyStatusBadge" style="display: none;">РЕГИСТРАЦИЯ</span>
             </div>
@@ -2132,6 +2136,26 @@
             <div class="form-group" style="margin-bottom: 12px;">
                 <label class="form-label">Название турнира</label>
                 <input type="text" id="newTourneyName" class="form-input" placeholder="например: Valhalla Cup #2">
+            </div>
+            <div class="form-group" style="margin-bottom: 12px;">
+                <label class="form-label">Формат турнира</label>
+                <select id="newTourneyType" class="form-input" onchange="onTourneyTypeChange()">
+                    <option value="single elimination">Single Elimination (на вылет)</option>
+                    <option value="double elimination">Double Elimination (до 2 поражений)</option>
+                    <option value="round robin">Round Robin (круговой турнир)</option>
+                    <option value="swiss">Swiss (швейцарская система)</option>
+                </select>
+            </div>
+            <div class="form-group" id="thirdPlaceGroup" style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                <input type="checkbox" id="newTourneyHoldThirdPlace" style="width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent-blue);">
+                <label for="newTourneyHoldThirdPlace" class="form-label" style="margin-bottom: 0; cursor: pointer;">Матч за 3-е место</label>
+            </div>
+            <div class="form-group" style="margin-bottom: 12px;">
+                <label class="form-label">Метод посева команд</label>
+                <select id="newTourneySeeding" class="form-input">
+                    <option value="stars">По звёздам состава (сильные выше)</option>
+                    <option value="random">Случайный посев (рандом)</option>
+                </select>
             </div>
             <div class="form-group" style="margin-bottom: 12px;">
                 <label class="form-label">Дата и время начала (необязательно)</label>
@@ -4373,7 +4397,7 @@
             }
 
             const fragment = document.createDocumentFragment();
-            let lastRound = -1;
+            let lastRound = null;
             data.matches.forEach(m => {
                 if (m.round !== lastRound) {
                     lastRound = m.round;
@@ -5277,6 +5301,20 @@
                             timeText.textContent = 'Время старта: не задано';
                         }
                     }
+                    const formatRow = document.getElementById('adminTourneyFormatRow');
+                    const formatText = document.getElementById('adminTourneyFormatText');
+                    if (formatRow && formatText) {
+                        formatRow.style.display = 'flex';
+                        let fName = 'Single Elimination';
+                        if (activeTourney.tournament_type === 'double elimination') fName = 'Double Elimination';
+                        else if (activeTourney.tournament_type === 'round robin') fName = 'Round Robin';
+                        else if (activeTourney.tournament_type === 'swiss') fName = 'Swiss';
+                        if (activeTourney.hold_third_place && activeTourney.tournament_type === 'single elimination') {
+                            fName += ' (за 3-е место)';
+                        }
+                        let sName = activeTourney.seeding_type === 'random' ? 'Случайный' : 'По звёздам';
+                        formatText.textContent = `${fName} • Посев: ${sName}`;
+                    }
                     if (statusBadge) {
                         statusBadge.style.display = 'inline-flex';
                         if (activeTourney.status === 'registration' || activeTourney.status === 'draft') {
@@ -5303,6 +5341,8 @@
                     currentActiveTourneyTime = null;
                     const timeRow = document.getElementById('adminTourneyTimeRow');
                     if (timeRow) timeRow.style.display = 'none';
+                    const formatRow = document.getElementById('adminTourneyFormatRow');
+                    if (formatRow) formatRow.style.display = 'none';
                     if (activeLabelEl) activeLabelEl.textContent = 'Нет активного турнира';
                     if (statusBadge) statusBadge.style.display = 'none';
                     if (btnStart) btnStart.style.display = 'none';
@@ -5334,11 +5374,27 @@
         function openCreateTourneyModal() {
             haptic('light');
             document.getElementById('newTourneyName').value = '';
+            const typeEl = document.getElementById('newTourneyType');
+            if (typeEl) typeEl.value = 'single elimination';
+            const thirdEl = document.getElementById('newTourneyHoldThirdPlace');
+            if (thirdEl) thirdEl.checked = false;
+            const seedEl = document.getElementById('newTourneySeeding');
+            if (seedEl) seedEl.value = 'stars';
+            const thirdGroup = document.getElementById('thirdPlaceGroup');
+            if (thirdGroup) thirdGroup.style.display = 'flex';
             const timeEl = document.getElementById('newTourneyTime');
             if (timeEl) timeEl.value = '';
             document.getElementById('newTourneyChallongeUrl').value = '';
             document.getElementById('createTourneyModal').classList.add('active');
             updateBackButton();
+        }
+
+        function onTourneyTypeChange() {
+            const type = document.getElementById('newTourneyType')?.value;
+            const thirdGroup = document.getElementById('thirdPlaceGroup');
+            if (thirdGroup) {
+                thirdGroup.style.display = (type === 'single elimination') ? 'flex' : 'none';
+            }
         }
 
         function closeCreateTourneyModal() {
@@ -5348,6 +5404,9 @@
 
         async function confirmCreateTourneySubmit() {
             const name = document.getElementById('newTourneyName').value.trim();
+            const tourneyType = document.getElementById('newTourneyType')?.value || 'single elimination';
+            const holdThirdPlace = !!document.getElementById('newTourneyHoldThirdPlace')?.checked;
+            const seedingType = document.getElementById('newTourneySeeding')?.value || 'stars';
             const timeVal = document.getElementById('newTourneyTime')?.value;
             const challongeUrl = document.getElementById('newTourneyChallongeUrl').value.trim();
             if (!name) {
@@ -5359,7 +5418,13 @@
                 isoTime = new Date(timeVal).toISOString();
             }
             haptic('success');
-            const payload = { name: name, slug: challongeUrl };
+            const payload = {
+                name: name,
+                slug: challongeUrl,
+                tournament_type: tourneyType,
+                hold_third_place: holdThirdPlace,
+                seeding_type: seedingType
+            };
             if (isoTime) {
                 payload.tournament_time = isoTime;
             }

@@ -41,6 +41,14 @@ const (
 	TournamentStatusActive       = "active"
 	TournamentStatusCompleted    = "completed"
 	TournamentStatusArchived     = "archived"
+
+	TournamentTypeSingleElimination = "single elimination"
+	TournamentTypeDoubleElimination = "double elimination"
+	TournamentTypeRoundRobin        = "round robin"
+	TournamentTypeSwiss             = "swiss"
+
+	SeedingTypeStars  = "stars"
+	SeedingTypeRandom = "random"
 )
 
 type TelegramTournament struct {
@@ -48,6 +56,9 @@ type TelegramTournament struct {
 	Name           string     `json:"name"`
 	Slug           string     `json:"slug"`
 	Status         string     `json:"status"`
+	TournamentType string     `json:"tournament_type"`
+	HoldThirdPlace bool       `json:"hold_third_place"`
+	SeedingType    string     `json:"seeding_type"`
 	TournamentTime *time.Time `json:"tournament_time,omitempty"`
 	ChallongeID    *int64     `json:"challonge_id,omitempty"`
 	ChallongeURL   string     `json:"challonge_url"`

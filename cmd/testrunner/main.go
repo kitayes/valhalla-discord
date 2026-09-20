@@ -63,12 +63,12 @@ func newMemBracketProvider() *memBracketProvider {
 	}
 }
 
-func (p *memBracketProvider) CreateTournament(ctx context.Context, name, slug string) (challonge.Tournament, error) {
+func (p *memBracketProvider) CreateTournament(ctx context.Context, params challonge.CreateTournamentParams) (challonge.Tournament, error) {
 	p.nextID++
 	t := challonge.Tournament{
 		ID:   p.nextID,
-		Slug: slug,
-		URL:  "https://challonge.com/" + slug,
+		Slug: params.Slug,
+		URL:  "https://challonge.com/" + params.Slug,
 	}
 	p.tournaments[t.ID] = t
 	return t, nil
