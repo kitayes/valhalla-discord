@@ -173,6 +173,46 @@ func TestListMatchesParsesBothRelationshipPlacements(t *testing.T) {
 	}
 }
 
+// The live API (checked 2026-09-23) sends no player1/player2 relationships;
+// the sides are only in points_by_participant. Parsing relationships alone
+// produced a bracket where no team had an opponent.
+func TestListMatchesReadsSidesFromPointsByParticipant(t *testing.T) {
+	c, _, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"data":[
+			{"id":"473238792","type":"match","attributes":{"state":"open","round":1,"scores":"0 - 0","suggested_play_order":1,
+				"points_by_participant":[{"participant_id":305167834,"scores":[]},{"participant_id":305167835,"scores":[]}],"winner_id":null},
+				"relationships":{"attachments":{"data":[]}}},
+			{"id":"473238794","type":"match","attributes":{"state":"pending","round":2,"scores":"0 - 0","suggested_play_order":3,
+				"points_by_participant":[{"participant_id":305167831,"scores":[]},{"participant_id":null,"scores":[]}],"winner_id":null},
+				"relationships":{"attachments":{"data":[]}}}
+		],"included":[],"meta":{"count":2}}`)
+	})
+	ms, err := c.ListMatches(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ms) != 2 || ms[0].Player1ID != 305167834 || ms[0].Player2ID != 305167835 {
+		t.Fatalf("open match sides = %+v", ms)
+	}
+	if ms[1].Player1ID != 305167831 || ms[1].Player2ID != 0 {
+		t.Errorf("pending match = %+v, want seed in slot 1 and an empty slot 2", ms[1])
+	}
+}
+
+// Challonge answers 422 to deleting a tournament that is underway.
+func TestDeleteTournamentResetsFirst(t *testing.T) {
+	c, reqs, bodies := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	if err := c.DeleteTournament(context.Background(), 7); err != nil {
+		t.Fatal(err)
+	}
+	if len(*reqs) != 2 || (*reqs)[0].Method != http.MethodPut || (*reqs)[0].URL.Path != "/tournaments/7/change_state.json" ||
+		!strings.Contains((*bodies)[0], `"reset"`) || (*reqs)[1].Method != http.MethodDelete || (*reqs)[1].URL.Path != "/tournaments/7.json" {
+		t.Errorf("requests: %v %v", *reqs, *bodies)
+	}
+}
+
 func TestListMatchesPaginates(t *testing.T) {
 	page := 0
 	c, reqs, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {

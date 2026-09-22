@@ -141,6 +141,12 @@ type matchAttrs struct {
 	Scores             string         `json:"scores"`
 	WinnerID           *int64         `json:"winner_id"`
 	Relationships      *relationships `json:"relationships"`
+	// The live API names a match's sides only here, player 1 first; it sends
+	// no player1/player2 relationships. Without this every match came back
+	// with both slots empty, so no team ever had an opponent.
+	PointsByParticipant []struct {
+		ParticipantID *int64 `json:"participant_id"`
+	} `json:"points_by_participant"`
 }
 
 // --- requests ---------------------------------------------------------------
@@ -246,6 +252,14 @@ func matchFromResource(r resource[matchAttrs]) Match {
 		rel = *r.Attributes.Relationships
 	}
 	m := Match{ID: id, Round: r.Attributes.Round, PlayOrder: r.Attributes.SuggestedPlayOrder, State: r.Attributes.State, Player1ID: rel.Player1.id(), Player2ID: rel.Player2.id(), Scores: r.Attributes.Scores}
+	if m.Player1ID == 0 && m.Player2ID == 0 {
+		slots := [2]*int64{&m.Player1ID, &m.Player2ID}
+		for i, p := range r.Attributes.PointsByParticipant {
+			if i < len(slots) && p.ParticipantID != nil {
+				*slots[i] = *p.ParticipantID
+			}
+		}
+	}
 	if r.Attributes.WinnerID != nil {
 		m.WinnerID = *r.Attributes.WinnerID
 	}
@@ -271,7 +285,12 @@ func (c *Client) ReopenMatch(ctx context.Context, tournamentID, matchID int64) e
 	return c.do(ctx, http.MethodPut, fmt.Sprintf("/tournaments/%d/matches/%d/change_state.json", tournamentID, matchID), body, nil)
 }
 
+// DeleteTournament resets the tournament first: Challonge refuses to delete
+// one that is underway (422), which is every tournament the bot has started.
+// The reset fails harmlessly on a tournament that never started.
 func (c *Client) DeleteTournament(ctx context.Context, tournamentID int64) error {
+	body := map[string]any{"data": map[string]any{"type": "TournamentState", "attributes": map[string]any{"state": "reset"}}}
+	_ = c.do(ctx, http.MethodPut, fmt.Sprintf("/tournaments/%d/change_state.json", tournamentID), body, nil)
 	return c.do(ctx, http.MethodDelete, fmt.Sprintf("/tournaments/%d.json", tournamentID), nil, nil)
 }
 
