@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -327,10 +329,21 @@ func (s *BracketService) build(ctx context.Context, forTournament time.Time) (*B
 		return nil, ErrTooFewTeams
 	}
 
+	oldKept := false
 	if old := s.tournamentID(ctx); old != 0 {
+		// Every path into a rebuild — the scheduler, the Mini App start button,
+		// /build_bracket — ends here, so this is where played results are
+		// protected. Deleting the tournament would throw them away.
+		if has, err := s.HasResults(ctx); err != nil {
+			return nil, err
+		} else if has {
+			return nil, ErrHasResults
+		}
 		if err := s.provider.DeleteTournament(ctx, old); err != nil {
-			// Not fatal: an orphan in Challonge costs nothing here.
+			// Not fatal: an orphan in Challonge costs nothing here. It still
+			// holds its URL, though, so the new one needs another.
 			s.logger.Warn("bracket: delete previous tournament %d: %v", old, err)
+			oldKept = true
 		}
 		s.logWrite("SetSetting", s.repo.SetSetting(ctx, settingChallongeID, ""))
 	}
@@ -352,6 +365,9 @@ func (s *BracketService) build(ctx context.Context, forTournament time.Time) (*B
 		name = activeTourney.Name
 		if activeTourney.Slug != "" {
 			slug = activeTourney.Slug
+			if oldKept {
+				slug += "_" + s.now().UTC().Format("150405")
+			}
 		}
 	}
 	tr, err := s.provider.CreateTournament(ctx, challonge.CreateTournamentParams{
@@ -383,7 +399,6 @@ func (s *BracketService) build(ctx context.Context, forTournament time.Time) (*B
 		activeTourney.ChallongeURL = tr.URL
 		nowFor := forTournament.UTC()
 		activeTourney.ChallongeFor = &nowFor
-		activeTourney.Status = models.TournamentStatusActive
 		_ = s.repo.UpdateTournament(ctx, activeTourney)
 	}
 
@@ -433,6 +448,13 @@ func (s *BracketService) build(ctx context.Context, forTournament time.Time) (*B
 		if !inRound1[st.Team.ID] {
 			byes = append(byes, st.Team)
 		}
+	}
+	// Only a finished build starts the tournament. Marking it earlier hid the
+	// Mini App start button after a failed attempt, leaving a broken bracket
+	// shown as running.
+	if activeTourney != nil {
+		activeTourney.Status = models.TournamentStatusActive
+		s.logWrite("UpdateTournament", s.repo.UpdateTournament(ctx, activeTourney))
 	}
 	return &BracketBuilt{URL: tr.URL, Round1: round1, Byes: byes, Later: later, Incomplete: incomplete}, nil
 }
@@ -486,6 +508,29 @@ func (s *BracketService) sync(ctx context.Context, tID int64) ([]models.BracketM
 		ms = append(ms, bm)
 	}
 	return s.replaceAndReady(ctx, ms)
+}
+
+var challongeSlugPattern = regexp.MustCompile(`^[A-Za-z0-9_]{1,60}$`)
+
+// normalizeChallongeSlug accepts a bare slug or a pasted bracket link and
+// returns the slug. Challonge allows only letters, digits and underscores; a bad
+// one used to surface as a failed build an hour before the start.
+func normalizeChallongeSlug(raw string) (string, error) {
+	s := strings.TrimSpace(raw)
+	if i := strings.IndexAny(s, "?#"); i >= 0 {
+		s = s[:i]
+	}
+	s = strings.TrimRight(s, "/")
+	if i := strings.LastIndex(s, "/"); i >= 0 {
+		s = s[i+1:]
+	}
+	if s == "" {
+		return "", nil
+	}
+	if !challongeSlugPattern.MatchString(s) {
+		return "", fmt.Errorf("Challonge URL %q: допустимы только латинские буквы, цифры и _ (до 60 символов)", s)
+	}
+	return s, nil
 }
 
 func bracketMatchFromRemote(m challonge.Match, byPID map[int64]int) models.BracketMatch {

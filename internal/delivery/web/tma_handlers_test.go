@@ -1002,8 +1002,19 @@ func TestTMAHandlers(t *testing.T) {
 			t.Fatalf("expected 403, got %d", rec.Code)
 		}
 
-		// Admin starts tournament
+		// A running tournament is not rebuilt from the button: a second admin
+		// or a double tap used to wipe the bracket and re-announce it.
 		adminCtx := context.WithValue(context.Background(), userCtxKey, &TelegramUser{ID: 99999})
+		tgSvc.activeTourney = &models.TelegramTournament{ID: 1, Name: "Cup 1", Status: models.TournamentStatusActive, IsActive: true}
+		req = httptest.NewRequest(http.MethodPost, "/api/admin/tournament/start", nil).WithContext(adminCtx)
+		rec = httptest.NewRecorder()
+		server.handleAdminTournamentStart(rec, req)
+		if rec.Code != http.StatusConflict || bracketBuilderCalled {
+			t.Fatalf("start on a running tournament: code %d, builder called %v; want 409 without a build", rec.Code, bracketBuilderCalled)
+		}
+
+		// Admin starts tournament
+		tgSvc.activeTourney = &models.TelegramTournament{ID: 1, Name: "Cup 1", Status: models.TournamentStatusRegistration, IsActive: true}
 		req = httptest.NewRequest(http.MethodPost, "/api/admin/tournament/start", nil).WithContext(adminCtx)
 		rec = httptest.NewRecorder()
 		server.handleAdminTournamentStart(rec, req)

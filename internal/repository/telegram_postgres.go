@@ -741,10 +741,33 @@ func (r *TelegramPostgres) CreateTournament(ctx context.Context, t *models.Teleg
 	if err != nil {
 		return nil, err
 	}
+	if out.IsActive {
+		if err := syncTeamFlagsTx(ctx, tx, out.ID); err != nil {
+			return nil, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return &out, nil
+}
+
+// syncTeamFlagsTx makes telegram_teams.is_checked_in and status mirror the
+// team's entry in the now-active tournament. The UI and several checks read the
+// team row; without this, a check-in or technical defeat from the previous
+// tournament carried over: the Mini App showed a stale "checked in" that the
+// sweep did not see, and last time's disqualified teams could not check in.
+func syncTeamFlagsTx(ctx context.Context, tx *sql.Tx, tournamentID int) error {
+	_, err := tx.ExecContext(ctx, `
+		UPDATE telegram_teams t SET
+			is_checked_in = COALESCE(tt.is_checked_in, FALSE),
+			status = CASE WHEN tt.status = 'disqualified' THEN 'disqualified' ELSE 'active' END,
+			updated_at = NOW()
+		FROM telegram_teams t2
+		LEFT JOIN telegram_tournament_teams tt ON tt.team_id = t2.id AND tt.tournament_id = $1
+		WHERE t.id = t2.id
+	`, tournamentID)
+	return err
 }
 
 func (r *TelegramPostgres) GetActiveTournament(ctx context.Context) (*models.TelegramTournament, error) {
@@ -829,6 +852,9 @@ func (r *TelegramPostgres) SetActiveTournament(ctx context.Context, id int) erro
 	n, _ := res.RowsAffected()
 	if n == 0 {
 		return errors.New("турнир не найден")
+	}
+	if err := syncTeamFlagsTx(ctx, tx, id); err != nil {
+		return err
 	}
 	return tx.Commit()
 }

@@ -3,6 +3,7 @@ package application
 import (
 	"blackwatch/internal/models"
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -799,16 +800,27 @@ func (s *TelegramServiceImpl) confirmCheckIn(ctx context.Context, p *models.Tele
 	if err != nil || team == nil {
 		return "Команда не найдена.", KbNone
 	}
-	if team.Status == models.TeamStatusDisqualified {
+	st, err := s.checkInState(ctx, team)
+	if err != nil {
+		s.logWrite("checkInState", err)
+		return "Не удалось подтвердить участие. Попробуйте /checkin.", KbNone
+	}
+	if st.disqualified {
 		return fmt.Sprintf("Команда '%s' снята с турнира (тех. поражение). Вернуть её могут только организаторы.", team.Name), KbNone
 	}
-	if !team.IsCheckedIn {
+	if !st.checkedIn {
 		members := s.roster(ctx, team.ID)
 		if len(members) < mainRosterSlots {
 			return fmt.Sprintf("Check-in невозможен: в команде %d из %d обязательных игроков. Доукомплектуйте состав (минимум %d игроков).", len(members), mainRosterSlots, mainRosterSlots), KbNone
 		}
-		if err := s.repo.SetCheckIn(ctx, team.ID, true); err != nil {
-			s.logWrite("SetCheckIn", err)
+		// This used to write only the team row, which the technical-defeat
+		// sweep does not read: a captain who pressed the reminder's button
+		// was still disqualified ten minutes after the start.
+		if err := s.recordCheckIn(ctx, st, team.ID, true); err != nil {
+			if errors.Is(err, errNotEntered) {
+				return notEnteredMessage(team.Name, st.tournament), KbNone
+			}
+			s.logWrite("recordCheckIn", err)
 			return "Не удалось подтвердить участие. Попробуйте /checkin.", KbNone
 		}
 	}

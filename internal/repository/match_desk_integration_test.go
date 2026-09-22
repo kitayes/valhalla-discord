@@ -27,11 +27,11 @@ func TestMatchDeskPostgresPersistenceRollbackAndReopen(t *testing.T) {
  CREATE TABLE telegram_settings (key TEXT PRIMARY KEY,value TEXT NOT NULL);
  CREATE TABLE telegram_teams (id INT PRIMARY KEY,name TEXT NOT NULL,status TEXT NOT NULL);
  CREATE TABLE telegram_players (id INT PRIMARY KEY,telegram_id BIGINT,telegram_username TEXT,game_nickname TEXT,game_id TEXT,zone_id TEXT,team_id INT,is_captain BOOLEAN);
- CREATE TABLE telegram_bracket_matches (id INT PRIMARY KEY,challonge_match_id BIGINT,play_order INT,team1_id INT,team2_id INT,state TEXT);
+ CREATE TABLE telegram_bracket_matches (id INT PRIMARY KEY,challonge_match_id BIGINT,round INT NOT NULL DEFAULT 1,play_order INT,team1_id INT,team2_id INT,winner_id INT,state TEXT,scores_csv TEXT NOT NULL DEFAULT '');
  INSERT INTO telegram_settings VALUES ('challonge_tournament_id','123'),('challonge_tournament_for','2026-09-16T12:00:00Z');
  INSERT INTO telegram_teams VALUES (1,'Alpha','active'),(2,'Beta','active');
  INSERT INTO telegram_players (id,telegram_id,team_id,is_captain) VALUES (1,100,1,true),(2,200,2,true);
- INSERT INTO telegram_bracket_matches VALUES (1,111,12,1,2,'open');
+ INSERT INTO telegram_bracket_matches (id,challonge_match_id,play_order,team1_id,team2_id,state) VALUES (1,111,12,1,2,'open');
  `)
 	if err != nil {
 		t.Fatal(err)

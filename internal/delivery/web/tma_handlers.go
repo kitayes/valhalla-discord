@@ -1776,6 +1776,16 @@ func (s *AdminServer) handleAdminTournamentStart(w http.ResponseWriter, r *http.
 		http.Error(w, `{"error":"нет активного турнира"}`, http.StatusBadRequest)
 		return
 	}
+	// The button hides once the tournament runs, but only in a fresh page: a
+	// second admin or a double tap rebuilt the bracket and re-announced it.
+	alreadyBuilt := activeTourney.Status == models.TournamentStatusActive
+	if !alreadyBuilt && s.services.Bracket != nil {
+		alreadyBuilt = s.services.Bracket.IsBuiltFor(r.Context(), s.services.TelegramService.GetTournamentTime(r.Context()))
+	}
+	if alreadyBuilt {
+		http.Error(w, `{"error":"сетка уже построена, турнир запущен. Пересобрать её можно командой /build_bracket в боте"}`, http.StatusConflict)
+		return
+	}
 	if s.bracketBuilder != nil {
 		if err := s.bracketBuilder(r.Context(), user.ID); err != nil {
 			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)

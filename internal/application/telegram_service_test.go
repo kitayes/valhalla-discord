@@ -388,9 +388,42 @@ func (r *fakeTelegramRepo) GetBracketMatchesForTournament(ctx context.Context, t
 }
 
 func (r *fakeTelegramRepo) CreateTournament(ctx context.Context, t *models.TelegramTournament) (*models.TelegramTournament, error) {
+	if t.IsActive {
+		for _, other := range r.tournaments {
+			if other.IsActive {
+				other.IsActive = false
+				other.Status = models.TournamentStatusCompleted
+			}
+		}
+	}
 	t.ID = len(r.tournaments) + 1
 	r.tournaments = append(r.tournaments, t)
+	if t.IsActive {
+		r.syncTeamFlags(t.ID)
+	}
 	return t, nil
+}
+
+// syncTeamFlags mirrors syncTeamFlagsTx: team rows follow their entry in the
+// newly active tournament.
+func (r *fakeTelegramRepo) syncTeamFlags(tournamentID int) {
+	for id, team := range r.teams {
+		tt := r.tournamentTeams[fmt.Sprintf("%d:%d", tournamentID, id)]
+		team.IsCheckedIn = tt != nil && tt.IsCheckedIn
+		team.Status = models.TeamStatusActive
+		if tt != nil && tt.Status == models.TeamStatusDisqualified {
+			team.Status = models.TeamStatusDisqualified
+		}
+	}
+}
+
+func (r *fakeTelegramRepo) isActiveTournament(id int) bool {
+	for _, t := range r.tournaments {
+		if t.ID == id {
+			return t.IsActive
+		}
+	}
+	return false
 }
 
 func (r *fakeTelegramRepo) GetActiveTournament(ctx context.Context) (*models.TelegramTournament, error) {
@@ -423,6 +456,7 @@ func (r *fakeTelegramRepo) SetActiveTournament(ctx context.Context, id int) erro
 	for _, t := range r.tournaments {
 		t.IsActive = (t.ID == id)
 	}
+	r.syncTeamFlags(id)
 	return nil
 }
 
@@ -448,6 +482,10 @@ func (r *fakeTelegramRepo) UpdateTournamentStatus(ctx context.Context, id int, s
 
 func (r *fakeTelegramRepo) RegisterTeamForTournament(ctx context.Context, tournamentID, teamID int) error {
 	key := fmt.Sprintf("%d:%d", tournamentID, teamID)
+	if tt, ok := r.tournamentTeams[key]; ok {
+		tt.Status = "registered" // ON CONFLICT keeps is_checked_in
+		return nil
+	}
 	r.tournamentTeams[key] = &models.TournamentTeam{
 		TournamentID: tournamentID,
 		TeamID:       teamID,
@@ -468,14 +506,18 @@ func (r *fakeTelegramRepo) GetTournamentTeams(ctx context.Context, tournamentID 
 		ids = append(ids, id)
 	}
 	sort.Ints(ids)
+	// Like the SQL: only entered teams, with the entry's check-in and status.
 	var out []models.TelegramTeam
 	for _, id := range ids {
 		t := r.teams[id]
-		teamCopy := *t
-		key := fmt.Sprintf("%d:%d", tournamentID, t.ID)
-		if tt, ok := r.tournamentTeams[key]; ok {
-			teamCopy.IsCheckedIn = tt.IsCheckedIn
+		tt, ok := r.tournamentTeams[fmt.Sprintf("%d:%d", tournamentID, t.ID)]
+		if !ok {
+			continue
 		}
+		teamCopy := *t
+		teamCopy.IsCheckedIn = tt.IsCheckedIn
+		teamCopy.Status = tt.Status
+		teamCopy.ChallongeParticipantID = tt.ChallongeParticipantID
 		teamCopy.Players, _ = r.GetTeamMembers(ctx, t.ID)
 		out = append(out, teamCopy)
 	}
@@ -491,8 +533,12 @@ func (r *fakeTelegramRepo) SetTournamentCheckIn(ctx context.Context, tournamentI
 	key := fmt.Sprintf("%d:%d", tournamentID, teamID)
 	if tt, ok := r.tournamentTeams[key]; ok {
 		tt.IsCheckedIn = status
+		tt.Status = "registered"
+		if status {
+			tt.Status = "checked_in"
+		}
 	}
-	if t, ok := r.teams[teamID]; ok {
+	if t, ok := r.teams[teamID]; ok && r.isActiveTournament(tournamentID) {
 		t.IsCheckedIn = status
 	}
 	return nil
@@ -502,9 +548,6 @@ func (r *fakeTelegramRepo) SetTournamentTeamStatus(ctx context.Context, tourname
 	key := fmt.Sprintf("%d:%d", tournamentID, teamID)
 	if tt, ok := r.tournamentTeams[key]; ok {
 		tt.Status = status
-	}
-	if t, ok := r.teams[teamID]; ok {
-		t.Status = status
 	}
 	return nil
 }

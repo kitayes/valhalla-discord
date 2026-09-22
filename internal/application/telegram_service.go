@@ -321,21 +321,26 @@ func (s *TelegramServiceImpl) ToggleCheckIn(ctx context.Context, tgID int64) str
 	if err != nil || t == nil {
 		return "Команда не найдена."
 	}
-	if t.Status == models.TeamStatusDisqualified {
+	st, err := s.checkInState(ctx, t)
+	if err != nil {
+		s.logWrite("checkInState", err)
+		return "Не удалось изменить статус. Попробуйте ещё раз."
+	}
+	if st.disqualified {
 		return fmt.Sprintf("Команда '%s' снята с турнира (тех. поражение). Вернуть её могут только организаторы.", t.Name)
 	}
-	if !t.IsCheckedIn {
+	checkedIn := !st.checkedIn
+	if checkedIn {
 		members := s.roster(ctx, t.ID)
 		if len(members) < mainRosterSlots {
 			return fmt.Sprintf("Check-in невозможен: в команде %d из %d обязательных игроков. Доукомплектуйте состав (минимум %d игроков).", len(members), mainRosterSlots, mainRosterSlots)
 		}
 	}
-	checkedIn := !t.IsCheckedIn
-	if activeTourney, _ := s.repo.GetActiveTournament(ctx); activeTourney != nil {
-		_ = s.repo.SetTournamentCheckIn(ctx, activeTourney.ID, t.ID, checkedIn)
-	}
-	if err := s.repo.SetCheckIn(ctx, t.ID, checkedIn); err != nil {
-		s.logWrite("SetCheckIn", err)
+	if err := s.recordCheckIn(ctx, st, t.ID, checkedIn); err != nil {
+		if errors.Is(err, errNotEntered) {
+			return notEnteredMessage(t.Name, st.tournament)
+		}
+		s.logWrite("recordCheckIn", err)
 		return "Не удалось изменить статус. Попробуйте ещё раз."
 	}
 	// It is a toggle, so the reply must say which way it went: a captain who
@@ -344,6 +349,72 @@ func (s *TelegramServiceImpl) ToggleCheckIn(ctx context.Context, tgID int64) str
 		return fmt.Sprintf("Check-in подтверждён. Команда '%s' участвует в турнире.", t.Name)
 	}
 	return fmt.Sprintf("Check-in снят. Команда '%s' НЕ подтверждена — нажмите кнопку ещё раз, чтобы подтвердить.", t.Name)
+}
+
+// errNotEntered: the team has no entry in a tournament whose bracket is
+// already built, so checking it in would not put it into the bracket.
+var errNotEntered = errors.New("team is not entered in the active tournament")
+
+// teamCheckIn is a team's check-in as the tournament logic sees it.
+type teamCheckIn struct {
+	tournament   *models.TelegramTournament // nil without an active tournament
+	entry        *models.TournamentTeam     // nil when the team is not entered
+	checkedIn    bool
+	disqualified bool
+}
+
+// checkInState reads the check-in from the active tournament's entry — the
+// record the bracket, the reminders and the technical-defeat sweep use. The
+// team row is only a mirror of it and is consulted when no tournament is active.
+func (s *TelegramServiceImpl) checkInState(ctx context.Context, team *models.TelegramTeam) (teamCheckIn, error) {
+	st := teamCheckIn{checkedIn: team.IsCheckedIn, disqualified: team.Status == models.TeamStatusDisqualified}
+	active, err := s.repo.GetActiveTournament(ctx)
+	if err != nil {
+		return st, err
+	}
+	if active == nil {
+		return st, nil
+	}
+	st.tournament = active
+	st.entry, err = s.repo.GetTournamentTeam(ctx, active.ID, team.ID)
+	if err != nil {
+		return st, err
+	}
+	st.checkedIn = st.entry != nil && st.entry.IsCheckedIn
+	st.disqualified = st.disqualified || (st.entry != nil && st.entry.Status == models.TeamStatusDisqualified)
+	return st, nil
+}
+
+// recordCheckIn writes the check-in to the tournament entry and its mirror on
+// the team row. A team checking in without an entry is entered while
+// registration is still open: a captain who confirms participation means to
+// play, and without the entry the bracket silently left the team out.
+func (s *TelegramServiceImpl) recordCheckIn(ctx context.Context, st teamCheckIn, teamID int, checkedIn bool) error {
+	if st.tournament != nil {
+		if st.entry == nil {
+			if !checkedIn {
+				return s.repo.SetCheckIn(ctx, teamID, false)
+			}
+			if !tournamentAcceptsEntries(st.tournament) {
+				return errNotEntered
+			}
+			if err := s.repo.RegisterTeamForTournament(ctx, st.tournament.ID, teamID); err != nil {
+				return err
+			}
+		}
+		if err := s.repo.SetTournamentCheckIn(ctx, st.tournament.ID, teamID, checkedIn); err != nil {
+			return err
+		}
+	}
+	return s.repo.SetCheckIn(ctx, teamID, checkedIn)
+}
+
+func tournamentAcceptsEntries(t *models.TelegramTournament) bool {
+	return t.Status == models.TournamentStatusRegistration || t.Status == models.TournamentStatusDraft
+}
+
+func notEnteredMessage(teamName string, t *models.TelegramTournament) string {
+	return fmt.Sprintf("Команда '%s' не заявлена на турнир «%s», а сетка уже сформирована. Обратитесь к организаторам.", teamName, t.Name)
 }
 
 func (s *TelegramServiceImpl) DeleteTeam(ctx context.Context, tgID int64) string {
@@ -798,6 +869,11 @@ func (s *TelegramServiceImpl) LeaveTeam(ctx context.Context, playerTgID int64) e
 			return errors.New("выход заблокирован: турнир уже идёт. Обратитесь к организаторам")
 		}
 	}
+	// A checked-in team that drops below the main roster is left out of the
+	// bracket as incomplete, so the roster stays locked like kicks and edits.
+	if team.IsCheckedIn {
+		return errors.New("выход заблокирован: команда уже прошла Check-in. Попросите капитана снять Check-in")
+	}
 	return s.repo.UpdatePlayerFieldByID(ctx, p.ID, "team_id", nil)
 }
 
@@ -906,11 +982,28 @@ func (s *TelegramServiceImpl) SetTournamentTime(ctx context.Context, t time.Time
 	} else {
 		s.logWrite("SetSetting", s.repo.SetSetting(ctx, "tournament_time", t.Format(time.RFC3339)))
 	}
+	// A built bracket moves with the tournament. The scheduler rebuilds whenever
+	// the bracket was built for a different time, so postponing the start after
+	// the build used to delete the Challonge tournament — played results
+	// included — and announce a freshly seeded one.
+	moveBracket := false
+	if !t.IsZero() {
+		id, _ := s.repo.GetSetting(ctx, settingChallongeID)
+		builtFor, _ := s.repo.GetSetting(ctx, settingChallongeFor)
+		moveBracket = id != "" && builtFor != ""
+	}
+	if moveBracket {
+		s.logWrite("SetSetting", s.repo.SetSetting(ctx, settingChallongeFor, t.UTC().Format(time.RFC3339)))
+	}
 	if active, _ := s.repo.GetActiveTournament(ctx); active != nil {
 		if t.IsZero() {
 			active.TournamentTime = nil
 		} else {
 			active.TournamentTime = &t
+		}
+		if moveBracket && active.ChallongeFor != nil {
+			utc := t.UTC()
+			active.ChallongeFor = &utc
 		}
 		_ = s.repo.UpdateTournament(ctx, active)
 	}
@@ -984,6 +1077,11 @@ func (s *TelegramServiceImpl) AdminReinstateTeam(ctx context.Context, name strin
 	}
 	s.logWrite("SetTeamStatus", s.repo.SetTeamStatus(ctx, t.ID, models.TeamStatusActive))
 	s.logWrite("SetCheckIn", s.repo.SetCheckIn(ctx, t.ID, true))
+	// The tournament entry is what the bracket and the sweeps read; setting its
+	// check-in also moves its status off "disqualified".
+	if active, _ := s.repo.GetActiveTournament(ctx); active != nil {
+		s.logWrite("SetTournamentCheckIn", s.repo.SetTournamentCheckIn(ctx, active.ID, t.ID, true))
+	}
 	return fmt.Sprintf("Команда '%s' возвращена в турнир и отмечена как прошедшая check-in.", t.Name)
 }
 
@@ -1851,6 +1949,10 @@ func (s *TelegramServiceImpl) CreateTournament(ctx context.Context, name, slug s
 	if name == "" {
 		return nil, errors.New("название турнира не может быть пустым")
 	}
+	slug, err := normalizeChallongeSlug(slug)
+	if err != nil {
+		return nil, err
+	}
 	if slug == "" {
 		slug = "tourney_" + time.Now().UTC().Format("20060102_150405")
 	}
@@ -2003,7 +2105,14 @@ func (s *TelegramServiceImpl) UnregisterTeamFromTournament(ctx context.Context, 
 	if tourney.Status != models.TournamentStatusRegistration && tourney.Status != models.TournamentStatusDraft {
 		return errors.New("нельзя снять команду: этап уже активен")
 	}
-	return s.repo.UnregisterTeamFromTournament(ctx, tournamentID, *p.TeamID)
+	if err := s.repo.UnregisterTeamFromTournament(ctx, tournamentID, *p.TeamID); err != nil {
+		return err
+	}
+	// Without an entry there is no check-in; keep the team row's mirror honest.
+	if tourney.IsActive {
+		s.logWrite("SetCheckIn", s.repo.SetCheckIn(ctx, *p.TeamID, false))
+	}
+	return nil
 }
 
 func (s *TelegramServiceImpl) GetBracketForTournament(ctx context.Context, tournamentID int) ([]models.BracketMatch, error) {
