@@ -681,6 +681,25 @@
             padding: 20px;
         }
         .modal.active { display: flex; }
+        /* Full-screen sub-page (admin team panel): opens over the tabs, closed by Back. */
+        .modal.modal-screen {
+            background: var(--bg-color);
+            backdrop-filter: none;
+            padding: 0;
+            align-items: stretch;
+            justify-content: stretch;
+        }
+        .modal-screen-body {
+            width: 100%;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            padding: 16px 16px 40px;
+        }
+        .modal-screen-back {
+            background: none; border: none; color: var(--text-muted);
+            font-size: 13px; padding: 4px 0 12px; cursor: pointer;
+        }
+        #adminPlayerModal { z-index: 210; }
         .modal-content {
             background: var(--card-bg);
             border: 1px solid var(--card-border);
@@ -2039,6 +2058,14 @@
             </div>
             <button class="btn btn-gold" onclick="saveAdminPlayer()"><span>Сохранить</span></button>
             <button class="btn btn-red-outline" onclick="closeAdminPlayerModal()">Отмена</button>
+        </div>
+    </div>
+
+    <!-- Admin Team Screen (full-screen; after the player modal so Back closes the editor first) -->
+    <div class="modal modal-screen" id="adminTeamScreen">
+        <div class="modal-screen-body">
+            <button class="modal-screen-back" onclick="closeAdminTeam()">← К списку команд</button>
+            <div id="adminTeamScreenContent"></div>
         </div>
     </div>
 
@@ -4600,7 +4627,7 @@
 
         // Admin: registered teams & rosters
         let adminTeamsData = [];
-        const adminTeamsOpen = new Set();
+        let adminOpenTeamID = null;
 
         function adminTeamStatus(t) {
             if (t.status === 'disqualified') return { text: 'ТП', cls: 'status-waiting' };
@@ -4616,67 +4643,92 @@
             renderAdminTeams();
         }
 
+        // Compact list: one row per team, tap opens the team screen.
         function renderAdminTeams() {
             const list = document.getElementById('adminTeamsList');
             if (!list) return;
             document.getElementById('adminTeamsCount').textContent = adminTeamsData.length ? `${adminTeamsData.length} шт.` : '';
             if (!adminTeamsData.length) {
                 list.innerHTML = `<div class="card" style="text-align: center; color: var(--text-muted); font-size: 13px; padding: 18px;">Команд пока нет</div>`;
-                return;
-            }
-            list.innerHTML = adminTeamsData.map(t => {
-                const st = adminTeamStatus(t);
-                const isOpen = adminTeamsOpen.has(t.id);
-                const dq = t.status === 'disqualified';
-                const players = (t.players || []).map(p => {
-                    const tags = (p.is_captain ? ' <span class="badge-role">КАП</span>' : '') + (p.is_substitute ? ' <span class="badge-role">ЗАП</span>' : '');
-                    const tg = p.telegram_username ? ` · @${escapeHtml(p.telegram_username)}` : '';
+            } else {
+                list.innerHTML = adminTeamsData.map(t => {
+                    const st = adminTeamStatus(t);
+                    const search = [t.name].concat((t.players || []).map(p => `${p.game_nickname} ${p.game_id} ${p.telegram_username}`)).join(' ');
                     return `
-                        <div style="padding: 8px 0; border-top: 1px solid var(--card-border);">
-                            <div style="font-size: 13px; font-weight: 600;">${escapeHtml(p.game_nickname || p.first_name || '—')}${tags}</div>
-                            <div style="font-size: 11px; color: var(--text-muted); margin: 2px 0 6px;">
-                                ID ${escapeHtml(p.game_id || '—')} (${escapeHtml(p.zone_id || '—')}) · ${escapeHtml(p.main_role || 'роль не указана')}${p.stars ? ' · ' + p.stars + '★' : ''}${tg}
-                            </div>
-                            <div style="display: flex; gap: 6px;">
-                                <button class="btn btn-sm btn-gold" style="flex: 1;" onclick="openAdminPlayerModal(${t.id}, ${p.id})"><span>Изменить</span></button>
-                                ${p.is_captain || !p.telegram_id ? '' : `<button class="btn btn-sm" style="flex: 1;" onclick="adminSetCaptain(${p.id})"><span>Капитан</span></button>`}
-                                ${p.is_captain ? '' : `<button class="btn btn-sm btn-red-outline" style="flex: 1;" onclick="adminKickPlayer(${p.id})"><span>Выгнать</span></button>`}
+                        <div class="card admin-team-card" data-search="${escapeHtml(search.toLowerCase())}" style="cursor: pointer;" onclick="openAdminTeam(${t.id})">
+                            <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+                                <div style="min-width: 0;">
+                                    <strong style="font-size: 14px;">${escapeHtml(t.name)}</strong>
+                                    <div style="font-size: 11px; color: var(--text-muted);">${(t.players || []).length} игроков ›</div>
+                                </div>
+                                <span class="status-pill ${st.cls}">${st.text}</span>
                             </div>
                         </div>`;
-                }).join('') || '<div style="font-size: 12px; color: var(--text-muted); padding: 8px 0;">Состав пуст</div>';
-                return `
-                    <div class="card admin-team-card" data-team="${t.id}">
-                        <div style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;" onclick="toggleAdminTeam(${t.id})">
-                            <div>
-                                <strong style="font-size: 14px;">${escapeHtml(t.name)}</strong>
-                                <div style="font-size: 11px; color: var(--text-muted);">${(t.players || []).length} игроков</div>
-                            </div>
-                            <span class="status-pill ${st.cls}">${st.text}</span>
-                        </div>
-                        <div style="display: ${isOpen ? 'block' : 'none'}; margin-top: 10px;">
-                            <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px;">
-                                ${dq
-                                    ? `<button class="btn btn-sm btn-green" style="flex: 1;" onclick="adminTeamAction(${t.id}, 'reinstate')"><span>Вернуть в турнир</span></button>`
-                                    : `<button class="btn btn-sm ${t.is_checked_in ? '' : 'btn-green'}" style="flex: 1;" onclick="adminTeamAction(${t.id}, '${t.is_checked_in ? 'uncheckin' : 'checkin'}')"><span>${t.is_checked_in ? 'Снять check-in' : 'Отметить check-in'}</span></button>
-                                       <button class="btn btn-sm btn-gold" style="flex: 1;" onclick="adminTeamAction(${t.id}, 'disqualify')"><span>ТП</span></button>`}
-                                <button class="btn btn-sm btn-red-outline" style="flex: 1;" onclick="adminDeleteTeam(${t.id})"><span>Удалить</span></button>
-                            </div>
-                            ${players}
-                        </div>
-                    </div>`;
-            }).join('');
-            filterAdminTeams(document.getElementById('adminTeamsSearch').value);
+                }).join('');
+                filterAdminTeams(document.getElementById('adminTeamsSearch').value);
+            }
+            if (adminOpenTeamID !== null) {
+                if (adminTeamsData.some(t => t.id === adminOpenTeamID)) renderAdminTeamScreen();
+                else closeAdminTeam();
+            }
         }
 
-        function toggleAdminTeam(id) {
-            if (adminTeamsOpen.has(id)) adminTeamsOpen.delete(id); else adminTeamsOpen.add(id);
-            renderAdminTeams();
+        function openAdminTeam(id) {
+            adminOpenTeamID = id;
+            renderAdminTeamScreen();
+            document.getElementById('adminTeamScreen').classList.add('active');
+            updateBackButton();
+        }
+
+        function closeAdminTeam() {
+            adminOpenTeamID = null;
+            document.getElementById('adminTeamScreen').classList.remove('active');
+            updateBackButton();
+        }
+
+        // Full team page: header, referee actions, then the roster.
+        function renderAdminTeamScreen() {
+            const t = adminTeamsData.find(x => x.id === adminOpenTeamID);
+            if (!t) return;
+            const st = adminTeamStatus(t);
+            const dq = t.status === 'disqualified';
+            const players = (t.players || []).map(p => {
+                const tags = (p.is_captain ? ' <span class="badge-role">КАП</span>' : '') + (p.is_substitute ? ' <span class="badge-role">ЗАП</span>' : '');
+                const tg = p.telegram_username ? ` · @${escapeHtml(p.telegram_username)}` : '';
+                return `
+                    <div class="card">
+                        <div style="font-size: 14px; font-weight: 600;">${escapeHtml(p.game_nickname || p.first_name || '—')}${tags}</div>
+                        <div style="font-size: 12px; color: var(--text-muted); margin: 4px 0 10px;">
+                            ID ${escapeHtml(p.game_id || '—')} (${escapeHtml(p.zone_id || '—')}) · ${escapeHtml(p.main_role || 'роль не указана')}${p.stars ? ' · ' + p.stars + '★' : ''}${tg}
+                        </div>
+                        <div style="display: flex; gap: 6px;">
+                            <button class="btn btn-sm btn-gold" style="flex: 1;" onclick="openAdminPlayerModal(${t.id}, ${p.id})"><span>Изменить</span></button>
+                            ${p.is_captain || !p.telegram_id ? '' : `<button class="btn btn-sm" style="flex: 1;" onclick="adminSetCaptain(${p.id})"><span>Капитан</span></button>`}
+                            ${p.is_captain ? '' : `<button class="btn btn-sm btn-red-outline" style="flex: 1;" onclick="adminKickPlayer(${p.id})"><span>Выгнать</span></button>`}
+                        </div>
+                    </div>`;
+            }).join('') || '<div class="card" style="font-size: 13px; color: var(--text-muted); text-align: center;">Состав пуст</div>';
+            document.getElementById('adminTeamScreenContent').innerHTML = `
+                <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 14px;">
+                    <div style="font-size: 20px; font-weight: 800; min-width: 0; word-break: break-word;">${escapeHtml(t.name)}</div>
+                    <span class="status-pill ${st.cls}">${st.text}</span>
+                </div>
+                <div class="admin-section-header"><span>Действия судьи</span></div>
+                <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px;">
+                    ${dq
+                        ? `<button class="btn btn-sm btn-green" style="flex: 1;" onclick="adminTeamAction(${t.id}, 'reinstate')"><span>Вернуть в турнир</span></button>`
+                        : `<button class="btn btn-sm ${t.is_checked_in ? '' : 'btn-green'}" style="flex: 1;" onclick="adminTeamAction(${t.id}, '${t.is_checked_in ? 'uncheckin' : 'checkin'}')"><span>${t.is_checked_in ? 'Снять check-in' : 'Отметить check-in'}</span></button>
+                           <button class="btn btn-sm btn-gold" style="flex: 1;" onclick="adminTeamAction(${t.id}, 'disqualify')"><span>ТП</span></button>`}
+                    <button class="btn btn-sm btn-red-outline" style="flex: 1;" onclick="adminDeleteTeam(${t.id})"><span>Удалить</span></button>
+                </div>
+                <div class="admin-section-header"><span>Состав (${(t.players || []).length})</span></div>
+                ${players}`;
         }
 
         function filterAdminTeams(query) {
             query = (query || '').trim().toLowerCase();
             document.querySelectorAll('#adminTeamsList .admin-team-card').forEach(c => {
-                c.style.display = !query || c.textContent.toLowerCase().includes(query) ? '' : 'none';
+                c.style.display = !query || (c.dataset.search || '').includes(query) ? '' : 'none';
             });
         }
 
