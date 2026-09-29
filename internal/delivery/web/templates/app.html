@@ -1679,6 +1679,19 @@
             <!-- Dynamically populated -->
         </div>
 
+        <!-- Section: Registered Teams & Rosters -->
+        <div class="admin-section-header">
+            <span>Зарегистрированные команды</span>
+            <span id="adminTeamsCount" style="font-size: 11px; color: var(--text-muted);"></span>
+        </div>
+        <div style="margin-bottom: 12px; position: relative;">
+            <input type="text" id="adminTeamsSearch" class="form-input" placeholder="Поиск по команде, нику или ID игрока..." oninput="filterAdminTeams(this.value)" style="padding-left: 36px;">
+            <svg style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none;" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        </div>
+        <div id="adminTeamsList">
+            <!-- Dynamically populated -->
+        </div>
+
         <!-- Section 3: Check-in & Debtors Monitor -->
         <div class="admin-section-header">
             <span>Контроль Check-in и Должники</span>
@@ -2000,6 +2013,32 @@
                 <span>Присудить победу</span>
             </button>
             <button class="btn btn-red-outline" onclick="closeTechWinModal()">Отмена</button>
+        </div>
+    </div>
+
+    <!-- Admin Edit Player Modal -->
+    <div class="modal" id="adminPlayerModal">
+        <div class="modal-content">
+            <div class="modal-title">Редактировать игрока</div>
+            <input type="hidden" id="adminPlayerID">
+            <div class="form-group">
+                <label class="form-label">Игровой ник</label>
+                <input type="text" id="adminPlayerNick" class="form-input" maxlength="64">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Game ID</label>
+                <input type="text" id="adminPlayerGameID" class="form-input" maxlength="32">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Zone ID</label>
+                <input type="text" id="adminPlayerZoneID" class="form-input" maxlength="16">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Роль</label>
+                <input type="text" id="adminPlayerRole" class="form-input" maxlength="32">
+            </div>
+            <button class="btn btn-gold" onclick="saveAdminPlayer()"><span>Сохранить</span></button>
+            <button class="btn btn-red-outline" onclick="closeAdminPlayerModal()">Отмена</button>
         </div>
     </div>
 
@@ -4559,6 +4598,157 @@
             });
         }
 
+        // Admin: registered teams & rosters
+        let adminTeamsData = [];
+        const adminTeamsOpen = new Set();
+
+        function adminTeamStatus(t) {
+            if (t.status === 'disqualified') return { text: 'ТП', cls: 'status-waiting' };
+            if (t.is_checked_in) return { text: 'CHECK-IN', cls: 'status-ready' };
+            return { text: 'НЕ ГОТОВА', cls: 'status-waiting' };
+        }
+
+        async function loadAdminTeams() {
+            if (!currentUserIsAdmin) return;
+            const data = await apiFetch('/api/admin/teams');
+            if (!data || data.ok === false) return;
+            adminTeamsData = data.teams || [];
+            renderAdminTeams();
+        }
+
+        function renderAdminTeams() {
+            const list = document.getElementById('adminTeamsList');
+            if (!list) return;
+            document.getElementById('adminTeamsCount').textContent = adminTeamsData.length ? `${adminTeamsData.length} шт.` : '';
+            if (!adminTeamsData.length) {
+                list.innerHTML = `<div class="card" style="text-align: center; color: var(--text-muted); font-size: 13px; padding: 18px;">Команд пока нет</div>`;
+                return;
+            }
+            list.innerHTML = adminTeamsData.map(t => {
+                const st = adminTeamStatus(t);
+                const isOpen = adminTeamsOpen.has(t.id);
+                const dq = t.status === 'disqualified';
+                const players = (t.players || []).map(p => {
+                    const tags = (p.is_captain ? ' <span class="badge-role">КАП</span>' : '') + (p.is_substitute ? ' <span class="badge-role">ЗАП</span>' : '');
+                    const tg = p.telegram_username ? ` · @${escapeHtml(p.telegram_username)}` : '';
+                    return `
+                        <div style="padding: 8px 0; border-top: 1px solid var(--card-border);">
+                            <div style="font-size: 13px; font-weight: 600;">${escapeHtml(p.game_nickname || p.first_name || '—')}${tags}</div>
+                            <div style="font-size: 11px; color: var(--text-muted); margin: 2px 0 6px;">
+                                ID ${escapeHtml(p.game_id || '—')} (${escapeHtml(p.zone_id || '—')}) · ${escapeHtml(p.main_role || 'роль не указана')}${p.stars ? ' · ' + p.stars + '★' : ''}${tg}
+                            </div>
+                            <div style="display: flex; gap: 6px;">
+                                <button class="btn btn-sm btn-gold" style="flex: 1;" onclick="openAdminPlayerModal(${t.id}, ${p.id})"><span>Изменить</span></button>
+                                ${p.is_captain || !p.telegram_id ? '' : `<button class="btn btn-sm" style="flex: 1;" onclick="adminSetCaptain(${p.id})"><span>Капитан</span></button>`}
+                                ${p.is_captain ? '' : `<button class="btn btn-sm btn-red-outline" style="flex: 1;" onclick="adminKickPlayer(${p.id})"><span>Выгнать</span></button>`}
+                            </div>
+                        </div>`;
+                }).join('') || '<div style="font-size: 12px; color: var(--text-muted); padding: 8px 0;">Состав пуст</div>';
+                return `
+                    <div class="card admin-team-card" data-team="${t.id}">
+                        <div style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;" onclick="toggleAdminTeam(${t.id})">
+                            <div>
+                                <strong style="font-size: 14px;">${escapeHtml(t.name)}</strong>
+                                <div style="font-size: 11px; color: var(--text-muted);">${(t.players || []).length} игроков</div>
+                            </div>
+                            <span class="status-pill ${st.cls}">${st.text}</span>
+                        </div>
+                        <div style="display: ${isOpen ? 'block' : 'none'}; margin-top: 10px;">
+                            <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px;">
+                                ${dq
+                                    ? `<button class="btn btn-sm btn-green" style="flex: 1;" onclick="adminTeamAction(${t.id}, 'reinstate')"><span>Вернуть в турнир</span></button>`
+                                    : `<button class="btn btn-sm ${t.is_checked_in ? '' : 'btn-green'}" style="flex: 1;" onclick="adminTeamAction(${t.id}, '${t.is_checked_in ? 'uncheckin' : 'checkin'}')"><span>${t.is_checked_in ? 'Снять check-in' : 'Отметить check-in'}</span></button>
+                                       <button class="btn btn-sm btn-gold" style="flex: 1;" onclick="adminTeamAction(${t.id}, 'disqualify')"><span>ТП</span></button>`}
+                                <button class="btn btn-sm btn-red-outline" style="flex: 1;" onclick="adminDeleteTeam(${t.id})"><span>Удалить</span></button>
+                            </div>
+                            ${players}
+                        </div>
+                    </div>`;
+            }).join('');
+            filterAdminTeams(document.getElementById('adminTeamsSearch').value);
+        }
+
+        function toggleAdminTeam(id) {
+            if (adminTeamsOpen.has(id)) adminTeamsOpen.delete(id); else adminTeamsOpen.add(id);
+            renderAdminTeams();
+        }
+
+        function filterAdminTeams(query) {
+            query = (query || '').trim().toLowerCase();
+            document.querySelectorAll('#adminTeamsList .admin-team-card').forEach(c => {
+                c.style.display = !query || c.textContent.toLowerCase().includes(query) ? '' : 'none';
+            });
+        }
+
+        async function adminTeamPost(url, body, okFallback) {
+            const res = await apiFetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            if (res && res.ok) {
+                showToast(res.message || okFallback, true);
+                await loadAdminDesk(true); // also reloads the teams list
+                return true;
+            }
+            showToast((res && res.error) || 'Не удалось выполнить действие', false);
+            return false;
+        }
+
+        async function adminTeamAction(teamID, action) {
+            const texts = {
+                disqualify: 'Снять команду с турнира (тех. поражение)? Её открытые матчи будут засчитаны как поражение.',
+                uncheckin: 'Снять check-in у команды?'
+            };
+            if (texts[action] && !(await appConfirm(texts[action]))) return;
+            await adminTeamPost('/api/admin/team/action', { team_id: teamID, action }, 'Готово');
+        }
+
+        async function adminDeleteTeam(teamID) {
+            const t = adminTeamsData.find(x => x.id === teamID);
+            if (!(await appConfirm(`Удалить команду «${t ? t.name : teamID}»? Игроки будут откреплены.`))) return;
+            await adminTeamPost('/api/admin/team/delete', { team_id: teamID }, 'Команда удалена');
+        }
+
+        async function adminKickPlayer(playerID) {
+            if (!(await appConfirm('Исключить игрока из команды?'))) return;
+            await adminTeamPost('/api/admin/team/kick', { player_id: playerID }, 'Игрок исключён');
+        }
+
+        async function adminSetCaptain(playerID) {
+            if (!(await appConfirm('Назначить этого игрока капитаном?'))) return;
+            await adminTeamPost('/api/admin/team/captain', { player_id: playerID }, 'Капитан назначен');
+        }
+
+        function openAdminPlayerModal(teamID, playerID) {
+            const t = adminTeamsData.find(x => x.id === teamID);
+            const p = t && (t.players || []).find(x => x.id === playerID);
+            if (!p) return;
+            document.getElementById('adminPlayerID').value = p.id;
+            document.getElementById('adminPlayerNick').value = p.game_nickname || '';
+            document.getElementById('adminPlayerGameID').value = p.game_id || '';
+            document.getElementById('adminPlayerZoneID').value = p.zone_id || '';
+            document.getElementById('adminPlayerRole').value = p.main_role || '';
+            document.getElementById('adminPlayerModal').classList.add('active');
+            updateBackButton();
+        }
+
+        function closeAdminPlayerModal() {
+            document.getElementById('adminPlayerModal').classList.remove('active');
+            updateBackButton();
+        }
+
+        async function saveAdminPlayer() {
+            const ok = await adminTeamPost('/api/admin/team/player', {
+                player_id: parseInt(document.getElementById('adminPlayerID').value, 10),
+                nickname: document.getElementById('adminPlayerNick').value,
+                game_id: document.getElementById('adminPlayerGameID').value,
+                zone_id: document.getElementById('adminPlayerZoneID').value,
+                role: document.getElementById('adminPlayerRole').value
+            }, 'Данные игрока сохранены');
+            if (ok) closeAdminPlayerModal();
+        }
+
         // Bracket Match Details & Rosters Modal Functions
         let currentBMData = null;
         let selectedBMTeamSide = 1;
@@ -4700,6 +4890,7 @@
             const data = await apiFetch('/api/admin/desk');
             if (!data || data.ok === false) return;
             adminDeskData = data;
+            loadAdminTeams();
 
             // Global Status
             const globalPill = document.getElementById('adminGlobalStatusPill');
@@ -5583,6 +5774,7 @@
 
                 sseConnection.addEventListener('team_update', () => {
                     loadProfile();
+                    if (currentUserIsAdmin) loadAdminTeams();
                 });
 
                 sseConnection.addEventListener('tournaments_update', () => {

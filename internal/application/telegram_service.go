@@ -105,6 +105,15 @@ type TelegramService interface {
 	GetTeamCaptains(ctx context.Context, teamID int) ([]models.TelegramPlayer, error)
 	SetMatchNotifier(fn func(ctx context.Context, chatID int64, text string, hasWebAppBtn bool))
 	GetTeamDetails(ctx context.Context, teamID int) (*models.TelegramTeam, []models.TelegramPlayer, error)
+
+	// Referee panel: team roster review and management (telegram_admin_teams.go)
+	AdminListTeams(ctx context.Context, tournamentID int) ([]models.TelegramTeam, error)
+	AdminUpdatePlayer(ctx context.Context, playerID int, nick, gameID, zoneID, role string) error
+	AdminKickPlayer(ctx context.Context, playerID int) error
+	AdminSetCaptain(ctx context.Context, playerID int) error
+	AdminTeamAction(ctx context.Context, teamID int, action string) (string, error)
+	AdminDeleteTeamByID(ctx context.Context, teamID int) error
+
 	GetBracketMatchDetails(ctx context.Context, matchID int) (*BracketMatchDetails, error)
 
 	// League & Tournaments
@@ -1075,6 +1084,10 @@ func (s *TelegramServiceImpl) AdminReinstateTeam(ctx context.Context, name strin
 	if err != nil || t == nil {
 		return fmt.Sprintf("Команда '%s' не найдена.", name)
 	}
+	return s.reinstateTeam(ctx, t)
+}
+
+func (s *TelegramServiceImpl) reinstateTeam(ctx context.Context, t *models.TelegramTeam) string {
 	s.logWrite("SetTeamStatus", s.repo.SetTeamStatus(ctx, t.ID, models.TeamStatusActive))
 	s.logWrite("SetCheckIn", s.repo.SetCheckIn(ctx, t.ID, true))
 	// The tournament entry is what the bracket and the sweeps read; setting its
