@@ -18,9 +18,10 @@ const (
 	// teamSize is how many players make up one side of a match.
 	teamSize = 5
 
-	topPlayersLimit      = 10
-	maxMessageLength     = 2000
-	maxMessageTruncation = 1990
+	topPlayersLimit           = 10
+	maxMessageLength          = 2000
+	maxMessageTruncation      = 1990
+	maxEmbedDescriptionLength = 4096
 
 	// Screenshot upload budget: 5 in a row per user refilling at 1/second, with
 	// a 30-upload burst for the whole guild refilling at 5/second.

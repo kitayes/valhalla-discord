@@ -7,21 +7,26 @@ import (
 )
 
 // truncateMessage caps a message at Discord's 2000-character limit.
+func truncateMessage(msg string) string {
+	return truncateText(msg, maxMessageLength)
+}
+
+// truncateText caps text at limit characters, saying so at the end.
 //
 // Discord counts characters, not bytes, and rejects invalid UTF-8 outright —
 // slicing the string at a byte offset cut Cyrillic player names in half, which
 // is most of the roster here.
-func truncateMessage(msg string) string {
-	if utf8.RuneCountInString(msg) <= maxMessageLength {
+func truncateText(msg string, limit int) string {
+	if utf8.RuneCountInString(msg) <= limit {
 		return msg
 	}
 
 	const notice = "...\n(список обрезан)"
-	limit := maxMessageLength - utf8.RuneCountInString(notice)
+	keep := limit - utf8.RuneCountInString(notice)
 
 	count := 0
 	for idx := range msg {
-		if count == limit {
+		if count == keep {
 			return msg[:idx] + notice
 		}
 		count++

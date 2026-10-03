@@ -436,7 +436,9 @@ func (b *Bot) respondMixCreated(s *discordgo.Session, i *discordgo.Interaction, 
 }
 
 func (b *Bot) buildLobbyEmbed() *discordgo.MessageEmbed {
-	description := b.services.Lobby.FormatPlayerList()
+	// A full lobby of a hundred names can run past the embed description limit,
+	// and Discord rejects the whole update rather than cutting it.
+	description := truncateText(b.services.Lobby.FormatPlayerList(), maxEmbedDescriptionLength)
 
 	return &discordgo.MessageEmbed{
 		Title:       "Игровое Лобби",

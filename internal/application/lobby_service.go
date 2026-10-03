@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	lobbyCapacity = 10
+	lobbyCapacity = 100
 	// inactivityTimeout is how long a player may sit idle before being warned.
 	inactivityTimeout = 45 * time.Minute
 	// inactivityGrace is how much longer they get to react to that warning
@@ -100,7 +100,7 @@ type notice struct {
 type LobbyService struct {
 	mu        sync.RWMutex
 	mainQueue []lobbyEntry // max capacity = lobbyCapacity
-	waitlist  []lobbyEntry // overflow beyond 10
+	waitlist  []lobbyEntry // overflow beyond lobbyCapacity
 	isOpen    bool
 
 	logger       Logger

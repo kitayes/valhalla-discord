@@ -66,3 +66,21 @@ func TestThreadNameCapsLongNames(t *testing.T) {
 		t.Errorf("thread name is %d characters, over Discord's %d limit", n, maxThreadNameLength)
 	}
 }
+
+// A lobby of a hundred players renders past Discord's 4096-character embed
+// description, and Discord then rejects the whole lobby update.
+func TestTruncateTextRespectsTheGivenLimit(t *testing.T) {
+	msg := strings.Repeat("ДлинныйНикИгрока ", 400)
+
+	got := truncateText(msg, maxEmbedDescriptionLength)
+
+	if !utf8.ValidString(got) {
+		t.Error("truncateText produced invalid UTF-8")
+	}
+	if n := utf8.RuneCountInString(got); n > maxEmbedDescriptionLength {
+		t.Errorf("truncated text is %d characters, over the %d limit", n, maxEmbedDescriptionLength)
+	}
+	if !strings.HasSuffix(got, "(список обрезан)") {
+		t.Error("truncated text does not say it was cut")
+	}
+}

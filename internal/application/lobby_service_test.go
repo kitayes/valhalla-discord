@@ -106,14 +106,14 @@ func TestTryAddPlayerFillsMainThenWaitlist(t *testing.T) {
 		t.Fatalf("main queue holds %d players, want %d", got, lobbyCapacity)
 	}
 
-	place, err := l.TryAddPlayer(context.Background(), models.Player{ID: 99, Name: "overflow"}, "discord-overflow")
+	place, err := l.TryAddPlayer(context.Background(), models.Player{ID: 1000, Name: "overflow"}, "discord-overflow")
 	if err != nil {
-		t.Fatalf("11th player rejected: %v", err)
+		t.Fatalf("overflow player rejected: %v", err)
 	}
 	if place != PlaceWaitlist {
-		t.Errorf("11th player went to %q, want waitlist", place)
+		t.Errorf("overflow player went to %q, want waitlist", place)
 	}
-	if l.IsPlayerActive(99) {
+	if l.IsPlayerActive(1000) {
 		t.Error("waitlisted player must not count as active")
 	}
 }
@@ -147,11 +147,11 @@ func TestTryAddPlayerRejectedWhenLobbyClosed(t *testing.T) {
 func TestRemovePlayerPromotesFromWaitlist(t *testing.T) {
 	l, rec := newTestLobby()
 	addPlayers(t, l, lobbyCapacity)
-	l.TryAddPlayer(context.Background(), models.Player{ID: 99, Name: "reserve"}, "discord-reserve")
+	l.TryAddPlayer(context.Background(), models.Player{ID: 1000, Name: "reserve"}, "discord-reserve")
 
 	l.RemovePlayer(1)
 
-	if !l.IsPlayerActive(99) {
+	if !l.IsPlayerActive(1000) {
 		t.Error("waitlisted player was not promoted into the freed slot")
 	}
 	if got := len(l.GetActivePlayers()); got != lobbyCapacity {
@@ -226,7 +226,7 @@ func TestUpdateActivityCancelsPendingWarning(t *testing.T) {
 func TestCheckInactivityPromotesReplacement(t *testing.T) {
 	l, rec := newTestLobby()
 	addPlayers(t, l, lobbyCapacity)
-	l.TryAddPlayer(context.Background(), models.Player{ID: 99, Name: "reserve"}, "discord-reserve")
+	l.TryAddPlayer(context.Background(), models.Player{ID: 1000, Name: "reserve"}, "discord-reserve")
 
 	backdate(l, 1, inactivityTimeout+inactivityGrace+time.Second)
 	l.CheckInactivity() // warns
@@ -236,7 +236,7 @@ func TestCheckInactivityPromotesReplacement(t *testing.T) {
 	if l.IsPlayerActive(1) {
 		t.Fatal("idle player was not kicked")
 	}
-	if !l.IsPlayerActive(99) {
+	if !l.IsPlayerActive(1000) {
 		t.Error("reserve player did not take the freed slot")
 	}
 	if rec.count("discord-reserve") == 0 {
@@ -250,29 +250,29 @@ func TestCheckInactivityPromotesReplacement(t *testing.T) {
 func TestCheckInactivityKicksIdleWaitlistPlayer(t *testing.T) {
 	l, rec := newTestLobby()
 	addPlayers(t, l, lobbyCapacity)
-	l.TryAddPlayer(context.Background(), models.Player{ID: 99, Name: "reserve"}, "discord-reserve")
+	l.TryAddPlayer(context.Background(), models.Player{ID: 1000, Name: "reserve"}, "discord-reserve")
 
-	if !isWaitlisted(l, 99) {
-		t.Fatal("setup: player 99 is not in the waitlist")
+	if !isWaitlisted(l, 1000) {
+		t.Fatal("setup: player 1000 is not in the waitlist")
 	}
 
-	backdate(l, 99, inactivityTimeout+time.Second)
+	backdate(l, 1000, inactivityTimeout+time.Second)
 	l.CheckInactivity() // warns
 
 	if rec.count("discord-reserve") != 1 {
 		t.Fatalf("expected one warning for the reserve player, got %d", rec.count("discord-reserve"))
 	}
-	if !isWaitlisted(l, 99) {
+	if !isWaitlisted(l, 1000) {
 		t.Fatal("reserve player dropped before the grace period elapsed")
 	}
 
-	backdate(l, 99, inactivityTimeout+inactivityGrace+time.Second)
+	backdate(l, 1000, inactivityTimeout+inactivityGrace+time.Second)
 	l.CheckInactivity() // kicks
 
-	if isWaitlisted(l, 99) {
+	if isWaitlisted(l, 1000) {
 		t.Error("idle reserve player was never removed from the waitlist")
 	}
-	if l.IsPlayerActive(99) {
+	if l.IsPlayerActive(1000) {
 		t.Error("idle reserve player was promoted instead of removed")
 	}
 }
