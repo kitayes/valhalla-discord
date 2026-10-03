@@ -345,18 +345,17 @@ func (b *Bot) requireReferee(s *discordgo.Session, i *discordgo.Interaction) boo
 //
 // onInteraction returns early for anything that is not an application command,
 // and every component handler is registered separately — so the licence check
-// covered slash commands only. The whole match lifecycle runs on components: the
-// creation wizard is select menus, the WIN button closes the match and moves the
-// betting pool, requeue refills the lobby. An expired licence stopped
-// the slash commands and left the buttons that finish a match working.
+// covered slash commands only. The whole match lifecycle runs on components: a
+// mix draft is captain picks on a select menu, the WIN button closes the match
+// and moves the betting pool, requeue refills the lobby. An expired licence
+// stopped the slash commands and left the buttons that finish a match working.
 //
 // cmdRateLimiter is deliberately NOT applied here. It enforces a three-second
 // gap and punishes a violation with a sixty-second lockout, which is a shape
 // that only fits one-shot slash commands: a mix draft is a run of component
-// interactions in a row, started by a slash command that has just taken the
-// user's token, so gating components with it locked the referee out on the very
-// first step and no match could be created at all. Rate limiting the buttons
-// needs a limiter built for bursts; that is its own task.
+// interactions in a row by two captains, so gating components with it would
+// lock a captain out mid-draft. Rate limiting the buttons needs a limiter built
+// for bursts; that is its own task.
 //
 // Returns false when the caller has already been answered and the handler must
 // stop.
