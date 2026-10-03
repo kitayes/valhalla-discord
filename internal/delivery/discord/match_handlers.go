@@ -23,11 +23,6 @@ import (
 // =====================================================================
 
 const (
-	selectMenuCaptainA = "create_match_captain_a"
-	selectMenuCaptainB = "create_match_captain_b"
-	selectMenuTeamA    = "create_match_team_a"
-	selectMenuTeamB    = "create_match_team_b"
-
 	buttonTeamAWin = "match_team_a_win"
 	buttonTeamBWin = "match_team_b_win"
 
@@ -35,13 +30,6 @@ const (
 	winColor        = 0x2ECC71
 	loseColor       = 0xE74C3C
 )
-
-func (b *Bot) newCreateMatchCommand() *discordgo.ApplicationCommand {
-	return &discordgo.ApplicationCommand{
-		Name:        "create_match",
-		Description: "Создать матч из активного лобби (Только SUDЬЯ/админы)",
-	}
-}
 
 func (b *Bot) newBalanceCommand() *discordgo.ApplicationCommand {
 	return &discordgo.ApplicationCommand{
@@ -51,7 +39,6 @@ func (b *Bot) newBalanceCommand() *discordgo.ApplicationCommand {
 }
 
 func (b *Bot) RegisterMatchHandlers() {
-	b.session.AddHandler(b.wrapRecover(b.onMatchSelectMenu))
 	b.session.AddHandler(b.wrapRecover(b.onMatchResultButton))
 }
 
@@ -59,265 +46,12 @@ func (b *Bot) RegisterRequeueHandler() {
 	b.session.AddHandler(b.wrapRecover(b.onRequeueButton))
 }
 
-// =====================================================================
-// Step 1: handleCreateMatch
-// =====================================================================
-
-func (b *Bot) handleCreateMatch(ctx context.Context, s *discordgo.Session, i *discordgo.Interaction) {
-	if !b.requireReferee(s, i) {
-		return
-	}
-
-	activePlayers := b.services.Lobby.GetActivePlayers()
-	if len(activePlayers) < teamSize*2 {
-		b.respondMessage(s, i, fmt.Sprintf("Нужно %d игроков в лобби, сейчас %d.", teamSize*2, len(activePlayers)), true)
-		return
-	}
-
-	sort.Slice(activePlayers, func(a, b int) bool { return activePlayers[a].ID < activePlayers[b].ID })
-
-	var playerOptions []discordgo.SelectMenuOption
-	for _, p := range activePlayers {
-		playerOptions = append(playerOptions, discordgo.SelectMenuOption{Label: p.Name, Value: fmt.Sprintf("%d", p.ID)})
-	}
-
-	minOne := 1
-	maxOne := 1
-	b.respond(s, i, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: "**Шаг 1/4: Выберите Капитана A**",
-			Flags:   discordgo.MessageFlagsEphemeral,
-			Components: []discordgo.MessageComponent{
-				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-					discordgo.SelectMenu{CustomID: selectMenuCaptainA, Placeholder: "Выберите Капитана A...", MinValues: &minOne, MaxValues: maxOne, Options: playerOptions},
-				}},
-			},
-		},
-	})
-}
-
-func (b *Bot) onMatchSelectMenu(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	if i.Type != discordgo.InteractionMessageComponent {
-		return
-	}
-
-	customID := i.MessageComponentData().CustomID
-	if customID != selectMenuCaptainA &&
-		!strings.HasPrefix(customID, selectMenuCaptainB) &&
-		!strings.HasPrefix(customID, selectMenuTeamA) &&
-		!strings.HasPrefix(customID, selectMenuTeamB) {
-		return
-	}
-
-	ctx, cancel := b.opContext(interactionTimeout)
-	defer cancel()
-
-	// The wizard runs entirely on component interactions, which never pass
-	// through onInteraction — so every step has to carry its own gates. The last
-	// step creates the match, empties the lobby and opens betting; only the WIN
-	// button at the end of the same flow used to check anything.
-	if !b.guardComponent(ctx, s, i.Interaction) {
-		return
-	}
-	if !b.requireReferee(s, i.Interaction) {
-		return
-	}
-
-	if customID == selectMenuCaptainA {
-		b.handleSelectCaptainA(ctx, s, i)
-	} else if strings.HasPrefix(customID, selectMenuCaptainB) {
-		b.handleSelectCaptainB(ctx, s, i)
-	} else if strings.HasPrefix(customID, selectMenuTeamA) {
-		b.handleSelectTeamA(ctx, s, i)
-	} else if strings.HasPrefix(customID, selectMenuTeamB) {
-		b.handleSelectTeamB(ctx, s, i)
-	}
-}
-
-func (b *Bot) handleSelectCaptainA(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) {
-	if len(i.MessageComponentData().Values) == 0 {
-		return
-	}
-	captainAID := i.MessageComponentData().Values[0]
-	captainAName := b.getPlayerName(ctx, captainAID)
-	activePlayers := b.services.Lobby.GetActivePlayers()
-
-	var options []discordgo.SelectMenuOption
-	for _, p := range activePlayers {
-		if fmt.Sprintf("%d", p.ID) == captainAID {
-			continue
-		}
-		options = append(options, discordgo.SelectMenuOption{Label: p.Name, Value: fmt.Sprintf("%d", p.ID)})
-	}
-
-	minOne := 1
-	maxOne := 1
-	b.respond(s, i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseUpdateMessage,
-		Data: &discordgo.InteractionResponseData{
-			Content: fmt.Sprintf("Капитан A: **%s**\n\n**Шаг 2/4: Выберите Капитана B**", captainAName),
-			Flags:   discordgo.MessageFlagsEphemeral,
-			Components: []discordgo.MessageComponent{
-				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-					discordgo.SelectMenu{CustomID: fmt.Sprintf("%s_%s", selectMenuCaptainB, captainAID), Placeholder: "Выберите Капитана B...", MinValues: &minOne, MaxValues: maxOne, Options: options},
-				}},
-			},
-		},
-	})
-}
-
-func (b *Bot) handleSelectCaptainB(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) {
-	if len(i.MessageComponentData().Values) == 0 {
-		return
-	}
-	captainBID := i.MessageComponentData().Values[0]
-	captainBName := b.getPlayerName(ctx, captainBID)
-	captainAID, ok := parseCaptainBCustomID(i.MessageComponentData().CustomID)
-	if !ok {
-		b.logger.Error("match: malformed captain B custom ID %q", i.MessageComponentData().CustomID)
-		return
-	}
-	captainAName := b.getPlayerName(ctx, captainAID)
-
-	activePlayers := b.services.Lobby.GetActivePlayers()
-	var options []discordgo.SelectMenuOption
-	for _, p := range activePlayers {
-		pid := fmt.Sprintf("%d", p.ID)
-		if pid == captainAID || pid == captainBID {
-			continue
-		}
-		options = append(options, discordgo.SelectMenuOption{Label: p.Name, Value: pid})
-	}
-
-	minFour := 4
-	maxFour := 4
-	b.respond(s, i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseUpdateMessage,
-		Data: &discordgo.InteractionResponseData{
-			Content: fmt.Sprintf("Капитан A: **%s**\nКапитан B: **%s**\n\n**Шаг 3/4: Выберите 4 игроков для Команды A**", captainAName, captainBName),
-			Flags:   discordgo.MessageFlagsEphemeral,
-			Components: []discordgo.MessageComponent{
-				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-					discordgo.SelectMenu{CustomID: fmt.Sprintf("%s_%s_%s", selectMenuTeamA, captainAID, captainBID), Placeholder: "Выберите 4 игроков для Команды A...", MinValues: &minFour, MaxValues: maxFour, Options: options},
-				}},
-			},
-		},
-	})
-}
-
-func (b *Bot) handleSelectTeamA(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) {
-	if len(i.MessageComponentData().Values) < 4 {
-		return
-	}
-	teamAValues := i.MessageComponentData().Values
-	captainAID, captainBID, ok := parseTeamACustomID(i.MessageComponentData().CustomID)
-	if !ok {
-		b.logger.Error("match: malformed team A custom ID %q", i.MessageComponentData().CustomID)
-		return
-	}
-	captainAName := b.getPlayerName(ctx, captainAID)
-	captainBName := b.getPlayerName(ctx, captainBID)
-
-	teamAIDs := []int{parseID(captainAID)}
-	var teamANames []string
-	teamANames = append(teamANames, captainAName)
-	for _, v := range teamAValues {
-		teamAIDs = append(teamAIDs, parseID(v))
-		teamANames = append(teamANames, b.getPlayerName(ctx, v))
-	}
-
-	teamACombined := strings.Join(teamAValues, "-")
-
-	activePlayers := b.services.Lobby.GetActivePlayers()
-	excludeSet := make(map[int]bool)
-	for _, aid := range teamAIDs {
-		excludeSet[aid] = true
-	}
-	excludeSet[parseID(captainBID)] = true
-
-	var options []discordgo.SelectMenuOption
-	for _, p := range activePlayers {
-		if excludeSet[p.ID] {
-			continue
-		}
-		options = append(options, discordgo.SelectMenuOption{Label: p.Name, Value: fmt.Sprintf("%d", p.ID)})
-	}
-
-	minFour := 4
-	maxFour := 4
-	b.respond(s, i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseUpdateMessage,
-		Data: &discordgo.InteractionResponseData{
-			Content: fmt.Sprintf("Капитан A: **%s**\nКапитан B: **%s**\nКоманда A: %s\n\n**Шаг 4/4: Выберите 4 игроков для Команды B**",
-				captainAName, captainBName, strings.Join(teamANames[1:], ", ")),
-			Flags: discordgo.MessageFlagsEphemeral,
-			Components: []discordgo.MessageComponent{
-				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-					discordgo.SelectMenu{CustomID: fmt.Sprintf("%s_%s_%s_%s", selectMenuTeamB, captainAID, captainBID, teamACombined), Placeholder: "Выберите 4 игроков для Команды B...", MinValues: &minFour, MaxValues: maxFour, Options: options},
-				}},
-			},
-		},
-	})
-}
-
-func (b *Bot) handleSelectTeamB(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate) {
-	if len(i.MessageComponentData().Values) < 4 {
-		return
-	}
-	teamBValues := i.MessageComponentData().Values
-	captainAID, captainBID, teamAIDStrs, ok := parseTeamBCustomID(i.MessageComponentData().CustomID)
-	if !ok {
-		b.logger.Error("match: malformed team B custom ID %q", i.MessageComponentData().CustomID)
-		return
-	}
-
-	captainAName := b.getPlayerName(ctx, captainAID)
-	captainBName := b.getPlayerName(ctx, captainBID)
-
-	teamAIDs := []int{parseID(captainAID)}
-	var teamANames []string
-	teamANames = append(teamANames, captainAName)
-	for _, s := range teamAIDStrs {
-		id := parseID(s)
-		teamAIDs = append(teamAIDs, id)
-		teamANames = append(teamANames, b.getPlayerName(ctx, s))
-	}
-
-	teamBIDs := []int{parseID(captainBID)}
-	var teamBNames []string
-	teamBNames = append(teamBNames, captainBName)
-	for _, v := range teamBValues {
-		id := parseID(v)
-		teamBIDs = append(teamBIDs, id)
-		teamBNames = append(teamBNames, b.getPlayerName(ctx, v))
-	}
-
-	guildID := b.guildID(i.GuildID)
-
-	matchID, err := b.services.Lobby.CreateMatch(ctx, guildID, parseID(captainAID), parseID(captainBID), teamAIDs, teamBIDs)
-	if err != nil {
-		b.logger.Error("match: failed to create: %v", err)
-		b.respond(s, i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{Content: "Ошибка при создании матча: " + err.Error(), Flags: discordgo.MessageFlagsEphemeral},
-		})
-		return
-	}
-
-	embed := b.buildMatchEmbed(matchID, captainAName, captainBName, teamANames, teamBNames)
-	b.publishCreatedMatch(ctx, s, i.Interaction, discordgo.InteractionResponseChannelMessageWithSource, matchID, teamAIDs, teamBIDs, concatNames(teamANames, teamBNames), embed, captainAName, captainBName)
-	b.logger.Info("match: #%d created | Team A: %s vs Team B: %s", matchID, strings.Join(teamANames, ", "), strings.Join(teamBNames, ", "))
-}
-
 // publishCreatedMatch is everything that has to happen once a match row exists:
 // clear the drafted players out of the lobby, post the scoreboard with the WIN
 // buttons, open the screenshot thread, cache the roster and arm the betting
 // window.
 //
-// handleSelectTeamB and handleBalance each had their own copy of this, including
-// two byte-identical button blocks. The copy in handleBalance had already
-// drifted — it never logged the created match.
+// /balance and the mix draft both end here, so the two cannot drift apart.
 //
 // respType is a new message for /balance and an update of the draft message for
 // a finished mix draft.
@@ -740,16 +474,6 @@ func formatPlayerList(names []string) string {
 // rendered as "1. ****" in the embed and hid the failure entirely.
 const unknownPlayerName = "неизвестный игрок"
 
-func (b *Bot) getPlayerName(ctx context.Context, idStr string) string {
-	id := parseID(idStr)
-	name, err := b.services.MatchService.GetPlayerNameByID(ctx, id)
-	if err != nil {
-		b.logger.Warn("discord: cannot resolve name for player %d: %v", id, err)
-		return unknownPlayerName
-	}
-	return name
-}
-
 // getPlayerNames resolves a roster in one query, preserving the order of ids.
 func (b *Bot) getPlayerNames(ctx context.Context, ids []int) []string {
 	lookup, err := b.services.MatchService.GetPlayerNamesByIDs(ctx, ids)
@@ -777,52 +501,6 @@ func parseID(s string) int {
 		return 0
 	}
 	return id
-}
-
-// =====================================================================
-// Custom ID encoding for the match creation wizard
-//
-// Each step carries the previous selections in the next component's custom ID.
-// The menu prefixes themselves contain underscores ("create_match_captain_b"),
-// so splitting the whole ID on "_" and counting fields from either end picked up
-// fragments of the prefix — captain IDs arrived as "b_42" or even "a", parsed to
-// 0, and CreateMatch then failed the players(id) foreign key. Trimming the known
-// prefix first makes the split unambiguous.
-// =====================================================================
-
-// parseCaptainBCustomID extracts captain A's ID from the captain B menu.
-func parseCaptainBCustomID(customID string) (captainAID string, ok bool) {
-	rest, found := strings.CutPrefix(customID, selectMenuCaptainB+"_")
-	if !found || rest == "" {
-		return "", false
-	}
-	return rest, true
-}
-
-// parseTeamACustomID extracts both captain IDs from the team A menu.
-func parseTeamACustomID(customID string) (captainAID, captainBID string, ok bool) {
-	rest, found := strings.CutPrefix(customID, selectMenuTeamA+"_")
-	if !found {
-		return "", "", false
-	}
-	parts := strings.SplitN(rest, "_", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", false
-	}
-	return parts[0], parts[1], true
-}
-
-// parseTeamBCustomID extracts the captains and team A's roster from the team B menu.
-func parseTeamBCustomID(customID string) (captainAID, captainBID string, teamAIDs []string, ok bool) {
-	rest, found := strings.CutPrefix(customID, selectMenuTeamB+"_")
-	if !found {
-		return "", "", nil, false
-	}
-	parts := strings.SplitN(rest, "_", 3)
-	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
-		return "", "", nil, false
-	}
-	return parts[0], parts[1], strings.Split(parts[2], "-"), true
 }
 
 // notifyTelegramMatchLive fires the Telegram announcement without blocking the

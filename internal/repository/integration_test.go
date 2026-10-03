@@ -515,32 +515,6 @@ func TestIntegrationLobbyMatchReads(t *testing.T) {
 		}
 	})
 
-	t.Run("mix thread roster round trip keeps the pick order", func(t *testing.T) {
-		threadID := fmt.Sprintf("mix-%d", matchID)
-		t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM mix_threads WHERE thread_id = $1`, threadID) })
-
-		if err := lobby.SaveMixThread(ctx, threadID, []int{bID, aID}); err != nil {
-			t.Fatalf("SaveMixThread: %v", err)
-		}
-		aName, _ := matchRepo.GetPlayerNameByID(ctx, aID)
-		bName, _ := matchRepo.GetPlayerNameByID(ctx, bID)
-
-		names, err := lobby.GetMixThreadPlayerNames(ctx, threadID)
-		if err != nil {
-			t.Fatalf("GetMixThreadPlayerNames: %v", err)
-		}
-		if len(names) != 2 || names[0] != bName || names[1] != aName {
-			t.Errorf("roster = %v, want [%s %s]", names, bName, aName)
-		}
-	})
-
-	t.Run("an unknown mix thread is not found", func(t *testing.T) {
-		_, err := lobby.GetMixThreadPlayerNames(ctx, fmt.Sprintf("no-such-mix-%d", matchID))
-		if !errors.Is(err, domain.ErrMatchNotFound) {
-			t.Errorf("err = %v, want ErrMatchNotFound", err)
-		}
-	})
-
 	t.Run("medals are stored and empty names do not erase them", func(t *testing.T) {
 		if err := lobby.SaveMedals(ctx, matchID, "MVPGuy", "SVPGuy"); err != nil {
 			t.Fatalf("SaveMedals: %v", err)

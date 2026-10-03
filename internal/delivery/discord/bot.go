@@ -184,7 +184,6 @@ func (b *Bot) Init() error {
 		b.newUpdateNickCommand(),
 		b.newLobbyCommand(),
 		b.newCreateMixCommand(),
-		b.newCreateMatchCommand(),
 		b.newFAQCommand(),
 		b.newFAQReloadCommand(),
 		b.newLobbyKickCommand(),
@@ -349,11 +348,11 @@ func (b *Bot) requireReferee(s *discordgo.Session, i *discordgo.Interaction) boo
 // covered slash commands only. The whole match lifecycle runs on components: the
 // creation wizard is select menus, the WIN button closes the match and moves the
 // betting pool, requeue refills the lobby. An expired licence stopped
-// /create_match and left the buttons that finish it working.
+// the slash commands and left the buttons that finish a match working.
 //
 // cmdRateLimiter is deliberately NOT applied here. It enforces a three-second
 // gap and punishes a violation with a sixty-second lockout, which is a shape
-// that only fits one-shot slash commands: the match wizard is four component
+// that only fits one-shot slash commands: a mix draft is a run of component
 // interactions in a row, started by a slash command that has just taken the
 // user's token, so gating components with it locked the referee out on the very
 // first step and no match could be created at all. Rate limiting the buttons
@@ -464,9 +463,6 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 	switch name {
 	case "create_mix":
 		b.handleCreateMix(ctx, s, i.Interaction)
-		return
-	case "create_match":
-		b.handleCreateMatch(ctx, s, i.Interaction)
 		return
 	case "balance":
 		b.handleBalance(ctx, s, i.Interaction)
