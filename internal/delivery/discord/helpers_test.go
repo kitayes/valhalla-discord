@@ -44,3 +44,25 @@ func TestTruncateMessageAtBoundary(t *testing.T) {
 		t.Error("truncateMessage produced invalid UTF-8")
 	}
 }
+
+func TestThreadNameKeepsShortNamesIntact(t *testing.T) {
+	name := "Матч #12: Игрок vs Другой"
+	if got := threadName(name); got != name {
+		t.Errorf("threadName altered a short name: %q", got)
+	}
+}
+
+// A ten-player mix is named after every player, which runs past Discord's
+// 100-character thread name limit and made the thread creation fail.
+func TestThreadNameCapsLongNames(t *testing.T) {
+	name := "Микс " + strings.Repeat("ДлинныйНикИгрока, ", 10)
+
+	got := threadName(name)
+
+	if !utf8.ValidString(got) {
+		t.Error("threadName produced invalid UTF-8")
+	}
+	if n := utf8.RuneCountInString(got); n > maxThreadNameLength {
+		t.Errorf("thread name is %d characters, over Discord's %d limit", n, maxThreadNameLength)
+	}
+}

@@ -202,7 +202,7 @@ func (b *Bot) isFAQChannel(channelID string) bool {
 // A lookup failure is logged rather than folded into "not a match thread": both
 // answers dropped the screenshot, but only one of them is a bug worth seeing.
 func (b *Bot) isKnownMatchThread(ctx context.Context, channelID string) bool {
-	// Fast path: in-memory cache (populated by onCreateMixSelect / handleSelectTeamA / handleBalance)
+	// Fast path: in-memory cache (populated by onCreateMixSelect and openMatchThread)
 	if _, ok := b.getThreadPlayers(channelID); ok {
 		return true
 	}

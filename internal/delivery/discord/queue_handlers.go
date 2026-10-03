@@ -317,51 +317,57 @@ func (b *Bot) onCreateMixSelect(s *discordgo.Session, i *discordgo.InteractionCr
 	}
 
 	signature := fmt.Sprintf("MIX-%s", strings.Join(selectedIDs, "-"))
-	mixTitle := fmt.Sprintf("Микс %s", strings.Join(playerNames, ", "))
+	roster := strings.Join(playerNames, ", ")
 
-	// Open a Discord Thread from the interaction message
-	thread, err := s.MessageThreadStart(i.ChannelID, i.Message.ID, mixTitle, 60)
+	// The select menu this came from is ephemeral, and Discord cannot start a
+	// thread from an ephemeral message — threading off i.Message failed every
+	// time and every mix silently fell back to "post it in the channel". The mix
+	// gets a public message of its own, and the thread hangs off that.
+	anchor, err := s.ChannelMessageSend(i.ChannelID, truncateMessage(fmt.Sprintf(
+		"**Микс создан!**\n\nСигнатура: `%s`\nИгроки: %s", signature, roster)))
 	if err != nil {
-		b.logger.Warn("mix: failed to create thread: %v", err)
-		// Fallback: send ephemeral message without thread
-		b.respond(s, i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: fmt.Sprintf("**Микс создан!**\n\nСигнатура: `%s`\nИгроки: %s\n\nКапитаны, скиньте скриншот результата в этот канал после игры, я его обработаю.",
-					signature, strings.Join(playerNames, ", ")),
-			},
-		})
+		b.logger.Error("mix: failed to post mix message: %v", err)
+		b.respondMessage(s, i.Interaction, "Не удалось опубликовать микс. Попробуйте ещё раз.", true)
 		return
 	}
 
-	// Send the confirmation message inside the new thread
-	_, err = s.ChannelMessageSend(thread.ID, fmt.Sprintf(
-		"**Микс создан!**\n\nСигнатура: `%s`\nИгроки: %s\n\nКапитаны, скиньте скриншот результата **в эту ветку** после игры, я его обработаю.",
-		signature, strings.Join(playerNames, ", "),
-	))
+	thread, err := s.MessageThreadStart(i.ChannelID, anchor.ID, threadName("Микс "+roster), 60)
 	if err != nil {
+		b.logger.Warn("mix: failed to create thread: %v", err)
+		if _, err := s.ChannelMessageEdit(i.ChannelID, anchor.ID, truncateMessage(fmt.Sprintf(
+			"**Микс создан!**\n\nСигнатура: `%s`\nИгроки: %s\n\nКапитаны, скиньте скриншот результата в этот канал после игры, я его обработаю.",
+			signature, roster))); err != nil {
+			b.logger.Warn("mix: failed to update mix message: %v", err)
+		}
+		b.respondMixCreated(s, i.Interaction, "Ветку открыть не удалось — скриншоты принимаются в этом канале.")
+		return
+	}
+
+	// A mix has no lobby_matches row, so this in-memory roster is the only thing
+	// tying screenshots in the thread to its players for the AI matching. It is
+	// cached before anything is posted so a screenshot sent straight away is
+	// already recognised.
+	b.setThreadPlayers(thread.ID, playerNames)
+
+	if _, err := s.ChannelMessageSend(thread.ID,
+		"Капитаны, скиньте скриншот результата **в эту ветку** после игры, я его обработаю."); err != nil {
 		b.logger.Warn("mix: failed to send thread message: %v", err)
 	}
 
-	// Respond to the interaction (ephemeral) confirming thread creation
-	b.respond(s, i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
+	b.respondMixCreated(s, i.Interaction, fmt.Sprintf("Ветка: <#%s>", thread.ID))
+	b.logger.Info("mix: thread %s created for signature %s", thread.ID, signature)
+}
+
+// respondMixCreated replaces the referee's player picker with the outcome, so
+// the spent select menu does not stay around to be submitted a second time.
+func (b *Bot) respondMixCreated(s *discordgo.Session, i *discordgo.Interaction, detail string) {
+	b.respond(s, i, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
-			Content: fmt.Sprintf("**Микс создан!**\n\nВетка: <#%s>\nИгроки: %s\n\nСкидывайте скриншоты в созданную ветку.",
-				thread.ID, strings.Join(playerNames, ", ")),
-			Flags: discordgo.MessageFlagsEphemeral,
+			Content:    "**Микс создан!** " + detail,
+			Components: []discordgo.MessageComponent{},
 		},
 	})
-
-	b.logger.Info("mix: thread %s created for signature %s", thread.ID, signature)
-
-	// Save the thread_id to the database so screenshots in this thread
-	// can be matched to the correct player list for AI processing.
-	// Note: create_mix doesn't create a lobby_matches row yet — for admins,
-	// this is informational. The real thread_id assignment happens in
-	// handleSelectTeamA and handleBalance via CreateMatch → SaveThreadID.
-	// We store it on an in-memory map as fallback.
-	b.setThreadPlayers(thread.ID, playerNames)
 }
 
 func (b *Bot) buildLobbyEmbed() *discordgo.MessageEmbed {

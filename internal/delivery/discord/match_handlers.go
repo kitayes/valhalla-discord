@@ -305,13 +305,14 @@ func (b *Bot) handleSelectTeamB(ctx context.Context, s *discordgo.Session, i *di
 	}
 
 	embed := b.buildMatchEmbed(matchID, captainAName, captainBName, teamANames, teamBNames)
-	b.publishCreatedMatch(ctx, s, i.Interaction, matchID, teamAIDs, teamBIDs, embed, captainAName, captainBName)
+	b.publishCreatedMatch(ctx, s, i.Interaction, matchID, teamAIDs, teamBIDs, concatNames(teamANames, teamBNames), embed, captainAName, captainBName)
 	b.logger.Info("match: #%d created | Team A: %s vs Team B: %s", matchID, strings.Join(teamANames, ", "), strings.Join(teamBNames, ", "))
 }
 
 // publishCreatedMatch is everything that has to happen once a match row exists:
 // clear the drafted players out of the lobby, post the scoreboard with the WIN
-// buttons, cache the roster and arm the betting window.
+// buttons, open the screenshot thread, cache the roster and arm the betting
+// window.
 //
 // handleSelectTeamB and handleBalance each had their own copy of this, including
 // two byte-identical button blocks. The copy in handleBalance had already
@@ -322,6 +323,7 @@ func (b *Bot) publishCreatedMatch(
 	i *discordgo.Interaction,
 	matchID int,
 	teamAIDs, teamBIDs []int,
+	roster []string,
 	embed *discordgo.MessageEmbed,
 	captainAName, captainBName string,
 ) {
@@ -339,9 +341,51 @@ func (b *Bot) publishCreatedMatch(
 		},
 	})
 
+	b.openMatchThread(ctx, s, i, matchID, captainAName, captainBName, roster)
 	b.openBettingWindow(ctx, matchID)
 	b.startBettingTimer(matchID)
 	b.notifyTelegramMatchLive(matchID, captainAName, captainBName)
+}
+
+// openMatchThread hangs a thread off the published match card and records it on
+// the match row. The row's thread_id is what everything downstream looks the
+// match up by: screenshots in the thread get the roster for AI matching and
+// attach the MVP/SVPG medals to the match, and closing or cancelling the match
+// archives the thread. Nothing used to write it, so all of that was dead.
+//
+// A failure here is logged and the match goes on without a thread — the WIN
+// buttons and the betting window do not depend on it.
+func (b *Bot) openMatchThread(
+	ctx context.Context,
+	s *discordgo.Session,
+	i *discordgo.Interaction,
+	matchID int,
+	captainAName, captainBName string,
+	roster []string,
+) {
+	card, err := s.InteractionResponse(i)
+	if err != nil {
+		b.logger.Warn("match: cannot load the card of #%d to open a thread: %v", matchID, err)
+		return
+	}
+
+	name := threadName(fmt.Sprintf("Матч #%d: %s vs %s", matchID, captainAName, captainBName))
+	thread, err := s.MessageThreadStart(i.ChannelID, card.ID, name, 1440)
+	if err != nil {
+		b.logger.Warn("match: failed to open thread for #%d: %v", matchID, err)
+		return
+	}
+
+	b.setThreadPlayers(thread.ID, roster)
+	if err := b.services.Lobby.SaveThreadID(ctx, matchID, thread.ID); err != nil {
+		b.logger.Error("match: thread %s opened for #%d but not saved: %v", thread.ID, matchID, err)
+	}
+
+	if _, err := s.ChannelMessageSend(thread.ID,
+		"Капитаны, скиньте скриншот результата **в эту ветку** после игры, я его обработаю."); err != nil {
+		b.logger.Warn("match: failed to post to thread %s: %v", thread.ID, err)
+	}
+	b.logger.Info("match: thread %s opened for #%d", thread.ID, matchID)
 }
 
 // matchResultButtons builds the referee's WIN buttons for a match.
@@ -895,6 +939,14 @@ func concatIDs(a, b []int) []int {
 	return out
 }
 
+// concatNames is concatIDs for rosters of names.
+func concatNames(a, b []string) []string {
+	out := make([]string, 0, len(a)+len(b))
+	out = append(out, a...)
+	out = append(out, b...)
+	return out
+}
+
 // processTelegramPayout settles the bets on a finished match.
 //
 // A failure here means bettors were never credited. The bets stay unsettled
@@ -1010,6 +1062,6 @@ func (b *Bot) handleBalance(ctx context.Context, s *discordgo.Session, i *discor
 
 	embed := b.buildMatchEmbed(matchID, teamANames[0], teamBNames[0], teamANames, teamBNames)
 	embed.Footer = &discordgo.MessageEmbedFooter{Text: fmt.Sprintf("Авто-баланс | Team A avg: %.0f | Team B avg: %.0f", avgA, avgB)}
-	b.publishCreatedMatch(ctx, s, i, matchID, teamAIDs, teamBIDs, embed, teamANames[0], teamBNames[0])
+	b.publishCreatedMatch(ctx, s, i, matchID, teamAIDs, teamBIDs, concatNames(teamANames, teamBNames), embed, teamANames[0], teamBNames[0])
 	b.logger.Info("balance: match #%d auto-balanced | Team A avg: %.0f | Team B avg: %.0f", matchID, avgA, avgB)
 }

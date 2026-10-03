@@ -76,3 +76,17 @@ func valueOrDefault(value, defaultValue string) string {
 	}
 	return value
 }
+
+// maxThreadNameLength is Discord's limit on a thread name.
+const maxThreadNameLength = 100
+
+// threadName caps a thread name at Discord's limit. A mix of ten players is
+// named after all of them, and with Cyrillic nicknames that runs well past 100
+// characters — Discord then refuses to create the thread at all.
+func threadName(name string) string {
+	if utf8.RuneCountInString(name) <= maxThreadNameLength {
+		return name
+	}
+	runes := []rune(name)
+	return string(runes[:maxThreadNameLength-1]) + "…"
+}

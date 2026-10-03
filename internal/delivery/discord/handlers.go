@@ -1042,7 +1042,10 @@ func (b *Bot) rejectMalformedDangerButton(s *discordgo.Session, i *discordgo.Int
 func (b *Bot) archiveThreadIfMatchFinished(ctx context.Context, s *discordgo.Session, threadID string) {
 	match, err := b.services.Lobby.GetMatchByThreadID(ctx, threadID)
 	if err != nil {
-		b.logger.Error("discord: cannot resolve match for thread %s, not archiving: %v", threadID, err)
+		// A mix thread has no match row behind it; that is not a failure.
+		if !errors.Is(err, domain.ErrMatchNotFound) {
+			b.logger.Error("discord: cannot resolve match for thread %s, not archiving: %v", threadID, err)
+		}
 		return
 	}
 	if match == nil || match.Status != models.LobbyMatchStatusFinished {

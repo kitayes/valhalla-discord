@@ -528,6 +528,11 @@ func (l *LobbyService) GetMatchByThreadID(ctx context.Context, threadID string) 
 	return l.matchRepo.GetByThreadID(ctx, threadID)
 }
 
+// SaveThreadID records the Discord thread opened for a match.
+func (l *LobbyService) SaveThreadID(ctx context.Context, matchID int, threadID string) error {
+	return l.matchRepo.SaveThreadID(ctx, matchID, threadID)
+}
+
 func (l *LobbyService) GetPlayerNamesByMatchID(ctx context.Context, matchID int) ([]string, error) {
 	return l.matchRepo.GetPlayerNamesByMatchID(ctx, matchID)
 }
