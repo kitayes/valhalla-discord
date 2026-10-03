@@ -30,6 +30,24 @@ var (
 	// ErrAlreadyQueued reports that the player already holds a place in the
 	// queue, so the request was a no-op rather than a failure.
 	ErrAlreadyQueued = errors.New("player is already in the queue")
+	// ErrInDraft reports that the player is a captain or a pick of a draft that
+	// is still open, so they cannot queue again until it ends.
+	ErrInDraft = errors.New("player is already in a draft")
+	// ErrSameCaptain reports that both captains of a draft are one person.
+	ErrSameCaptain = errors.New("both captains are the same player")
+	// ErrNotInLobby reports that the player is not in the main queue — never
+	// joined, already picked, or only on the waitlist.
+	ErrNotInLobby = errors.New("player is not in the lobby")
+	// ErrDraftNotFound reports that no open draft has this number; drafts live
+	// in memory, so a restart is the usual cause.
+	ErrDraftNotFound = errors.New("draft not found")
+	// ErrDraftComplete reports that every pick of the draft has been made.
+	ErrDraftComplete = errors.New("draft is already complete")
+	// ErrNotCaptain reports that someone other than the draft's captains tried
+	// to pick.
+	ErrNotCaptain = errors.New("only the draft's captains can pick")
+	// ErrNotYourTurn reports that the captain picked out of turn.
+	ErrNotYourTurn = errors.New("it is the other captain's turn")
 
 	// ErrMatchNotActive reports that the match exists but has already been
 	// closed or cancelled, so a lifecycle action that needs an ACTIVE match

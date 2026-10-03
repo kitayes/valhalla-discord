@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"time"
@@ -102,6 +103,12 @@ type LobbyService struct {
 	mainQueue []lobbyEntry // max capacity = lobbyCapacity
 	waitlist  []lobbyEntry // overflow beyond lobbyCapacity
 	isOpen    bool
+	// Drafts in progress, keyed by number. Guarded by mu together with the
+	// queues: a pick moves a player from one to the other.
+	drafts      map[int]*draft
+	nextDraftID int
+	// coin decides which captain picks first; tests replace it.
+	coin func() int
 
 	logger       Logger
 	matchRepo    LobbyMatchRepository
@@ -127,6 +134,8 @@ func NewLobbyService(logger Logger, matchRepo LobbyMatchRepository, queueBanRepo
 		matchRepo:    matchRepo,
 		queueBanRepo: queueBanRepo,
 		isOpen:       true,
+		drafts:       make(map[int]*draft),
+		coin:         func() int { return rand.IntN(2) },
 	}
 }
 
