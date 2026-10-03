@@ -210,3 +210,91 @@ func TestDraftedPlayerCannotRejoinLobby(t *testing.T) {
 		}
 	}
 }
+
+func TestCancelDraftReturnsEveryoneToLobby(t *testing.T) {
+	l := newDraftLobby(t, 12)
+	d, _ := l.StartDraft(discordID(1), discordID(2))
+	if _, err := l.PickPlayer(d.ID, discordID(1), discordID(3)); err != nil {
+		t.Fatalf("pick: %v", err)
+	}
+
+	v, err := l.CancelDraft(d.ID)
+	if err != nil {
+		t.Fatalf("CancelDraft: %v", err)
+	}
+	if v.Sides[0].Captain.ID != 1 {
+		t.Errorf("cancelled view lost its captains: %+v", v)
+	}
+	for _, id := range []int{1, 2, 3} {
+		if !l.IsPlayerActive(id) {
+			t.Errorf("player %d was not returned to the lobby", id)
+		}
+	}
+	if got := len(l.GetActivePlayers()); got != 12 {
+		t.Errorf("lobby holds %d players after cancel, want 12", got)
+	}
+	if _, err := l.PickPlayer(d.ID, discordID(2), discordID(4)); !errors.Is(err, domain.ErrDraftNotFound) {
+		t.Errorf("pick in a cancelled draft: err = %v, want ErrDraftNotFound", err)
+	}
+}
+
+// A complete draft whose match could not be created is cancelled, and its ten
+// players must all get their place back.
+func TestCancelCompleteDraftReturnsAllTen(t *testing.T) {
+	l := newDraftLobby(t, 12)
+	d, _ := l.StartDraft(discordID(1), discordID(2))
+	pickAll(t, l, d.ID)
+
+	if _, err := l.CancelDraft(d.ID); err != nil {
+		t.Fatalf("CancelDraft: %v", err)
+	}
+	if got := len(l.GetActivePlayers()); got != 12 {
+		t.Errorf("lobby holds %d players, want 12", got)
+	}
+}
+
+// Players drafted into a lobby that was closed meanwhile are not pushed back
+// into it.
+func TestCancelDraftIntoClosedLobbyRequeuesNobody(t *testing.T) {
+	l := newDraftLobby(t, 12)
+	d, _ := l.StartDraft(discordID(1), discordID(2))
+	l.CloseLobby()
+
+	if _, err := l.CancelDraft(d.ID); err != nil {
+		t.Fatalf("CancelDraft: %v", err)
+	}
+	if got := len(l.GetActivePlayers()); got != 0 {
+		t.Errorf("closed lobby holds %d players after cancel, want 0", got)
+	}
+}
+
+func TestFinishDraftRemovesItWithoutRequeueing(t *testing.T) {
+	l := newDraftLobby(t, 12)
+	d, _ := l.StartDraft(discordID(1), discordID(2))
+	pickAll(t, l, d.ID)
+
+	if err := l.FinishDraft(d.ID); err != nil {
+		t.Fatalf("FinishDraft: %v", err)
+	}
+	if l.IsPlayerActive(1) || l.IsPlayerActive(3) {
+		t.Error("finishing a draft put its players back in the lobby")
+	}
+	if _, err := l.CancelDraft(d.ID); !errors.Is(err, domain.ErrDraftNotFound) {
+		t.Errorf("cancel after finish: err = %v, want ErrDraftNotFound", err)
+	}
+	// Out of the draft, the players may queue again once their match is over.
+	if _, err := l.TryAddPlayer(context.Background(), models.Player{ID: 1, Name: name(1)}, discordID(1)); err != nil {
+		t.Errorf("captain rejoining after the draft finished: %v", err)
+	}
+}
+
+func TestFinishAndCancelUnknownDraft(t *testing.T) {
+	l := newDraftLobby(t, 12)
+
+	if err := l.FinishDraft(42); !errors.Is(err, domain.ErrDraftNotFound) {
+		t.Errorf("FinishDraft: err = %v, want ErrDraftNotFound", err)
+	}
+	if _, err := l.CancelDraft(42); !errors.Is(err, domain.ErrDraftNotFound) {
+		t.Errorf("CancelDraft: err = %v, want ErrDraftNotFound", err)
+	}
+}

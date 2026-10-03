@@ -181,3 +181,41 @@ func (l *LobbyService) inDraftLocked(playerID int) bool {
 	}
 	return false
 }
+
+// FinishDraft closes a draft whose match has been created. Its players stay
+// out of the lobby: they are playing.
+func (l *LobbyService) FinishDraft(draftID int) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if _, ok := l.drafts[draftID]; !ok {
+		return domain.ErrDraftNotFound
+	}
+	delete(l.drafts, draftID)
+	return nil
+}
+
+// CancelDraft closes a draft and returns its captains and picks to the lobby,
+// unless the lobby has been closed meanwhile. It also takes a complete draft
+// whose match could not be created.
+func (l *LobbyService) CancelDraft(draftID int) (DraftView, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	d, ok := l.drafts[draftID]
+	if !ok {
+		return DraftView{}, domain.ErrDraftNotFound
+	}
+	delete(l.drafts, draftID)
+
+	if l.isOpen {
+		now := time.Now()
+		for side := range d.captains {
+			l.requeueLocked(d.captains[side], now)
+			for _, e := range d.teams[side] {
+				l.requeueLocked(e, now)
+			}
+		}
+	}
+	l.logger.Info("lobby: draft #%d cancelled", draftID)
+	return d.view(), nil
+}
