@@ -1,10 +1,12 @@
 package application
 
 import (
+	"context"
 	"errors"
 	"testing"
 
 	"blackwatch/internal/domain"
+	"blackwatch/internal/models"
 )
 
 // newDraftLobby is a lobby of n players whose drafts always let captain A
@@ -75,5 +77,136 @@ func TestStartDraftNumbersDraftsDistinctly(t *testing.T) {
 	}
 	if a.ID == b.ID {
 		t.Errorf("both drafts got ID %d", a.ID)
+	}
+}
+
+// pickAll makes the eight picks of a draft whose captains are players 1 and 2,
+// taking players 3..10 in order: A takes 3, B takes 4, A takes 5, ...
+func pickAll(t *testing.T, l *LobbyService, draftID int) DraftView {
+	t.Helper()
+	var v DraftView
+	for target := 3; target <= 10; target++ {
+		picker := discordID(1)
+		if target%2 == 0 {
+			picker = discordID(2)
+		}
+		var err error
+		v, err = l.PickPlayer(draftID, picker, discordID(target))
+		if err != nil {
+			t.Fatalf("pick of player %d: %v", target, err)
+		}
+	}
+	return v
+}
+
+func TestPickPlayerAlternatesTurns(t *testing.T) {
+	l := newDraftLobby(t, 12)
+	d, _ := l.StartDraft(discordID(1), discordID(2))
+
+	v, err := l.PickPlayer(d.ID, discordID(1), discordID(3))
+	if err != nil {
+		t.Fatalf("A's pick: %v", err)
+	}
+	if v.Turn != 1 || len(v.Sides[0].Picks) != 1 || v.Sides[0].Picks[0].ID != 3 {
+		t.Errorf("after A's pick: %+v, want player 3 on A and B to move", v)
+	}
+	if l.IsPlayerActive(3) {
+		t.Error("picked player is still in the lobby")
+	}
+
+	if _, err := l.PickPlayer(d.ID, discordID(1), discordID(4)); !errors.Is(err, domain.ErrNotYourTurn) {
+		t.Errorf("A picking twice: err = %v, want ErrNotYourTurn", err)
+	}
+	if !l.IsPlayerActive(4) {
+		t.Error("an out-of-turn pick took the player out of the lobby")
+	}
+
+	if _, err := l.PickPlayer(d.ID, discordID(2), discordID(4)); err != nil {
+		t.Errorf("B's pick: %v", err)
+	}
+}
+
+func TestPickPlayerRejectsNonCaptain(t *testing.T) {
+	l := newDraftLobby(t, 12)
+	d, _ := l.StartDraft(discordID(1), discordID(2))
+
+	if _, err := l.PickPlayer(d.ID, discordID(5), discordID(3)); !errors.Is(err, domain.ErrNotCaptain) {
+		t.Errorf("err = %v, want ErrNotCaptain", err)
+	}
+}
+
+func TestPickPlayerRejectsPlayerNotInLobby(t *testing.T) {
+	l := newDraftLobby(t, 12)
+	d, _ := l.StartDraft(discordID(1), discordID(2))
+
+	if _, err := l.PickPlayer(d.ID, discordID(1), "discord-nobody"); !errors.Is(err, domain.ErrNotInLobby) {
+		t.Errorf("err = %v, want ErrNotInLobby", err)
+	}
+	// The failed pick must not hand the turn over.
+	if _, err := l.PickPlayer(d.ID, discordID(1), discordID(3)); err != nil {
+		t.Errorf("A's retry after a refused pick: %v", err)
+	}
+}
+
+func TestParallelDraftsCannotTakeTheSamePlayer(t *testing.T) {
+	l := newDraftLobby(t, 14)
+	first, _ := l.StartDraft(discordID(1), discordID(2))
+	second, _ := l.StartDraft(discordID(11), discordID(12))
+
+	if _, err := l.PickPlayer(first.ID, discordID(1), discordID(5)); err != nil {
+		t.Fatalf("first draft's pick: %v", err)
+	}
+	if _, err := l.PickPlayer(second.ID, discordID(11), discordID(5)); !errors.Is(err, domain.ErrNotInLobby) {
+		t.Errorf("second draft took an already picked player: err = %v, want ErrNotInLobby", err)
+	}
+}
+
+func TestDraftCompletesAfterEightPicks(t *testing.T) {
+	l := newDraftLobby(t, 12)
+	d, _ := l.StartDraft(discordID(1), discordID(2))
+
+	v := pickAll(t, l, d.ID)
+
+	if !v.Complete {
+		t.Fatal("draft not complete after eight picks")
+	}
+	for side, want := range [2][]int{{3, 5, 7, 9}, {4, 6, 8, 10}} {
+		got := v.Sides[side].Picks
+		if len(got) != len(want) {
+			t.Fatalf("side %d has %d picks, want %d", side, len(got), len(want))
+		}
+		for i := range want {
+			if got[i].ID != want[i] {
+				t.Errorf("side %d pick %d = %d, want %d", side, i, got[i].ID, want[i])
+			}
+		}
+	}
+	if _, err := l.PickPlayer(d.ID, discordID(1), discordID(11)); !errors.Is(err, domain.ErrDraftComplete) {
+		t.Errorf("pick after completion: err = %v, want ErrDraftComplete", err)
+	}
+}
+
+func TestPickPlayerUnknownDraft(t *testing.T) {
+	l := newDraftLobby(t, 12)
+
+	if _, err := l.PickPlayer(42, discordID(1), discordID(3)); !errors.Is(err, domain.ErrDraftNotFound) {
+		t.Errorf("err = %v, want ErrDraftNotFound", err)
+	}
+}
+
+// A captain or pick who pressed "join the lobby" again could otherwise be
+// drafted into a second game while the first is still being picked.
+func TestDraftedPlayerCannotRejoinLobby(t *testing.T) {
+	l := newDraftLobby(t, 12)
+	d, _ := l.StartDraft(discordID(1), discordID(2))
+	if _, err := l.PickPlayer(d.ID, discordID(1), discordID(3)); err != nil {
+		t.Fatalf("pick: %v", err)
+	}
+
+	for _, id := range []int{1, 3} {
+		_, err := l.TryAddPlayer(context.Background(), models.Player{ID: id, Name: name(id)}, discordID(id))
+		if !errors.Is(err, domain.ErrInDraft) {
+			t.Errorf("player %d rejoining: err = %v, want ErrInDraft", id, err)
+		}
 	}
 }

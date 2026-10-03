@@ -120,3 +120,64 @@ func (l *LobbyService) requeueLocked(e lobbyEntry, now time.Time) {
 	}
 	l.waitlist = append(l.waitlist, e)
 }
+
+// PickPlayer moves the target from the lobby onto the picking captain's team
+// and hands the turn over. Both players are given by Discord ID.
+func (l *LobbyService) PickPlayer(draftID int, pickerDiscordID, targetDiscordID string) (DraftView, error) {
+	v, notices, err := l.pickLocked(draftID, pickerDiscordID, targetDiscordID)
+	l.dispatch(notices)
+	return v, err
+}
+
+func (l *LobbyService) pickLocked(draftID int, picker, target string) (DraftView, []notice, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	d, ok := l.drafts[draftID]
+	if !ok {
+		return DraftView{}, nil, domain.ErrDraftNotFound
+	}
+	if d.complete() {
+		return DraftView{}, nil, domain.ErrDraftComplete
+	}
+	if picker != d.captains[0].discordID && picker != d.captains[1].discordID {
+		return DraftView{}, nil, domain.ErrNotCaptain
+	}
+	if picker != d.captains[d.turn].discordID {
+		return DraftView{}, nil, domain.ErrNotYourTurn
+	}
+	e, notices, ok := l.takeFromMainLocked(target)
+	if !ok {
+		return DraftView{}, nil, domain.ErrNotInLobby
+	}
+
+	d.teams[d.turn] = append(d.teams[d.turn], e)
+	d.turn = 1 - d.turn
+	return d.view(), notices, nil
+}
+
+// has reports whether the player is a captain or a pick of this draft.
+func (d *draft) has(playerID int) bool {
+	for side := range d.captains {
+		if d.captains[side].player.ID == playerID {
+			return true
+		}
+		for _, e := range d.teams[side] {
+			if e.player.ID == playerID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// inDraftLocked reports whether the player belongs to any open draft. Must be
+// called with l.mu held.
+func (l *LobbyService) inDraftLocked(playerID int) bool {
+	for _, d := range l.drafts {
+		if d.has(playerID) {
+			return true
+		}
+	}
+	return false
+}

@@ -190,8 +190,9 @@ func (l *LobbyService) CloseLobby() {
 //
 // It returns the place the player took, or an error explaining why they were
 // refused: domain.ErrQueueBanned (as *QueueBanError, carrying reason and
-// expiry), domain.ErrLobbyClosed, or domain.ErrAlreadyQueued when the player
-// already held a slot and nothing changed.
+// expiry), domain.ErrLobbyClosed, domain.ErrInDraft while the player is in an
+// open draft, or domain.ErrAlreadyQueued when the player already held a slot
+// and nothing changed.
 func (l *LobbyService) TryAddPlayer(ctx context.Context, player models.Player, discordID string) (LobbyPlace, error) {
 	// Ban lookup hits the database — keep it outside the lobby lock.
 	//
@@ -231,6 +232,10 @@ func (l *LobbyService) TryAddPlayer(ctx context.Context, player models.Player, d
 		if e.player.ID == player.ID {
 			return "", domain.ErrAlreadyQueued
 		}
+	}
+
+	if l.inDraftLocked(player.ID) {
+		return "", domain.ErrInDraft
 	}
 
 	entry := lobbyEntry{player: player, discordID: discordID, joinedAt: now, lastActivity: now}
