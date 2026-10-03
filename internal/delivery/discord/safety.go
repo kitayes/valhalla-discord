@@ -196,8 +196,8 @@ func (b *Bot) isFAQChannel(channelID string) bool {
 	return b.cfg.FAQChannelID != "" && channelID == b.cfg.FAQChannelID
 }
 
-// isKnownMatchThread checks if the channel ID belongs to a known match thread
-// (in-memory cache or DB lookup via lobby_matches.thread_id).
+// isKnownMatchThread checks if the channel ID belongs to a known match or mix
+// thread (in-memory cache, or the database after a restart).
 //
 // A lookup failure is logged rather than folded into "not a match thread": both
 // answers dropped the screenshot, but only one of them is a bug worth seeing.
@@ -207,24 +207,15 @@ func (b *Bot) isKnownMatchThread(ctx context.Context, channelID string) bool {
 		return true
 	}
 
-	// DB fallback: query lobby_matches by thread_id
-	match, err := b.services.Lobby.GetMatchByThreadID(ctx, channelID)
+	names, err := b.services.Lobby.GetThreadRoster(ctx, channelID)
 	if err != nil {
 		if !errors.Is(err, domain.ErrMatchNotFound) {
 			b.logger.Error("discord: failed to resolve match thread %s: %v", channelID, err)
 		}
 		return false
 	}
-	if match == nil {
-		return false
-	}
 
 	// Cache the player names for subsequent screenshots
-	names, err := b.services.Lobby.GetPlayerNamesByMatchID(ctx, match.ID)
-	if err != nil {
-		b.logger.Error("discord: failed to load roster for match #%d: %v", match.ID, err)
-		return true
-	}
 	b.setThreadPlayers(channelID, names)
 	return true
 }

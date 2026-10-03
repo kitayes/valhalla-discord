@@ -343,11 +343,14 @@ func (b *Bot) onCreateMixSelect(s *discordgo.Session, i *discordgo.InteractionCr
 		return
 	}
 
-	// A mix has no lobby_matches row, so this in-memory roster is the only thing
-	// tying screenshots in the thread to its players for the AI matching. It is
-	// cached before anything is posted so a screenshot sent straight away is
-	// already recognised.
+	// The roster ties screenshots in the thread to its players for the AI
+	// matching. It is cached before anything is posted so a screenshot sent
+	// straight away is already recognised, and stored so the thread is still
+	// recognised after a restart.
 	b.setThreadPlayers(thread.ID, playerNames)
+	if err := b.services.Lobby.SaveMixThread(ctx, thread.ID, playerIDs); err != nil {
+		b.logger.Error("mix: thread %s opened but not saved, it is forgotten on restart: %v", thread.ID, err)
+	}
 
 	if _, err := s.ChannelMessageSend(thread.ID,
 		"Капитаны, скиньте скриншот результата **в эту ветку** после игры, я его обработаю."); err != nil {

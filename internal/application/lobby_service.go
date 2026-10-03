@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -31,6 +32,8 @@ type LobbyMatchRepository interface {
 	SaveThreadID(ctx context.Context, matchID int, threadID string) error
 	GetByThreadID(ctx context.Context, threadID string) (*models.LobbyMatch, error)
 	GetPlayerNamesByMatchID(ctx context.Context, matchID int) ([]string, error)
+	SaveMixThread(ctx context.Context, threadID string, playerIDs []int) error
+	GetMixThreadPlayerNames(ctx context.Context, threadID string) ([]string, error)
 	OpenBetting(ctx context.Context, matchID int, window time.Duration) error
 	CloseBetting(ctx context.Context, matchID int) error
 	CloseExpiredBetting(ctx context.Context) (int, error)
@@ -531,6 +534,25 @@ func (l *LobbyService) GetMatchByThreadID(ctx context.Context, threadID string) 
 // SaveThreadID records the Discord thread opened for a match.
 func (l *LobbyService) SaveThreadID(ctx context.Context, matchID int, threadID string) error {
 	return l.matchRepo.SaveThreadID(ctx, matchID, threadID)
+}
+
+// SaveMixThread records the roster of a /create_mix thread.
+func (l *LobbyService) SaveMixThread(ctx context.Context, threadID string, playerIDs []int) error {
+	return l.matchRepo.SaveMixThread(ctx, threadID, playerIDs)
+}
+
+// GetThreadRoster returns the player names behind a Discord thread opened for
+// either a lobby match or a mix. A thread that is neither is reported as
+// domain.ErrMatchNotFound.
+func (l *LobbyService) GetThreadRoster(ctx context.Context, threadID string) ([]string, error) {
+	match, err := l.matchRepo.GetByThreadID(ctx, threadID)
+	if err == nil {
+		return l.matchRepo.GetPlayerNamesByMatchID(ctx, match.ID)
+	}
+	if !errors.Is(err, domain.ErrMatchNotFound) {
+		return nil, err
+	}
+	return l.matchRepo.GetMixThreadPlayerNames(ctx, threadID)
 }
 
 func (l *LobbyService) GetPlayerNamesByMatchID(ctx context.Context, matchID int) ([]string, error) {
