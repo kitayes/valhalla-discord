@@ -149,6 +149,8 @@ type LobbyMatch interface {
 	GetBetPost(ctx context.Context, matchID int) (chatID, messageID int64, ok bool, err error)
 	GetByThreadID(ctx context.Context, threadID string) (*models.LobbyMatch, error)
 	GetPlayerNamesByMatchID(ctx context.Context, matchID int) ([]string, error)
+	// IsInActiveMatch reports whether the player is on a team of an ACTIVE match.
+	IsInActiveMatch(ctx context.Context, playerID int) (bool, error)
 	OpenBetting(ctx context.Context, matchID int, window time.Duration) error
 	CloseBetting(ctx context.Context, matchID int) error
 	CloseExpiredBetting(ctx context.Context) (int, error)

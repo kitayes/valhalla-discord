@@ -537,3 +537,20 @@ func (r *LobbyMatchPostgres) CancelMatch(ctx context.Context, matchID int) ([]in
 	}
 	return players, nil
 }
+
+// IsInActiveMatch reports whether the player is on either team of a match that
+// is still being played. Only ACTIVE counts: once the referee presses WIN the
+// match moves to PROCESSING and its players are free to queue again.
+func (r *LobbyMatchPostgres) IsInActiveMatch(ctx context.Context, playerID int) (bool, error) {
+	var playing bool
+	err := r.db.QueryRowContext(ctx,
+		`SELECT EXISTS (
+		     SELECT 1 FROM lobby_matches
+		     WHERE status = 'ACTIVE' AND ($1 = ANY(team_a_ids) OR $1 = ANY(team_b_ids))
+		 )`, playerID,
+	).Scan(&playing)
+	if err != nil {
+		return false, fmt.Errorf("failed to check active matches for player %d: %w", playerID, err)
+	}
+	return playing, nil
+}

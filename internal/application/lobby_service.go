@@ -32,6 +32,8 @@ type LobbyMatchRepository interface {
 	SaveThreadID(ctx context.Context, matchID int, threadID string) error
 	GetByThreadID(ctx context.Context, threadID string) (*models.LobbyMatch, error)
 	GetPlayerNamesByMatchID(ctx context.Context, matchID int) ([]string, error)
+	// IsInActiveMatch reports whether the player is on a team of an ACTIVE match.
+	IsInActiveMatch(ctx context.Context, playerID int) (bool, error)
 	OpenBetting(ctx context.Context, matchID int, window time.Duration) error
 	CloseBetting(ctx context.Context, matchID int) error
 	CloseExpiredBetting(ctx context.Context) (int, error)
@@ -190,9 +192,10 @@ func (l *LobbyService) CloseLobby() {
 //
 // It returns the place the player took, or an error explaining why they were
 // refused: domain.ErrQueueBanned (as *QueueBanError, carrying reason and
-// expiry), domain.ErrLobbyClosed, domain.ErrInDraft while the player is in an
-// open draft, or domain.ErrAlreadyQueued when the player already held a slot
-// and nothing changed.
+// expiry), domain.ErrLobbyClosed, domain.ErrInMatch while the player is on the
+// roster of an ACTIVE match, domain.ErrInDraft while the player is in an open
+// draft, or domain.ErrAlreadyQueued when the player already held a slot and
+// nothing changed.
 func (l *LobbyService) TryAddPlayer(ctx context.Context, player models.Player, discordID string) (LobbyPlace, error) {
 	// Ban lookup hits the database — keep it outside the lobby lock.
 	//
@@ -209,6 +212,17 @@ func (l *LobbyService) TryAddPlayer(ctx context.Context, player models.Player, d
 			return "", fmt.Errorf("lobby: cannot read queue ban for %s: %w", discordID, err)
 		}
 		return "", &QueueBanError{Reason: reason, Until: until}
+	}
+
+	// Several games run from one lobby now, so a player still on a match roster
+	// pressing "join" would be drafted into a second game. Like the ban check,
+	// this hits the database outside the lock and fails closed.
+	playing, err := l.matchRepo.IsInActiveMatch(ctx, player.ID)
+	if err != nil {
+		return "", fmt.Errorf("lobby: cannot check active matches for player %d: %w", player.ID, err)
+	}
+	if playing {
+		return "", domain.ErrInMatch
 	}
 
 	l.mu.Lock()

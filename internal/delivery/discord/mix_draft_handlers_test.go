@@ -95,3 +95,13 @@ func TestJoinMessageExplainsDraft(t *testing.T) {
 		t.Errorf("joinMessage(ErrInDraft) = %q, want it to mention the draft", msg)
 	}
 }
+
+func TestJoinMessageExplainsActiveMatch(t *testing.T) {
+	msg := joinMessage(domain.ErrInMatch)
+	if !strings.Contains(msg, "матче") {
+		t.Errorf("joinMessage(ErrInMatch) = %q, want it to say the player is in a match", msg)
+	}
+	if msg == joinMessage(errors.New("boom")) {
+		t.Error("ErrInMatch renders as the generic failure text")
+	}
+}

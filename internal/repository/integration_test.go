@@ -1445,3 +1445,50 @@ func TestIntegrationBracketCacheKeepsNotified(t *testing.T) {
 		}
 	}
 }
+
+// A player on either roster of an ACTIVE match may not queue again; once the
+// match leaves ACTIVE they may.
+func TestIntegrationIsInActiveMatch(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	matchRepo := newMatchRepo(t, db)
+	lobby := NewLobbyMatchPostgres(db)
+
+	aID, _ := seedBettor(t, db, matchRepo, 0)
+	bID, _ := seedBettor(t, db, matchRepo, 0)
+	freeID, _ := seedBettor(t, db, matchRepo, 0)
+
+	matchID, err := lobby.Create(ctx, models.CreateLobbyMatchRequest{
+		GuildID: "itest-active", CaptainAID: aID, CaptainBID: bID,
+		TeamAIDs: []int{aID}, TeamBIDs: []int{bID},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM lobby_matches WHERE id = $1`, matchID) })
+
+	for _, tc := range []struct {
+		name     string
+		playerID int
+		want     bool
+	}{
+		{"team A player", aID, true},
+		{"team B player", bID, true},
+		{"player outside the match", freeID, false},
+	} {
+		got, err := lobby.IsInActiveMatch(ctx, tc.playerID)
+		if err != nil {
+			t.Fatalf("%s: IsInActiveMatch: %v", tc.name, err)
+		}
+		if got != tc.want {
+			t.Errorf("%s: IsInActiveMatch = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+
+	if _, err := db.Exec(`UPDATE lobby_matches SET status = 'FINISHED' WHERE id = $1`, matchID); err != nil {
+		t.Fatalf("finish match: %v", err)
+	}
+	if got, err := lobby.IsInActiveMatch(ctx, aID); err != nil || got {
+		t.Errorf("after the match finished: IsInActiveMatch = (%v, %v), want (false, nil)", got, err)
+	}
+}

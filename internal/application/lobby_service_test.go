@@ -49,10 +49,29 @@ func newTestLobby() (*LobbyService, *recorder) {
 // newTestLobbyWithBanRepo builds a lobby around a specific queue-ban stub. The
 // ban repository is a required collaborator now, so every lobby needs one.
 func newTestLobbyWithBanRepo(repo *banRepoStub) (*LobbyService, *recorder, *banRepoStub) {
-	l := NewLobbyService(nopLogger{}, nil, repo)
+	l := NewLobbyService(nopLogger{}, &matchRepoStub{}, repo)
 	rec := newRecorder()
 	l.SetNotifier(rec.notify)
 	return l, rec, repo
+}
+
+// matchRepoStub answers the active-match lookup TryAddPlayer makes. Every
+// other repository method is left to the embedded nil interface, so a lobby
+// test that reaches one panics instead of passing on a silent zero value.
+type matchRepoStub struct {
+	LobbyMatchRepository
+	playing map[int]bool
+	err     error
+}
+
+func (r *matchRepoStub) IsInActiveMatch(_ context.Context, playerID int) (bool, error) {
+	return r.playing[playerID], r.err
+}
+
+func newTestLobbyWithMatchRepo(repo *matchRepoStub) *LobbyService {
+	l := NewLobbyService(nopLogger{}, repo, &banRepoStub{})
+	l.SetNotifier(newRecorder().notify)
+	return l
 }
 
 func addPlayers(t *testing.T, l *LobbyService, n int) {
@@ -141,6 +160,37 @@ func TestTryAddPlayerRejectedWhenLobbyClosed(t *testing.T) {
 	}
 	if !errors.Is(err, domain.ErrLobbyClosed) {
 		t.Errorf("closed lobby returned %v, want ErrLobbyClosed", err)
+	}
+}
+
+// With several games running from one lobby, a player who pressed "join"
+// mid-match could be drafted into a second game.
+func TestTryAddPlayerRejectsPlayerInActiveMatch(t *testing.T) {
+	l := newTestLobbyWithMatchRepo(&matchRepoStub{playing: map[int]bool{7: true}})
+
+	place, err := l.TryAddPlayer(context.Background(), models.Player{ID: 7, Name: "busy"}, "discord-busy")
+	if !errors.Is(err, domain.ErrInMatch) {
+		t.Errorf("join while in a match returned (%q, %v), want ErrInMatch", place, err)
+	}
+	if l.IsPlayerActive(7) {
+		t.Error("a player in an active match was queued")
+	}
+
+	if _, err := l.TryAddPlayer(context.Background(), models.Player{ID: 8, Name: "free"}, "discord-free"); err != nil {
+		t.Errorf("a player with no active match was refused: %v", err)
+	}
+}
+
+// The lookup fails closed, like the ban check: an unreadable answer must not
+// let a player into a second game.
+func TestTryAddPlayerRefusesWhenMatchLookupFails(t *testing.T) {
+	l := newTestLobbyWithMatchRepo(&matchRepoStub{err: errors.New("db down")})
+
+	if _, err := l.TryAddPlayer(context.Background(), models.Player{ID: 7, Name: "a"}, "discord-a"); err == nil {
+		t.Error("join succeeded although the active-match lookup failed")
+	}
+	if l.IsPlayerActive(7) {
+		t.Error("player was queued although the active-match lookup failed")
 	}
 }
 

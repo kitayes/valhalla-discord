@@ -33,6 +33,9 @@ var (
 	// ErrInDraft reports that the player is a captain or a pick of a draft that
 	// is still open, so they cannot queue again until it ends.
 	ErrInDraft = errors.New("player is already in a draft")
+	// ErrInMatch reports that the player is on a roster of a match still being
+	// played, so they cannot queue for another game until it ends.
+	ErrInMatch = errors.New("player is in an active match")
 	// ErrSameCaptain reports that both captains of a draft are one person.
 	ErrSameCaptain = errors.New("both captains are the same player")
 	// ErrNotInLobby reports that the player is not in the main queue — never

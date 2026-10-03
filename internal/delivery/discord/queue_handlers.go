@@ -182,6 +182,8 @@ func joinMessage(err error) string {
 		return "Лобби закрыто. Дождитесь открытия следующей сессии."
 	case errors.Is(err, domain.ErrInDraft):
 		return "Вы уже в драфте игры. Вернуться в лобби можно после матча."
+	case errors.Is(err, domain.ErrInMatch):
+		return "Вы сейчас в матче. Вернуться в лобби можно после его окончания."
 	default:
 		return "Не удалось встать в очередь. Попробуйте ещё раз через минуту."
 	}
