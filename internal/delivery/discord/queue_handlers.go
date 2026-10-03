@@ -331,6 +331,13 @@ func (b *Bot) onCreateMixSelect(s *discordgo.Session, i *discordgo.InteractionCr
 		return
 	}
 
+	// The mix is public now, so its players are playing it: take them out of the
+	// lobby the way /create_match does. Left in, they held slots the waitlist
+	// was waiting for and could be drafted into a second game at the same time.
+	for _, pid := range playerIDs {
+		b.services.Lobby.RemovePlayer(pid)
+	}
+
 	thread, err := s.MessageThreadStart(i.ChannelID, anchor.ID, threadName("Микс "+roster), 60)
 	if err != nil {
 		b.logger.Warn("mix: failed to create thread: %v", err)
