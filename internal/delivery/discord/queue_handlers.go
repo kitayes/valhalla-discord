@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -23,9 +22,6 @@ const (
 	componentLabelLeave      = "Выйти из лобби"
 	componentIDMarkActive    = "lobby_mark_active"
 	componentIDLeave         = "lobby_leave"
-
-	// create mix
-	selectMenuCreateMix = "create_mix_select"
 )
 
 func (b *Bot) newLobbyCommand() *discordgo.ApplicationCommand {
@@ -38,14 +34,14 @@ func (b *Bot) newLobbyCommand() *discordgo.ApplicationCommand {
 func (b *Bot) newCreateMixCommand() *discordgo.ApplicationCommand {
 	return &discordgo.ApplicationCommand{
 		Name:        "create_mix",
-		Description: "Создать микс из активного лобби (Только SUDЬЯ/админы)",
+		Description: "Драфт игры 5х5: назначить двух капитанов (Только SUDЬЯ/админы)",
 	}
 }
 
 // RegisterQueueHandlers registers button and select-menu handlers.
 func (b *Bot) RegisterQueueHandlers() {
 	b.session.AddHandler(b.wrapRecover(b.onLobbyButton))
-	b.session.AddHandler(b.wrapRecover(b.onCreateMixSelect))
+	b.session.AddHandler(b.wrapRecover(b.onMixComponent))
 }
 
 func (b *Bot) onLobbyButton(s *discordgo.Session, i *discordgo.InteractionCreate) {
@@ -184,6 +180,8 @@ func joinMessage(err error) string {
 			banned.Until.Format("02.01.2006 15:04"), banned.Reason)
 	case errors.Is(err, domain.ErrLobbyClosed):
 		return "Лобби закрыто. Дождитесь открытия следующей сессии."
+	case errors.Is(err, domain.ErrInDraft):
+		return "Вы уже в драфте игры. Вернуться в лобби можно после матча."
 	default:
 		return "Не удалось встать в очередь. Попробуйте ещё раз через минуту."
 	}
@@ -205,232 +203,6 @@ func (b *Bot) handleLeaveLobby(ctx context.Context, s *discordgo.Session, i *dis
 		Data: &discordgo.InteractionResponseData{
 			Embeds:     []*discordgo.MessageEmbed{b.buildLobbyEmbed()},
 			Components: b.buildLobbyComponents(),
-		},
-	})
-}
-
-// handleCreateMix sends the caller a select menu with active players.
-func (b *Bot) handleCreateMix(ctx context.Context, s *discordgo.Session, i *discordgo.Interaction) {
-	if !b.requireReferee(s, i) {
-		return
-	}
-	activePlayers := b.services.Lobby.GetActivePlayers()
-	if len(activePlayers) < 2 {
-		b.respondMessage(s, i, "Недостаточно активных игроков для создания микса (минимум 2).", true)
-		return
-	}
-
-	// Sort by ID for consistent display
-	sort.Slice(activePlayers, func(a, b int) bool {
-		return activePlayers[a].ID < activePlayers[b].ID
-	})
-
-	var options []discordgo.SelectMenuOption
-	for _, p := range activePlayers {
-		options = append(options, discordgo.SelectMenuOption{
-			Label: p.Name,
-			Value: fmt.Sprintf("%d", p.ID),
-		})
-	}
-
-	minValues := 2
-	maxValues := len(activePlayers)
-	if maxValues > 10 {
-		maxValues = 10
-	}
-
-	b.respond(s, i, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: fmt.Sprintf("Выберите игроков для микса (от %d до %d):", minValues, maxValues),
-			Flags:   discordgo.MessageFlagsEphemeral,
-			Components: []discordgo.MessageComponent{
-				discordgo.ActionsRow{
-					Components: []discordgo.MessageComponent{
-						discordgo.SelectMenu{
-							CustomID:    selectMenuCreateMix,
-							Placeholder: "Выберите игроков...",
-							MinValues:   &minValues,
-							MaxValues:   maxValues,
-							Options:     options,
-						},
-					},
-				},
-			},
-		},
-	})
-}
-
-func (b *Bot) onCreateMixSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	if i.Type != discordgo.InteractionMessageComponent {
-		return
-	}
-
-	data := i.MessageComponentData()
-	if data.CustomID != selectMenuCreateMix {
-		return
-	}
-
-	ctx, cancel := b.opContext(interactionTimeout)
-	defer cancel()
-
-	// Component interactions bypass onInteraction entirely, so this handler is
-	// the only place the caller can be checked. /create_mix that produced this
-	// menu is admin-gated; the menu itself was not.
-	if !b.guardComponent(ctx, s, i.Interaction) {
-		return
-	}
-	if !b.requireReferee(s, i.Interaction) {
-		return
-	}
-
-	selectedIDs := data.Values
-	if len(selectedIDs) == 0 {
-		return
-	}
-
-	// Parse selected player IDs
-	playerIDs := make([]int, 0, len(selectedIDs))
-	for _, val := range selectedIDs {
-		id := parseID(val)
-		if id == 0 {
-			b.logger.Error("mix: malformed player id %q in select menu", val)
-			b.respondMessage(s, i.Interaction, "Некорректный выбор игроков. Повторите команду.", true)
-			return
-		}
-		playerIDs = append(playerIDs, id)
-	}
-
-	// Names are not decoration: they are cached against the thread and drive the
-	// AI screenshot matching for it. Continuing on error cached an empty roster.
-	nameMap, err := b.services.MatchService.GetPlayerNamesByIDs(ctx, playerIDs)
-	if err != nil {
-		b.logger.Error("mix: failed to resolve player names: %v", err)
-		b.respondMessage(s, i.Interaction, "Не удалось получить список игроков. Попробуйте ещё раз.", true)
-		return
-	}
-	playerNames := make([]string, 0, len(playerIDs))
-	for _, id := range playerIDs {
-		if name, ok := nameMap[id]; ok {
-			playerNames = append(playerNames, name)
-		}
-	}
-
-	signature := fmt.Sprintf("MIX-%s", strings.Join(selectedIDs, "-"))
-	roster := strings.Join(playerNames, ", ")
-
-	// The select menu this came from is ephemeral, and Discord cannot start a
-	// thread from an ephemeral message — threading off i.Message failed every
-	// time and every mix silently fell back to "post it in the channel". The mix
-	// gets a public message of its own, and the thread hangs off that.
-	anchor, err := s.ChannelMessageSendComplex(i.ChannelID, &discordgo.MessageSend{
-		Content: truncateMessage(fmt.Sprintf(
-			"**Микс создан!**\n\nСигнатура: `%s`\nИгроки: %s", signature, roster)),
-		Components: b.mixRequeueComponents(playerIDs),
-	})
-	if err != nil {
-		b.logger.Error("mix: failed to post mix message: %v", err)
-		b.respondMessage(s, i.Interaction, "Не удалось опубликовать микс. Попробуйте ещё раз.", true)
-		return
-	}
-
-	// The mix is public now, so its players are playing it: take them out of the
-	// lobby the way /create_match does. Left in, they held slots the waitlist
-	// was waiting for and could be drafted into a second game at the same time.
-	for _, pid := range playerIDs {
-		b.services.Lobby.RemovePlayer(pid)
-	}
-
-	thread, err := s.MessageThreadStart(i.ChannelID, anchor.ID, threadName("Микс "+roster), 60)
-	if err != nil {
-		b.logger.Warn("mix: failed to create thread: %v", err)
-		if _, err := s.ChannelMessageEdit(i.ChannelID, anchor.ID, truncateMessage(fmt.Sprintf(
-			"**Микс создан!**\n\nСигнатура: `%s`\nИгроки: %s\n\nКапитаны, скиньте скриншот результата в этот канал после игры, я его обработаю.",
-			signature, roster))); err != nil {
-			b.logger.Warn("mix: failed to update mix message: %v", err)
-		}
-		b.respondMixCreated(s, i.Interaction, "Ветку открыть не удалось — скриншоты принимаются в этом канале.")
-		return
-	}
-
-	// The roster ties screenshots in the thread to its players for the AI
-	// matching. It is cached before anything is posted so a screenshot sent
-	// straight away is already recognised, and stored so the thread is still
-	// recognised after a restart.
-	b.setThreadPlayers(thread.ID, playerNames)
-	if err := b.services.Lobby.SaveMixThread(ctx, thread.ID, playerIDs); err != nil {
-		b.logger.Error("mix: thread %s opened but not saved, it is forgotten on restart: %v", thread.ID, err)
-	}
-
-	if _, err := s.ChannelMessageSend(thread.ID,
-		"Капитаны, скиньте скриншот результата **в эту ветку** после игры, я его обработаю."); err != nil {
-		b.logger.Warn("mix: failed to send thread message: %v", err)
-	}
-
-	b.respondMixCreated(s, i.Interaction, fmt.Sprintf("Ветка: <#%s>", thread.ID))
-	b.logger.Info("mix: thread %s created for signature %s", thread.ID, signature)
-}
-
-// buttonMixRequeue prefixes the mix's "back to the lobby" button. The players'
-// IDs ride in the custom ID itself: a mix has no match row to look the roster up
-// in, and the button has to keep working after a restart.
-const buttonMixRequeue = "mix_requeue"
-
-// maxCustomIDLength is Discord's limit on a component custom ID.
-const maxCustomIDLength = 100
-
-// mixRequeueCustomID encodes a mix roster into the requeue button's custom ID.
-// It reports false when the roster does not fit Discord's limit.
-func mixRequeueCustomID(playerIDs []int) (string, bool) {
-	parts := make([]string, len(playerIDs))
-	for idx, id := range playerIDs {
-		parts[idx] = strconv.Itoa(id)
-	}
-	customID := buttonMixRequeue + "_" + strings.Join(parts, "-")
-	return customID, len(customID) <= maxCustomIDLength
-}
-
-// parseMixRequeueCustomID is the inverse of mixRequeueCustomID.
-func parseMixRequeueCustomID(customID string) ([]int, bool) {
-	rest, found := strings.CutPrefix(customID, buttonMixRequeue+"_")
-	if !found || rest == "" {
-		return nil, false
-	}
-	fields := strings.Split(rest, "-")
-	ids := make([]int, 0, len(fields))
-	for _, f := range fields {
-		id := parseID(f)
-		if id <= 0 {
-			return nil, false
-		}
-		ids = append(ids, id)
-	}
-	return ids, true
-}
-
-// mixRequeueComponents builds the button that lets a mix's players get back in
-// the lobby once they are done — creating the mix took them out of it.
-func (b *Bot) mixRequeueComponents(playerIDs []int) []discordgo.MessageComponent {
-	customID, ok := mixRequeueCustomID(playerIDs)
-	if !ok {
-		b.logger.Warn("mix: roster %v does not fit a button custom ID, posting without the requeue button", playerIDs)
-		return nil
-	}
-	return []discordgo.MessageComponent{
-		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-			discordgo.Button{Label: "Вернуться в лобби", Style: discordgo.SecondaryButton, CustomID: customID},
-		}},
-	}
-}
-
-// respondMixCreated replaces the referee's player picker with the outcome, so
-// the spent select menu does not stay around to be submitted a second time.
-func (b *Bot) respondMixCreated(s *discordgo.Session, i *discordgo.Interaction, detail string) {
-	b.respond(s, i, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseUpdateMessage,
-		Data: &discordgo.InteractionResponseData{
-			Content:    "**Микс создан!** " + detail,
-			Components: []discordgo.MessageComponent{},
 		},
 	})
 }

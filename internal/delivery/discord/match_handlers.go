@@ -306,7 +306,7 @@ func (b *Bot) handleSelectTeamB(ctx context.Context, s *discordgo.Session, i *di
 	}
 
 	embed := b.buildMatchEmbed(matchID, captainAName, captainBName, teamANames, teamBNames)
-	b.publishCreatedMatch(ctx, s, i.Interaction, matchID, teamAIDs, teamBIDs, concatNames(teamANames, teamBNames), embed, captainAName, captainBName)
+	b.publishCreatedMatch(ctx, s, i.Interaction, discordgo.InteractionResponseChannelMessageWithSource, matchID, teamAIDs, teamBIDs, concatNames(teamANames, teamBNames), embed, captainAName, captainBName)
 	b.logger.Info("match: #%d created | Team A: %s vs Team B: %s", matchID, strings.Join(teamANames, ", "), strings.Join(teamBNames, ", "))
 }
 
@@ -318,10 +318,14 @@ func (b *Bot) handleSelectTeamB(ctx context.Context, s *discordgo.Session, i *di
 // handleSelectTeamB and handleBalance each had their own copy of this, including
 // two byte-identical button blocks. The copy in handleBalance had already
 // drifted — it never logged the created match.
+//
+// respType is a new message for /balance and an update of the draft message for
+// a finished mix draft.
 func (b *Bot) publishCreatedMatch(
 	ctx context.Context,
 	s *discordgo.Session,
 	i *discordgo.Interaction,
+	respType discordgo.InteractionResponseType,
 	matchID int,
 	teamAIDs, teamBIDs []int,
 	roster []string,
@@ -335,14 +339,20 @@ func (b *Bot) publishCreatedMatch(
 	b.setMatchPlayers(matchID, allIDs)
 
 	b.respond(s, i, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Type: respType,
 		Data: &discordgo.InteractionResponseData{
 			Embeds:     []*discordgo.MessageEmbed{embed},
 			Components: matchResultButtons(matchID),
 		},
 	})
 
-	b.openMatchThread(ctx, s, i, matchID, captainAName, captainBName, roster)
+	// An updated draft message is the message the pressed component sits on;
+	// a new message has to be fetched back from the interaction.
+	cardID := ""
+	if respType == discordgo.InteractionResponseUpdateMessage && i.Message != nil {
+		cardID = i.Message.ID
+	}
+	b.openMatchThread(ctx, s, i, cardID, matchID, captainAName, captainBName, roster)
 	b.openBettingWindow(ctx, matchID)
 	b.startBettingTimer(matchID)
 	b.notifyTelegramMatchLive(matchID, captainAName, captainBName)
@@ -360,18 +370,22 @@ func (b *Bot) openMatchThread(
 	ctx context.Context,
 	s *discordgo.Session,
 	i *discordgo.Interaction,
+	cardID string,
 	matchID int,
 	captainAName, captainBName string,
 	roster []string,
 ) {
-	card, err := s.InteractionResponse(i)
-	if err != nil {
-		b.logger.Warn("match: cannot load the card of #%d to open a thread: %v", matchID, err)
-		return
+	if cardID == "" {
+		card, err := s.InteractionResponse(i)
+		if err != nil {
+			b.logger.Warn("match: cannot load the card of #%d to open a thread: %v", matchID, err)
+			return
+		}
+		cardID = card.ID
 	}
 
 	name := threadName(fmt.Sprintf("Матч #%d: %s vs %s", matchID, captainAName, captainBName))
-	thread, err := s.MessageThreadStart(i.ChannelID, card.ID, name, 1440)
+	thread, err := s.MessageThreadStart(i.ChannelID, cardID, name, 1440)
 	if err != nil {
 		b.logger.Warn("match: failed to open thread for #%d: %v", matchID, err)
 		return
@@ -623,9 +637,7 @@ func (b *Bot) onRequeueButton(s *discordgo.Session, i *discordgo.InteractionCrea
 	}
 
 	data := i.MessageComponentData()
-	isMatch := strings.HasPrefix(data.CustomID, "requeue_")
-	isMix := strings.HasPrefix(data.CustomID, buttonMixRequeue+"_")
-	if !isMatch && !isMix {
+	if !strings.HasPrefix(data.CustomID, "requeue_") {
 		return
 	}
 
@@ -633,18 +645,6 @@ func (b *Bot) onRequeueButton(s *discordgo.Session, i *discordgo.InteractionCrea
 	defer cancel()
 
 	if !b.guardComponent(ctx, s, i.Interaction) {
-		return
-	}
-
-	if isMix {
-		roster, ok := parseMixRequeueCustomID(data.CustomID)
-		if !ok {
-			b.logger.Error("requeue: malformed mix custom ID %q", data.CustomID)
-			return
-		}
-		b.requeueParticipant(ctx, s, i, "Вы не участвовали в этом миксе.", func(playerID int) (bool, error) {
-			return slices.Contains(roster, playerID), nil
-		})
 		return
 	}
 
@@ -1077,6 +1077,6 @@ func (b *Bot) handleBalance(ctx context.Context, s *discordgo.Session, i *discor
 
 	embed := b.buildMatchEmbed(matchID, teamANames[0], teamBNames[0], teamANames, teamBNames)
 	embed.Footer = &discordgo.MessageEmbedFooter{Text: fmt.Sprintf("Авто-баланс | Team A avg: %.0f | Team B avg: %.0f", avgA, avgB)}
-	b.publishCreatedMatch(ctx, s, i, matchID, teamAIDs, teamBIDs, concatNames(teamANames, teamBNames), embed, teamANames[0], teamBNames[0])
+	b.publishCreatedMatch(ctx, s, i, discordgo.InteractionResponseChannelMessageWithSource, matchID, teamAIDs, teamBIDs, concatNames(teamANames, teamBNames), embed, teamANames[0], teamBNames[0])
 	b.logger.Info("balance: match #%d auto-balanced | Team A avg: %.0f | Team B avg: %.0f", matchID, avgA, avgB)
 }
