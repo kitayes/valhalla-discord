@@ -85,8 +85,8 @@ type draft struct {
 
 `DraftView` — снимок для отрисовки: номер, капитаны, составы (имена и ID),
 чей ход, `Complete`. Ошибки — сентинели в `internal/domain`
-(`ErrDraftNotFound`, `ErrNotYourTurn`, `ErrNotCaptain`, `ErrNotInLobby`,
-`ErrSameCaptain`), тексты для игроков формирует delivery-слой, как
+(`ErrDraftNotFound`, `ErrDraftComplete`, `ErrNotYourTurn`, `ErrNotCaptain`,
+`ErrNotInLobby`, `ErrSameCaptain`, `ErrInDraft`), тексты для игроков формирует delivery-слой, как
 `joinMessage`.
 
 Игроки сопоставляются по Discord ID из `lobbyEntry.discordID`: при входе в
@@ -104,7 +104,8 @@ type draft struct {
 - Сообщение драфта: embed (Команда A / Команда B / ход) и компоненты с
   номером драфта в custom ID:
   - `mix_pick_<id>` — UserSelect `min=max=1`, «Выбрать игрока»;
-  - `mix_free_<id>` — кнопка «Свободные игроки» → скрытый список лобби;
+  - `mix_free` — кнопка «Свободные игроки» → скрытый список лобби (номер
+    драфта не нужен: показывается всё лобби);
   - `mix_cancel_<id>` — кнопка «Отменить драфт», только судья.
 - `mix_pick_<id>`: guard (без `requireReferee` — выбирают капитаны) →
   `PickPlayer` → `InteractionResponseUpdateMessage` с новым embed. При ошибке
@@ -115,8 +116,12 @@ type draft struct {
   (новое сообщение для `/balance`, обновление для драфта); `openMatchThread`
   берёт карточку через `InteractionResponse(i)` в обоих случаях.
 - После успешного `CreateMatch` — `FinishDraft`. Если `CreateMatch` упал —
-  `CancelDraft` (все возвращаются в лобби), выбравшему — скрытое сообщение об
-  ошибке, сообщение драфта помечается отменённым.
+  `CancelDraft` (все возвращаются в лобби), а сообщение драфта обновляется на
+  «драфт отменён: матч создать не удалось» — публично, потому что на одно
+  нажатие Discord принимает один ответ.
+- Игрок, который сейчас в драфте (капитан или выбранный), не может снова
+  войти в лобби: `TryAddPlayer` отвечает `domain.ErrInDraft`. Иначе он мог бы
+  попасть во второй драфт параллельно.
 - Кнопки драфта, которого нет (рестарт): «Драфт не найден — бот
   перезапускался, создайте игру заново».
 
