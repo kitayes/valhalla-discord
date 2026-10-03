@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -622,7 +623,9 @@ func (b *Bot) onRequeueButton(s *discordgo.Session, i *discordgo.InteractionCrea
 	}
 
 	data := i.MessageComponentData()
-	if !strings.HasPrefix(data.CustomID, "requeue_") {
+	isMatch := strings.HasPrefix(data.CustomID, "requeue_")
+	isMix := strings.HasPrefix(data.CustomID, buttonMixRequeue+"_")
+	if !isMatch && !isMix {
 		return
 	}
 
@@ -633,12 +636,46 @@ func (b *Bot) onRequeueButton(s *discordgo.Session, i *discordgo.InteractionCrea
 		return
 	}
 
+	if isMix {
+		roster, ok := parseMixRequeueCustomID(data.CustomID)
+		if !ok {
+			b.logger.Error("requeue: malformed mix custom ID %q", data.CustomID)
+			return
+		}
+		b.requeueParticipant(ctx, s, i, "Вы не участвовали в этом миксе.", func(playerID int) (bool, error) {
+			return slices.Contains(roster, playerID), nil
+		})
+		return
+	}
+
 	matchID := parseID(strings.TrimPrefix(data.CustomID, "requeue_"))
 	if matchID <= 0 {
 		b.logger.Error("requeue: malformed custom ID %q", data.CustomID)
 		return
 	}
+	b.requeueParticipant(ctx, s, i, "Вы не участвовали в этом матче.", func(playerID int) (bool, error) {
+		if pids, ok := b.getMatchPlayers(matchID); ok {
+			return slices.Contains(pids, playerID), nil
+		}
+		// Fallback: check database if cache expired.
+		match, err := b.services.Lobby.GetMatch(ctx, matchID)
+		if err != nil {
+			return false, fmt.Errorf("load match #%d: %w", matchID, err)
+		}
+		return slices.Contains(concatIDs(match.TeamAIDs, match.TeamBIDs), playerID), nil
+	})
+}
 
+// requeueParticipant puts the pressing player back in the lobby if they played
+// in the game the button belongs to. A roster lookup failure is not the same
+// answer as "you did not play in it" — the user is told so rather than accused.
+func (b *Bot) requeueParticipant(
+	ctx context.Context,
+	s *discordgo.Session,
+	i *discordgo.InteractionCreate,
+	notParticipantMsg string,
+	played func(playerID int) (bool, error),
+) {
 	member := interactionMember(i.Interaction)
 	if member == nil {
 		return
@@ -657,36 +694,14 @@ func (b *Bot) onRequeueButton(s *discordgo.Session, i *discordgo.InteractionCrea
 		return
 	}
 
-	// Verify if the player was a participant of the match
-	isParticipant := false
-	if pids, ok := b.getMatchPlayers(matchID); ok {
-		for _, pid := range pids {
-			if pid == player.ID {
-				isParticipant = true
-				break
-			}
-		}
-	} else {
-		// Fallback: check database if cache expired. A lookup failure is not the
-		// same answer as "you did not play in it" — say so rather than accusing
-		// the user.
-		match, err := b.services.Lobby.GetMatch(ctx, matchID)
-		if err != nil {
-			b.logger.Error("requeue: failed to load match #%d: %v", matchID, err)
-			b.respondMessage(s, i.Interaction, "Не удалось проверить состав матча. Попробуйте ещё раз.", true)
-			return
-		}
-		allIDs := concatIDs(match.TeamAIDs, match.TeamBIDs)
-		for _, pid := range allIDs {
-			if pid == player.ID {
-				isParticipant = true
-				break
-			}
-		}
+	isParticipant, err := played(player.ID)
+	if err != nil {
+		b.logger.Error("requeue: failed to check roster: %v", err)
+		b.respondMessage(s, i.Interaction, "Не удалось проверить состав. Попробуйте ещё раз.", true)
+		return
 	}
-
 	if !isParticipant {
-		b.respondMessage(s, i.Interaction, "Вы не участвовали в этом матче.", true)
+		b.respondMessage(s, i.Interaction, notParticipantMsg, true)
 		return
 	}
 

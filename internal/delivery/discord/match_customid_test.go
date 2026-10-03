@@ -78,3 +78,45 @@ func TestParseIDRejectsNonNumeric(t *testing.T) {
 		t.Errorf("parseID(%q) = %d, want 42", "42", got)
 	}
 }
+
+// The mix requeue button carries the whole roster, since a mix has no match row
+// to look it up in.
+func TestMixRequeueCustomIDRoundTrip(t *testing.T) {
+	roster := []int{42, 7, 1000, 3}
+
+	customID, ok := mixRequeueCustomID(roster)
+	if !ok {
+		t.Fatalf("mixRequeueCustomID(%v) reported the roster does not fit", roster)
+	}
+	got, ok := parseMixRequeueCustomID(customID)
+	if !ok {
+		t.Fatalf("parseMixRequeueCustomID(%q) failed", customID)
+	}
+	if fmt.Sprint(got) != fmt.Sprint(roster) {
+		t.Errorf("roster = %v, want %v", got, roster)
+	}
+}
+
+// Ten players with large IDs must still fit Discord's 100-character custom ID.
+func TestMixRequeueCustomIDFitsTenPlayers(t *testing.T) {
+	roster := make([]int, 10)
+	for i := range roster {
+		roster[i] = 1_000_000 + i
+	}
+	if customID, ok := mixRequeueCustomID(roster); !ok || len(customID) > maxCustomIDLength {
+		t.Errorf("custom ID %q (%d chars) does not fit", customID, len(customID))
+	}
+}
+
+func TestParseMixRequeueCustomIDRejectsGarbage(t *testing.T) {
+	for _, customID := range []string{
+		buttonMixRequeue + "_",
+		buttonMixRequeue + "_1--2",
+		buttonMixRequeue + "_1-abc",
+		"requeue_5",
+	} {
+		if ids, ok := parseMixRequeueCustomID(customID); ok {
+			t.Errorf("parseMixRequeueCustomID(%q) = %v, want failure", customID, ids)
+		}
+	}
+}

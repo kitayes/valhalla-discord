@@ -323,8 +323,11 @@ func (b *Bot) onCreateMixSelect(s *discordgo.Session, i *discordgo.InteractionCr
 	// thread from an ephemeral message — threading off i.Message failed every
 	// time and every mix silently fell back to "post it in the channel". The mix
 	// gets a public message of its own, and the thread hangs off that.
-	anchor, err := s.ChannelMessageSend(i.ChannelID, truncateMessage(fmt.Sprintf(
-		"**Микс создан!**\n\nСигнатура: `%s`\nИгроки: %s", signature, roster)))
+	anchor, err := s.ChannelMessageSendComplex(i.ChannelID, &discordgo.MessageSend{
+		Content: truncateMessage(fmt.Sprintf(
+			"**Микс создан!**\n\nСигнатура: `%s`\nИгроки: %s", signature, roster)),
+		Components: b.mixRequeueComponents(playerIDs),
+	})
 	if err != nil {
 		b.logger.Error("mix: failed to post mix message: %v", err)
 		b.respondMessage(s, i.Interaction, "Не удалось опубликовать микс. Попробуйте ещё раз.", true)
@@ -366,6 +369,58 @@ func (b *Bot) onCreateMixSelect(s *discordgo.Session, i *discordgo.InteractionCr
 
 	b.respondMixCreated(s, i.Interaction, fmt.Sprintf("Ветка: <#%s>", thread.ID))
 	b.logger.Info("mix: thread %s created for signature %s", thread.ID, signature)
+}
+
+// buttonMixRequeue prefixes the mix's "back to the lobby" button. The players'
+// IDs ride in the custom ID itself: a mix has no match row to look the roster up
+// in, and the button has to keep working after a restart.
+const buttonMixRequeue = "mix_requeue"
+
+// maxCustomIDLength is Discord's limit on a component custom ID.
+const maxCustomIDLength = 100
+
+// mixRequeueCustomID encodes a mix roster into the requeue button's custom ID.
+// It reports false when the roster does not fit Discord's limit.
+func mixRequeueCustomID(playerIDs []int) (string, bool) {
+	parts := make([]string, len(playerIDs))
+	for idx, id := range playerIDs {
+		parts[idx] = strconv.Itoa(id)
+	}
+	customID := buttonMixRequeue + "_" + strings.Join(parts, "-")
+	return customID, len(customID) <= maxCustomIDLength
+}
+
+// parseMixRequeueCustomID is the inverse of mixRequeueCustomID.
+func parseMixRequeueCustomID(customID string) ([]int, bool) {
+	rest, found := strings.CutPrefix(customID, buttonMixRequeue+"_")
+	if !found || rest == "" {
+		return nil, false
+	}
+	fields := strings.Split(rest, "-")
+	ids := make([]int, 0, len(fields))
+	for _, f := range fields {
+		id := parseID(f)
+		if id <= 0 {
+			return nil, false
+		}
+		ids = append(ids, id)
+	}
+	return ids, true
+}
+
+// mixRequeueComponents builds the button that lets a mix's players get back in
+// the lobby once they are done — creating the mix took them out of it.
+func (b *Bot) mixRequeueComponents(playerIDs []int) []discordgo.MessageComponent {
+	customID, ok := mixRequeueCustomID(playerIDs)
+	if !ok {
+		b.logger.Warn("mix: roster %v does not fit a button custom ID, posting without the requeue button", playerIDs)
+		return nil
+	}
+	return []discordgo.MessageComponent{
+		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			discordgo.Button{Label: "Вернуться в лобби", Style: discordgo.SecondaryButton, CustomID: customID},
+		}},
+	}
 }
 
 // respondMixCreated replaces the referee's player picker with the outcome, so
