@@ -709,9 +709,8 @@ func (b *Bot) handleBalance(ctx context.Context, s *discordgo.Session, i *discor
 		return
 	}
 
-	// Sort first, then take the top ten. The other order truncated by join
-	// position while the comment claimed the ten highest-MMR players were being
-	// drafted — harmless only because lobbyCapacity happens to equal ten.
+	// Sort by MMR, then take the top ten: /balance drafts the ten highest-rated
+	// players in the lobby into one game.
 	sort.Slice(activePlayers, func(a, b int) bool { return mmrMap[activePlayers[a].ID] > mmrMap[activePlayers[b].ID] })
 	if len(activePlayers) > teamSize*2 {
 		activePlayers = activePlayers[:teamSize*2]
@@ -746,8 +745,23 @@ func (b *Bot) handleBalance(ctx context.Context, s *discordgo.Session, i *discor
 	avgA := float64(sumA) / float64(len(teamAIDs))
 	avgB := float64(sumB) / float64(len(teamBIDs))
 	guildID := b.guildID(i.GuildID)
+
+	// Take the ten out of the lobby before the match is created: the lobby
+	// moved on while the MMRs were read, and a captain's pick in that window
+	// would otherwise put one of them in a draft and in this match.
+	release, err := b.services.Lobby.TakePlayers(concatIDs(teamAIDs, teamBIDs))
+	if err != nil {
+		if errors.Is(err, domain.ErrNotInLobby) {
+			b.respondMessage(s, i, "Состав лобби изменился, пока собирались команды. Запустите /balance ещё раз.", true)
+			return
+		}
+		b.logger.Error("balance: failed to take players out of the lobby: %v", err)
+		b.respondMessage(s, i, "Ошибка создания матча", true)
+		return
+	}
 	matchID, err := b.services.Lobby.CreateMatch(ctx, guildID, teamAIDs[0], teamBIDs[0], teamAIDs, teamBIDs)
 	if err != nil {
+		release()
 		b.logger.Error("balance: failed to create match: %v", err)
 		b.respondMessage(s, i, "Ошибка создания матча", true)
 		return

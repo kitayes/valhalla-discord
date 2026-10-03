@@ -132,7 +132,10 @@ func NewLobbyService(logger Logger, matchRepo LobbyMatchRepository, queueBanRepo
 		queueBanRepo: queueBanRepo,
 		isOpen:       true,
 		drafts:       make(map[int]*draft),
-		coin:         func() int { return rand.IntN(2) },
+		// Draft numbers ride in Discord custom IDs that outlive the process; a
+		// fresh process must not reuse numbers a pre-restart message still carries.
+		nextDraftID: int(time.Now().UnixMilli()),
+		coin:        func() int { return rand.IntN(2) },
 	}
 }
 
@@ -270,6 +273,52 @@ func (l *LobbyService) RemovePlayer(playerID int) bool {
 
 	l.dispatch(notices)
 	return removed
+}
+
+// TakePlayers removes the given players from the main queue in one step, so a
+// match about to be created for them cannot lose one to a draft pick meanwhile.
+// It is all or nothing: if any of them is not in the main queue it returns
+// domain.ErrNotInLobby and changes nothing.
+//
+// release puts the taken players back at the end of the queue (if the lobby is
+// still open). The caller invokes it only when the match could not be created;
+// after a successful match the players stay out, so release is never called.
+func (l *LobbyService) TakePlayers(playerIDs []int) (release func(), err error) {
+	l.mu.Lock()
+	taken := make([]lobbyEntry, 0, len(playerIDs))
+	for _, id := range playerIDs {
+		found := false
+		for _, e := range l.mainQueue {
+			if e.player.ID == id {
+				taken = append(taken, e)
+				found = true
+				break
+			}
+		}
+		if !found {
+			l.mu.Unlock()
+			return nil, domain.ErrNotInLobby
+		}
+	}
+	var notices []notice
+	for _, e := range taken {
+		n, _ := l.removePlayerLocked(e.player.ID)
+		notices = append(notices, n...)
+	}
+	l.mu.Unlock()
+
+	l.dispatch(notices)
+	return func() {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		if !l.isOpen {
+			return
+		}
+		now := time.Now()
+		for _, e := range taken {
+			l.requeueLocked(e, now)
+		}
+	}, nil
 }
 
 // dispatch delivers queued notices. Must be called without holding l.mu.

@@ -178,12 +178,22 @@ func (b *Bot) completeDraft(ctx context.Context, s *discordgo.Session, i *discor
 	teamBIDs, teamBNames := sideRoster(view.Sides[1])
 	captainA, captainB := view.Sides[0].Captain, view.Sides[1].Captain
 
+	// The draft must not outlive this function open: it is complete, so the
+	// referee's cancel refuses it and nothing else would ever close it. Abort it
+	// on every path that does not end in a created match, panics included.
+	done := false
+	defer func() {
+		if done {
+			return
+		}
+		if _, abortErr := b.services.Lobby.AbortDraft(view.ID); abortErr != nil {
+			b.logger.Error("mix: failed to abort draft #%d: %v", view.ID, abortErr)
+		}
+	}()
+
 	matchID, err := b.services.Lobby.CreateMatch(ctx, b.guildID(i.GuildID), captainA.ID, captainB.ID, teamAIDs, teamBIDs)
 	if err != nil {
 		b.logger.Error("mix: draft #%d complete but the match was not created: %v", view.ID, err)
-		if _, cancelErr := b.services.Lobby.CancelDraft(view.ID); cancelErr != nil {
-			b.logger.Error("mix: failed to cancel draft #%d after the match error: %v", view.ID, cancelErr)
-		}
 		b.respond(s, i, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseUpdateMessage,
 			Data: &discordgo.InteractionResponseData{
@@ -194,6 +204,7 @@ func (b *Bot) completeDraft(ctx context.Context, s *discordgo.Session, i *discor
 		})
 		return
 	}
+	done = true
 	if err := b.services.Lobby.FinishDraft(view.ID); err != nil {
 		b.logger.Warn("mix: draft #%d not closed after match #%d: %v", view.ID, matchID, err)
 	}

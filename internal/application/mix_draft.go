@@ -194,16 +194,34 @@ func (l *LobbyService) FinishDraft(draftID int) error {
 	return nil
 }
 
-// CancelDraft closes a draft and returns its captains and picks to the lobby,
-// unless the lobby has been closed meanwhile. It also takes a complete draft
-// whose match could not be created.
+// CancelDraft is the referee's cancel: it closes an unfinished draft and returns
+// its captains and picks to the lobby, unless the lobby has been closed
+// meanwhile. A complete draft is refused with domain.ErrDraftComplete — its last
+// pick has already handed it to match creation, and cancelling it here would
+// put ten players in the lobby while the match is created for them anyway.
+// Callers that must close a complete draft use AbortDraft.
 func (l *LobbyService) CancelDraft(draftID int) (DraftView, error) {
+	return l.closeDraft(draftID, false)
+}
+
+// AbortDraft closes a draft like CancelDraft, complete or not. It is for the one
+// caller that owns a complete draft: the code creating its match, when that
+// match could not be created.
+func (l *LobbyService) AbortDraft(draftID int) (DraftView, error) {
+	return l.closeDraft(draftID, true)
+}
+
+// closeDraft is the shared body of CancelDraft and AbortDraft.
+func (l *LobbyService) closeDraft(draftID int, allowComplete bool) (DraftView, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	d, ok := l.drafts[draftID]
 	if !ok {
 		return DraftView{}, domain.ErrDraftNotFound
+	}
+	if d.complete() && !allowComplete {
+		return DraftView{}, domain.ErrDraftComplete
 	}
 	delete(l.drafts, draftID)
 

@@ -238,18 +238,115 @@ func TestCancelDraftReturnsEveryoneToLobby(t *testing.T) {
 	}
 }
 
-// A complete draft whose match could not be created is cancelled, and its ten
+// A complete draft whose match could not be created is aborted, and its ten
 // players must all get their place back.
-func TestCancelCompleteDraftReturnsAllTen(t *testing.T) {
+func TestAbortCompleteDraftReturnsAllTen(t *testing.T) {
 	l := newDraftLobby(t, 12)
 	d, _ := l.StartDraft(discordID(1), discordID(2))
 	pickAll(t, l, d.ID)
 
-	if _, err := l.CancelDraft(d.ID); err != nil {
-		t.Fatalf("CancelDraft: %v", err)
+	if _, err := l.AbortDraft(d.ID); err != nil {
+		t.Fatalf("AbortDraft: %v", err)
 	}
 	if got := len(l.GetActivePlayers()); got != 12 {
 		t.Errorf("lobby holds %d players, want 12", got)
+	}
+}
+
+// The referee's cancel must not race the match creation that follows the last
+// pick: a complete draft is already becoming a match.
+func TestCancelCompleteDraftIsRefused(t *testing.T) {
+	l := newDraftLobby(t, 12)
+	d, _ := l.StartDraft(discordID(1), discordID(2))
+	pickAll(t, l, d.ID)
+
+	if _, err := l.CancelDraft(d.ID); !errors.Is(err, domain.ErrDraftComplete) {
+		t.Fatalf("CancelDraft on a complete draft: err = %v, want ErrDraftComplete", err)
+	}
+	for id := 1; id <= 10; id++ {
+		if l.IsPlayerActive(id) {
+			t.Errorf("player %d was requeued by a refused cancel", id)
+		}
+	}
+
+	// The refusal left the draft alone, so the abort path still finds it.
+	if _, err := l.AbortDraft(d.ID); err != nil {
+		t.Fatalf("AbortDraft after a refused cancel: %v", err)
+	}
+	if got := len(l.GetActivePlayers()); got != 12 {
+		t.Errorf("lobby holds %d players after abort, want 12", got)
+	}
+}
+
+func TestAbortUnknownDraft(t *testing.T) {
+	l := newDraftLobby(t, 12)
+	if _, err := l.AbortDraft(42); !errors.Is(err, domain.ErrDraftNotFound) {
+		t.Errorf("AbortDraft: err = %v, want ErrDraftNotFound", err)
+	}
+}
+
+// Draft numbers ride in Discord custom IDs that outlive the process, so a fresh
+// process must not start counting from 1 again.
+func TestDraftNumbersDoNotRestartAtOne(t *testing.T) {
+	l := newDraftLobby(t, 12)
+	d, err := l.StartDraft(discordID(1), discordID(2))
+	if err != nil {
+		t.Fatalf("StartDraft: %v", err)
+	}
+	if d.ID <= 1_000_000 {
+		t.Errorf("first draft ID = %d, want a per-process value above 1,000,000", d.ID)
+	}
+}
+
+func TestTakePlayersRemovesAllOrNothing(t *testing.T) {
+	l := newDraftLobby(t, 12)
+
+	if _, err := l.TakePlayers([]int{1, 2, 999}); !errors.Is(err, domain.ErrNotInLobby) {
+		t.Fatalf("TakePlayers with a stranger: err = %v, want ErrNotInLobby", err)
+	}
+	if !l.IsPlayerActive(1) || !l.IsPlayerActive(2) {
+		t.Fatal("a refused TakePlayers removed players anyway")
+	}
+
+	if _, err := l.TakePlayers([]int{1, 2}); err != nil {
+		t.Fatalf("TakePlayers: %v", err)
+	}
+	if l.IsPlayerActive(1) || l.IsPlayerActive(2) {
+		t.Error("taken players are still in the lobby")
+	}
+	if got := len(l.GetActivePlayers()); got != 10 {
+		t.Errorf("lobby holds %d players, want 10", got)
+	}
+}
+
+func TestTakePlayersReleaseRequeues(t *testing.T) {
+	l := newDraftLobby(t, 12)
+	release, err := l.TakePlayers([]int{1, 2})
+	if err != nil {
+		t.Fatalf("TakePlayers: %v", err)
+	}
+
+	release()
+	if !l.IsPlayerActive(1) || !l.IsPlayerActive(2) {
+		t.Error("release did not put the players back")
+	}
+	if got := len(l.GetActivePlayers()); got != 12 {
+		t.Errorf("lobby holds %d players after release, want 12", got)
+	}
+}
+
+// A player /balance has taken for its match is out of reach of a captain.
+func TestTakenPlayerCannotBeDrafted(t *testing.T) {
+	l := newDraftLobby(t, 12)
+	if _, err := l.TakePlayers([]int{3}); err != nil {
+		t.Fatalf("TakePlayers: %v", err)
+	}
+	d, err := l.StartDraft(discordID(1), discordID(2))
+	if err != nil {
+		t.Fatalf("StartDraft: %v", err)
+	}
+	if _, err := l.PickPlayer(d.ID, discordID(1), discordID(3)); !errors.Is(err, domain.ErrNotInLobby) {
+		t.Errorf("pick of a taken player: err = %v, want ErrNotInLobby", err)
 	}
 }
 
