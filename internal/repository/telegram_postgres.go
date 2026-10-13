@@ -500,11 +500,14 @@ func (r *TelegramPostgres) GetExpiredPendingReports(ctx context.Context, now tim
 }
 
 func (r *TelegramPostgres) SetReportStatus(ctx context.Context, id int, status string) error {
+	// The pending check is done here, not in SQL: comparing $2 in a CASE while
+	// also assigning it to the varchar column left Postgres unable to type it
+	// ("inconsistent types deduced for parameter $2"), so no report could close.
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE telegram_match_reports
 		SET status = $2,
-		    resolved_at = CASE WHEN $2 = $3 THEN NULL ELSE NOW() END
-		WHERE id = $1`, id, status, models.ReportPending)
+		    resolved_at = CASE WHEN $3 THEN NULL ELSE NOW() END
+		WHERE id = $1`, id, status, status == models.ReportPending)
 	return err
 }
 
