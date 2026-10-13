@@ -1025,3 +1025,37 @@ func TestLeaveTeam(t *testing.T) {
 }
 
 
+
+// A captain of Anteiku checked in, tapped again and was out at the sweep.
+// Once registration is closed nothing a captain presses takes the team out.
+func TestCheckInCannotBeUndoneAfterRegistrationCloses(t *testing.T) {
+	svc, repo := newTelegramSvc()
+	ctx := context.Background()
+	team := 10
+	repo.teams[team] = &models.TelegramTeam{ID: team, Name: "A"}
+	repo.addPlayer(1, &team, true, models.StateIdle)
+	for i := 2; i <= 5; i++ {
+		repo.members = append(repo.members, &models.TelegramPlayer{
+			ID: i, TeamID: &team, GameNickname: fmt.Sprintf("P%d", i), MainRole: "Mid",
+		})
+	}
+	if got := svc.ConfirmCheckIn(ctx, 1); !strings.Contains(got, "подтверждён") {
+		t.Fatalf("confirm = %q", got)
+	}
+	if got := svc.ConfirmCheckIn(ctx, 1); !strings.Contains(got, "подтверждён") || !repo.teams[team].IsCheckedIn {
+		t.Fatalf("repeated confirm = %q, checked in = %v", got, repo.teams[team].IsCheckedIn)
+	}
+
+	svc.SetRegistrationOpen(ctx, false)
+	if got := svc.ToggleCheckIn(ctx, 1); !strings.Contains(got, "нельзя") || !repo.teams[team].IsCheckedIn {
+		t.Errorf("toggle after close = %q, checked in = %v", got, repo.teams[team].IsCheckedIn)
+	}
+	if got := svc.CancelCheckIn(ctx, 1); !strings.Contains(got, "нельзя") || !repo.teams[team].IsCheckedIn {
+		t.Errorf("cancel after close = %q, checked in = %v", got, repo.teams[team].IsCheckedIn)
+	}
+
+	svc.SetRegistrationOpen(ctx, true)
+	if got := svc.CancelCheckIn(ctx, 1); !strings.Contains(got, "снят") || repo.teams[team].IsCheckedIn {
+		t.Errorf("cancel while open = %q, checked in = %v", got, repo.teams[team].IsCheckedIn)
+	}
+}

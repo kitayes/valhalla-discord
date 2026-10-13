@@ -2565,7 +2565,8 @@
                     const isCaptain = data.player ? data.player.is_captain : false;
                     currentUserIsCaptain = isCaptain;
                     const regOpen = data.registration_open !== false;
-                    updateCheckInStatus(data.team.is_checked_in, isCaptain, regOpen);
+                    const disqualified = data.team.status === 'disqualified' || (data.tournament_team && data.tournament_team.status === 'disqualified');
+                    updateCheckInStatus(data.team.is_checked_in, isCaptain, regOpen, disqualified);
                     const canEdit = !data.team.is_checked_in && regOpen;
                     renderRoster(cachedTeammates, canEdit, isCaptain, data.player ? data.player.id : null);
 
@@ -2590,7 +2591,10 @@
                             const btnUnreg = document.getElementById('btnUnregisterStage');
 
                             if (data.tournament_team) {
-                                if (data.tournament_team.is_checked_in) {
+                                if (data.tournament_team.status === 'disqualified' || data.team.status === 'disqualified') {
+                                    stageBadge.textContent = 'СНЯТЫ (ТЕХ. ПОРАЖЕНИЕ)';
+                                    stageBadge.className = 'status-pill status-eliminated';
+                                } else if (data.tournament_team.is_checked_in) {
                                     stageBadge.textContent = 'CHECK-IN ПРОЙДЕН';
                                     stageBadge.className = 'status-pill status-ready';
                                 } else {
@@ -2754,7 +2758,7 @@
         }
 
         let demoCheckedIn = false;
-        function updateCheckInStatus(isChecked, isCaptain = true, regOpen = true) {
+        function updateCheckInStatus(isChecked, isCaptain = true, regOpen = true, disqualified = false) {
             demoCheckedIn = isChecked;
             currentTeamCheckedIn = isChecked;
             currentUserIsCaptain = isCaptain;
@@ -2768,9 +2772,20 @@
             const lockedText = document.getElementById('rosterLockedText');
             const inviteSection = document.getElementById('inviteSection');
 
-            if (isChecked) {
+            btn.style.display = 'flex';
+            if (disqualified) {
+                badge.className = 'status-pill status-eliminated';
+                badgeText.textContent = 'СНЯТЫ';
+                btn.style.display = 'none';
+                lockedNotice.style.display = 'flex';
+                if (lockedText) lockedText.textContent = 'Команда снята с турнира (тех. поражение): check-in не был подтверждён вовремя. Вернуть команду могут только организаторы.';
+                if (inviteSection) inviteSection.style.display = 'none';
+                return;
+            } else if (isChecked) {
                 badge.className = 'status-pill status-ready';
                 badgeText.textContent = 'CHECKED-IN';
+                // After registration closes a cancel can only cost a technical defeat.
+                if (!regOpen) btn.style.display = 'none';
                 btnText.textContent = 'Отменить Check-in';
                 btn.className = 'btn btn-red-outline';
                 lockedNotice.style.display = 'flex';
@@ -2823,7 +2838,10 @@
             }
         }
 
+        let _isTogglingCheckIn = false;
+
         async function toggleCheckIn() {
+            if (_isTogglingCheckIn) return;
             haptic('light');
             if (!initData) {
                 demoCheckedIn = !demoCheckedIn;
@@ -2832,7 +2850,20 @@
                 showToast(demoCheckedIn ? 'Check-in подтверждён' : 'Check-in отменён', true);
                 return;
             }
-            const res = await apiFetch('/api/team/checkin', { method: 'POST' });
+            // Send the wanted state: a double tap used to toggle the check-in
+            // straight back off and the team collected a technical defeat.
+            const want = !currentTeamCheckedIn;
+            if (!want && !confirm('Отменить Check-in? Без check-in команда получит техническое поражение.')) return;
+            _isTogglingCheckIn = true;
+            const btn = document.getElementById('btnCheckIn');
+            if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
+            let res;
+            try {
+                res = await apiFetch('/api/team/checkin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ checked_in: want }) });
+            } finally {
+                _isTogglingCheckIn = false;
+                if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+            }
             if (res && res.ok) {
                 showToast(res.message || (res.is_checked_in ? 'Check-in подтверждён' : 'Check-in отменён'), true);
                 loadProfile();

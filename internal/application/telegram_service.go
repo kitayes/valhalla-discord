@@ -55,6 +55,8 @@ type TelegramService interface {
 	DeleteTeam(ctx context.Context, tgID int64) string
 	GetTeamInfo(ctx context.Context, tgID int64) (string, string)
 	ToggleCheckIn(ctx context.Context, tgID int64) string
+	ConfirmCheckIn(ctx context.Context, tgID int64) string
+	CancelCheckIn(ctx context.Context, tgID int64) string
 
 	SetRegistrationOpen(ctx context.Context, isOpen bool)
 	RegistrationStatus(ctx context.Context) (open bool, reason string)
@@ -339,6 +341,13 @@ func (s *TelegramServiceImpl) ToggleCheckIn(ctx context.Context, tgID int64) str
 		return fmt.Sprintf("Команда '%s' снята с турнира (тех. поражение). Вернуть её могут только организаторы.", t.Name)
 	}
 	checkedIn := !st.checkedIn
+	// After registration closes a cancel only ever costs a technical defeat,
+	// and a double tap on the Mini App button did exactly that.
+	if !checkedIn {
+		if open, _ := s.RegistrationStatus(ctx); !open {
+			return checkInLockedMessage(t.Name)
+		}
+	}
 	if checkedIn {
 		members := s.roster(ctx, t.ID)
 		if len(members) < mainRosterSlots {
@@ -356,6 +365,53 @@ func (s *TelegramServiceImpl) ToggleCheckIn(ctx context.Context, tgID int64) str
 	// tapped twice used to un-check silently and collect a technical defeat.
 	if checkedIn {
 		return fmt.Sprintf("Check-in подтверждён. Команда '%s' участвует в турнире.", t.Name)
+	}
+	return fmt.Sprintf("Check-in снят. Команда '%s' НЕ подтверждена — нажмите кнопку ещё раз, чтобы подтвердить.", t.Name)
+}
+
+func checkInLockedMessage(teamName string) string {
+	return fmt.Sprintf("Check-in подтверждён. Команда '%s' участвует в турнире. Регистрация закрыта — отменить check-in уже нельзя.", teamName)
+}
+
+// ConfirmCheckIn checks the captain's team in and never takes it out: a
+// repeated or late tap is harmless.
+func (s *TelegramServiceImpl) ConfirmCheckIn(ctx context.Context, tgID int64) string {
+	p, _ := s.repo.GetPlayerByTelegramID(ctx, tgID)
+	if p == nil {
+		return "Только капитан может делать Check-in."
+	}
+	text, _ := s.confirmCheckIn(ctx, p)
+	return text
+}
+
+// CancelCheckIn takes the team out of check-in, only while registration is
+// open; afterwards it leaves the check-in in place.
+func (s *TelegramServiceImpl) CancelCheckIn(ctx context.Context, tgID int64) string {
+	p, _ := s.repo.GetPlayerByTelegramID(ctx, tgID)
+	if p == nil || p.TeamID == nil || !p.IsCaptain {
+		return "Только капитан может делать Check-in."
+	}
+	t, err := s.repo.GetTeamByID(ctx, *p.TeamID)
+	if err != nil || t == nil {
+		return "Команда не найдена."
+	}
+	st, err := s.checkInState(ctx, t)
+	if err != nil {
+		s.logWrite("checkInState", err)
+		return "Не удалось изменить статус. Попробуйте ещё раз."
+	}
+	if st.disqualified {
+		return fmt.Sprintf("Команда '%s' снята с турнира (тех. поражение). Вернуть её могут только организаторы.", t.Name)
+	}
+	if !st.checkedIn {
+		return fmt.Sprintf("Check-in снят. Команда '%s' НЕ подтверждена — нажмите кнопку ещё раз, чтобы подтвердить.", t.Name)
+	}
+	if open, _ := s.RegistrationStatus(ctx); !open {
+		return checkInLockedMessage(t.Name)
+	}
+	if err := s.recordCheckIn(ctx, st, t.ID, false); err != nil {
+		s.logWrite("recordCheckIn", err)
+		return "Не удалось изменить статус. Попробуйте ещё раз."
 	}
 	return fmt.Sprintf("Check-in снят. Команда '%s' НЕ подтверждена — нажмите кнопку ещё раз, чтобы подтвердить.", t.Name)
 }

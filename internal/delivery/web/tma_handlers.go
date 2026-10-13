@@ -583,7 +583,22 @@ func (s *AdminServer) handleCheckIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	msg := s.services.TelegramService.ToggleCheckIn(r.Context(), user.ID)
+	// The app sends the state it wants, so a double tap repeats the same
+	// request instead of undoing it. A body-less call comes from a Mini App
+	// page loaded before this change and keeps the old toggle.
+	var req struct {
+		CheckedIn *bool `json:"checked_in"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	var msg string
+	switch {
+	case req.CheckedIn == nil:
+		msg = s.services.TelegramService.ToggleCheckIn(r.Context(), user.ID)
+	case *req.CheckedIn:
+		msg = s.services.TelegramService.ConfirmCheckIn(r.Context(), user.ID)
+	default:
+		msg = s.services.TelegramService.CancelCheckIn(r.Context(), user.ID)
+	}
 	msgLower := strings.ToLower(msg)
 	isRefusal := strings.Contains(msgLower, "только капитан") ||
 		strings.Contains(msgLower, "не найдена") ||
