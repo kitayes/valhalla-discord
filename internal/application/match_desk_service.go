@@ -64,6 +64,23 @@ func (s *MatchDeskService) update(ctx context.Context, action func(*models.Match
 
 func (s *MatchDeskService) Tick(ctx context.Context) error { return s.update(ctx, nil) }
 
+// NoShows lists matches to walk over. It only reads: the caller reports them
+// to the bracket outside the desk transaction, and the next sync closes them.
+func (s *MatchDeskService) NoShows(ctx context.Context) ([]DeskNoShow, error) {
+	var out []DeskNoShow
+	err := s.update(ctx, func(d *models.MatchDesk, _ models.DeskContext) error {
+		out = nil
+		now := s.now()
+		for _, m := range sortedDeskMatches(d) {
+			if ns, ok := deskNoShow(m, now); ok {
+				out = append(out, ns)
+			}
+		}
+		return nil
+	})
+	return out, err
+}
+
 func (s *MatchDeskService) CaptainAction(ctx context.Context, actor int64, id int, generation int64, action string) error {
 	return s.update(ctx, func(d *models.MatchDesk, c models.DeskContext) error {
 		m := d.Matches[id]

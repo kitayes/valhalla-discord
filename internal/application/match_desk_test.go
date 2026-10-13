@@ -97,3 +97,51 @@ func TestDeskPairChangeAndReopenInvalidateReadyAndButtons(t *testing.T) {
 		t.Fatal("reopened match retained buttons")
 	}
 }
+
+func TestDeskNoShowAwardsTheReadySideAfterDeadline(t *testing.T) {
+	d, now := deskFixture(t)
+	m := d.Matches[1]
+	if err := deskCaptainAction(m, 20, "ready", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := deskNoShow(m, now.Add(9*time.Minute)); ok {
+		t.Fatal("no-show before the deadline")
+	}
+	ns, ok := deskNoShow(m, now.Add(10*time.Minute))
+	if !ok || ns.WinnerTeamID != 20 || ns.LoserTeamID != 10 || ns.MatchID != 1 || ns.Number != 12 {
+		t.Fatalf("no-show = %+v, %v", ns, ok)
+	}
+}
+
+func TestDeskNoShowLeavesUnclearCasesToTheReferee(t *testing.T) {
+	late := 11 * time.Minute
+
+	d, now := deskFixture(t)
+	if _, ok := deskNoShow(d.Matches[1], now.Add(late)); ok {
+		t.Fatal("double no-show decided automatically")
+	}
+
+	d, now = deskFixture(t)
+	m := d.Matches[1]
+	_ = deskCaptainAction(m, 20, "ready", now)
+	_ = deskCaptainAction(m, 10, "judge_lobby", now)
+	if _, ok := deskNoShow(m, now.Add(late)); ok {
+		t.Fatal("forfeited a team that called the referee")
+	}
+
+	d, now = deskFixture(t)
+	m = d.Matches[1]
+	_ = deskCaptainAction(m, 20, "ready", now)
+	setDeskPause(m, true, false, now.Add(5*time.Minute))
+	if _, ok := deskNoShow(m, now.Add(late)); ok {
+		t.Fatal("forfeited a paused match")
+	}
+
+	d, now = deskFixture(t)
+	m = d.Matches[1]
+	_ = deskCaptainAction(m, 20, "ready", now)
+	_ = deskCaptainAction(m, 10, "ready", now.Add(late))
+	if _, ok := deskNoShow(m, now.Add(late)); ok {
+		t.Fatal("forfeited a match where both sides are ready")
+	}
+}

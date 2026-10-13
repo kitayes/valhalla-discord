@@ -165,6 +165,34 @@ func deskProblems(m *models.DeskMatch, now time.Time) []string {
 	return out
 }
 
+// DeskNoShow is a match whose readiness window ran out with one side ready
+// and the other silent: the silent side takes a technical defeat.
+type DeskNoShow struct {
+	MatchID      int
+	Number       int
+	WinnerTeamID int
+	LoserTeamID  int
+	WinnerName   string
+	LoserName    string
+}
+
+// deskNoShow decides only the clear case. A double no-show, a paused match or
+// a silent side that called the referee stays with the referee.
+func deskNoShow(m *models.DeskMatch, now time.Time) (DeskNoShow, bool) {
+	if !m.Active || !m.PausedAt.IsZero() || now.Before(m.Deadline) || m.Ready[0] == m.Ready[1] {
+		return DeskNoShow{}, false
+	}
+	winner := 0
+	if m.Ready[1] {
+		winner = 1
+	}
+	loser := 1 - winner
+	if m.Issues[loser] != "" {
+		return DeskNoShow{}, false
+	}
+	return DeskNoShow{MatchID: m.ID, Number: m.Number, WinnerTeamID: m.Teams[winner], LoserTeamID: m.Teams[loser], WinnerName: m.Names[winner], LoserName: m.Names[loser]}, true
+}
+
 func deskStatus(m *models.DeskMatch) string {
 	if !m.Active {
 		return "Матч закрыт"

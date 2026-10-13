@@ -91,7 +91,38 @@ func (b *Bot) startMatchDeskWorker(ctx context.Context) {
 	}
 }
 
+// forfeitDeskNoShows walks over every match whose readiness window ran out
+// with one side ready. Without it the timer hit zero and nothing happened:
+// the ready team waited on a referee while the bracket stood still.
+func (b *Bot) forfeitDeskNoShows(ctx context.Context) {
+	if b.bracket == nil {
+		return
+	}
+	noShows, err := b.matchDesk.NoShows(ctx)
+	if err != nil {
+		if !strings.HasPrefix(err.Error(), "сетка ещё") {
+			b.logger.Warn("telegram match desk no-shows: %v", err)
+		}
+		return
+	}
+	win, lose := b.bracket.Walkover()
+	for _, ns := range noShows {
+		ready, err := b.bracket.ReportResult(ctx, ns.MatchID, ns.WinnerTeamID, win, lose)
+		if err != nil {
+			b.reportBracketError(ctx, fmt.Sprintf("walkover of match #%d", ns.Number), err)
+			continue
+		}
+		text := fmt.Sprintf("ТЕХНИЧЕСКОЕ ПОРАЖЕНИЕ\n\nМатч #%d: '%s' не подтвердили готовность вовремя. Победа '%s' %d:%d.", ns.Number, ns.LoserName, ns.WinnerName, win, lose)
+		b.notifyTournamentChat(text)
+		b.notifyAdmins(text)
+		b.notifyTeam(ctx, ns.WinnerTeamID, text, "main_menu")
+		b.notifyTeam(ctx, ns.LoserTeamID, text, "main_menu")
+		b.notifyMatchesReady(ctx, ready)
+	}
+}
+
 func (b *Bot) flushMatchDesk(ctx context.Context) {
+	b.forfeitDeskNoShows(ctx)
 	notices, err := b.matchDesk.Pending(ctx)
 	if err != nil {
 		if strings.HasPrefix(err.Error(), "сетка ещё") {
