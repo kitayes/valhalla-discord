@@ -258,6 +258,10 @@ func (b *Bot) runBracketChecks(ctx context.Context, tTime, now time.Time) {
 	if b.bracket == nil {
 		return
 	}
+	// Reads only the local cache, so it runs even while Challonge is blocked.
+	if qualified := b.bracket.TakeQualifierResult(ctx); len(qualified) > 0 {
+		b.announceQualified(ctx, qualified)
+	}
 	if !b.bracket.CanAttempt(ctx, now) {
 		if !b.quotaAlerted {
 			b.quotaAlerted = true
@@ -277,6 +281,22 @@ func (b *Bot) runBracketChecks(ctx context.Context, tTime, now time.Time) {
 		ready, err = b.bracket.FlushPendingReports(ctx)
 		b.reportBracketError(ctx, "flush reports", err)
 		b.notifyMatchesReady(ctx, ready)
+	}
+}
+
+// announceQualified closes a qualifier: the tournament chat and the admins get
+// the list, every player of a qualified team is told directly. The later
+// rounds Challonge still shows open are not played.
+func (b *Bot) announceQualified(ctx context.Context, teams []models.QualifiedTeam) {
+	lines := make([]string, 0, len(teams))
+	for i, team := range teams {
+		lines = append(lines, fmt.Sprintf("%d. %s", i+1, team.Name))
+	}
+	summary := fmt.Sprintf("КВАЛИФИКАЦИЯ ЗАВЕРШЕНА\n\nВ основной турнир проходят %d команд:\n%s\n\nДальше по сетке квалификации матчи не играются. Всем спасибо за игру!", len(teams), strings.Join(lines, "\n"))
+	b.notifyTournamentChat(summary)
+	b.notifyAdmins(summary)
+	for _, team := range teams {
+		b.notifyTeam(ctx, team.ID, fmt.Sprintf("Квалификация завершена. Команда «%s» проходит в основной турнир!\n\nБольше матчей в квалификации играть не нужно.", team.Name), "main_menu")
 	}
 }
 

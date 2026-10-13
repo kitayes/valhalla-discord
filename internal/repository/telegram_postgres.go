@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/lib/pq"
@@ -667,7 +668,25 @@ func (r *TelegramPostgres) getBracketMatchesInternal(ctx context.Context, tourna
 		}
 		out = append(out, m)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if tournamentID > 0 {
+		// A qualifier's later rounds are hidden here, at the one read every
+		// consumer shares: pings, the Mini App, the match desk and reports all
+		// go by Ready(), so none of them can reach a match past the cut-off.
+		v, _ := r.GetSetting(ctx, QualifierAdvanceSetting(tournamentID))
+		if advance, err := strconv.Atoi(v); err == nil {
+			models.ApplyQualifierCutoff(out, advance)
+		}
+	}
+	return out, nil
+}
+
+// QualifierAdvanceSetting is the telegram_settings key holding how many teams
+// a tournament sends on; absent for an ordinary tournament.
+func QualifierAdvanceSetting(tournamentID int) string {
+	return "qualifier_advance:" + strconv.Itoa(tournamentID)
 }
 
 func (r *TelegramPostgres) MarkBracketNotified(ctx context.Context, ids []int) error {

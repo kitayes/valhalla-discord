@@ -1451,7 +1451,9 @@ func (s *TelegramServiceImpl) ReportMatchDirect(ctx context.Context, reporterTgI
 				break
 			}
 		}
-		if bracketMatch == nil {
+		// A match picked by id must still be playable: a played one, or one
+		// past a qualifier's cut-off, would only fail later at confirmation.
+		if bracketMatch == nil || !bracketMatch.Ready() {
 			return nil, errors.New("открытый матч для вашей команды не найден в сетке")
 		}
 		oppID := bracketMatch.Opponent(myTeam.ID)

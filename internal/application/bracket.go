@@ -1044,6 +1044,41 @@ func (s *BracketService) FlushPendingReports(ctx context.Context) ([]models.Brac
 	return out, nil
 }
 
+// TakeQualifierResult returns the teams that went through once the active
+// tournament is a qualifier that has reached its cut-off, and only the first
+// time: the announced mark is written before returning, so a restart or the
+// next tick does not announce again.
+func (s *BracketService) TakeQualifierResult(ctx context.Context) []models.QualifiedTeam {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	active, err := s.repo.GetActiveTournament(ctx)
+	if err != nil || active == nil {
+		return nil
+	}
+	v, _ := s.repo.GetSetting(ctx, repository.QualifierAdvanceSetting(active.ID))
+	advance, err := strconv.Atoi(v)
+	if err != nil {
+		return nil
+	}
+	announcedKey := fmt.Sprintf("qualifier_announced:%d", active.ID)
+	if done, _ := s.repo.GetSetting(ctx, announcedKey); done != "" {
+		return nil
+	}
+	ms, err := s.repo.GetBracketMatches(ctx)
+	if err != nil {
+		return nil
+	}
+	teams, done := models.QualifiedTeams(ms, advance)
+	if !done {
+		return nil
+	}
+	if err := s.repo.SetSetting(ctx, announcedKey, s.now().UTC().Format(time.RFC3339)); err != nil {
+		s.logger.Error("bracket: mark qualifier announced: %v", err)
+		return nil
+	}
+	return teams
+}
+
 // Points distribution for tournament placements in the League.
 var DefaultPlacementPoints = map[int]int{
 	1: 100, // 1st place
