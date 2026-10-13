@@ -1638,6 +1638,17 @@ func (s *TelegramServiceImpl) propagateBracketResult(ctx context.Context, matchI
 		loserTeamID = *target.Team1ID
 	}
 
+	// With Challonge on, Challonge is the bracket: the result goes there first
+	// and the cache is rebuilt from it. Writing the cache first marked the
+	// match played locally, so the Challonge write was refused ("матч не
+	// открыт"), results never reached Challonge and the two brackets drifted
+	// apart — a team could advance locally while Challonge still had the
+	// match open, and the scores were stored winner-first instead of in
+	// team order.
+	if s.bracket != nil {
+		return s.reportViaChallonge(ctx, *target, winnerTeamID, loserTeamID, winScore, loseScore)
+	}
+
 	target.WinnerID = &winnerTeamID
 	target.State = models.BracketComplete
 	target.ScoresCSV = fmt.Sprintf("%d-%d", winScore, loseScore)
@@ -1693,16 +1704,49 @@ func (s *TelegramServiceImpl) propagateBracketResult(ctx context.Context, matchI
 		return err
 	}
 
-	if s.bracket != nil {
-		wTeam, _ := s.repo.GetTeamByID(ctx, winnerTeamID)
-		if wTeam != nil {
-			_, _ = s.bracket.SetWinner(ctx, target.PlayOrder, wTeam.Name, winScore, loseScore)
-		}
-	}
-
 	// Send Notifications to Captains
 	s.sendMatchResultNotifications(ctx, target, winnerTeamID, loserTeamID, winScore, loseScore, nextMatch, nextMatchBecameReady, waitingTeamID, len(nextRoundIndices) == 0)
 
+	return nil
+}
+
+// reportViaChallonge records the result in Challonge — a played match is
+// overridden, an open one reported — then tells the captains from the
+// refreshed cache.
+func (s *TelegramServiceImpl) reportViaChallonge(ctx context.Context, target models.BracketMatch, winnerTeamID, loserTeamID, winScore, loseScore int) error {
+	if target.State == models.BracketComplete {
+		wTeam, err := s.repo.GetTeamByID(ctx, winnerTeamID)
+		if err != nil || wTeam == nil {
+			return errors.New("команда-победитель не найдена")
+		}
+		if _, err := s.bracket.SetWinner(ctx, target.PlayOrder, wTeam.Name, winScore, loseScore); err != nil {
+			return err
+		}
+	} else if _, err := s.bracket.ReportResult(ctx, target.ID, winnerTeamID, winScore, loseScore); err != nil {
+		return err
+	}
+	ms, err := s.repo.GetBracketMatches(ctx)
+	if err != nil {
+		s.logger.Warn("telegram: result notifications for match %d: %v", target.PlayOrder, err)
+		return nil
+	}
+	var next *models.BracketMatch
+	isFinal := true
+	for i := range ms {
+		if ms[i].Round <= target.Round {
+			continue
+		}
+		isFinal = false
+		if next == nil && ms[i].State != models.BracketComplete && ms[i].Has(winnerTeamID) {
+			next = &ms[i]
+		}
+	}
+	ready := next != nil && next.Ready()
+	var waiting *int
+	if ready {
+		waiting = next.Opponent(winnerTeamID)
+	}
+	s.sendMatchResultNotifications(ctx, &target, winnerTeamID, loserTeamID, winScore, loseScore, next, ready, waiting, isFinal)
 	return nil
 }
 

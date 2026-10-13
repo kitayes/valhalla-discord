@@ -982,6 +982,17 @@ func (s *BracketService) FlushPendingReports(ctx context.Context) ([]models.Brac
 		return nil, err
 	}
 	var out []models.BracketMatch
+	repaired := false
+	// The same older build also advanced winners in the cache by position,
+	// which need not match Challonge's tree: rebuild it from Challonge. The
+	// rebuild's ready list is dropped — those pairs were announced already.
+	defer func() {
+		if repaired {
+			if _, err := s.sync(ctx, tID); err != nil {
+				s.logger.Warn("bracket: resync after repairing queued reports: %v", err)
+			}
+		}
+	}()
 	for _, rep := range queued {
 		if rep.BracketMatchID == nil {
 			continue
@@ -1025,6 +1036,15 @@ func (s *BracketService) FlushPendingReports(ctx context.Context) ([]models.Brac
 			return out, fmt.Errorf("%w: match #%d", ErrResultConflict, m.PlayOrder)
 		}
 		if !alreadyApplied {
+			if m.State == models.BracketComplete && remote.State != models.BracketComplete {
+				// An older build closed the match only in the cache and never
+				// wrote Challonge; the match is still open there. Report it.
+				open := *m
+				open.State = models.BracketOpen
+				open.WinnerID = nil
+				m = &open
+				repaired = true
+			}
 			if !m.Ready() {
 				return out, ErrMatchNotOpen
 			}

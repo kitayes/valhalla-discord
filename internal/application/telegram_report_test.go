@@ -258,3 +258,70 @@ func TestReportWithBracketQueuesWhenChallongeFails(t *testing.T) {
 		t.Errorf("queue = %+v, want report %d", queued, rep.ID)
 	}
 }
+
+// A confirmed report must reach Challonge. The cache used to be moved first,
+// so the Challonge write was refused as "match not open" and the result
+// existed only in the bot (matches #20/#21 of qualifier 1).
+func TestConfirmedReportIsWrittenToChallonge(t *testing.T) {
+	bsvc, repo, prov := buildFour(t)
+	svc := NewTelegramServiceImpl(repo, nopLogger{}).WithBracket(bsvc)
+	ctx := context.Background()
+	m, _ := bsvc.OpenMatchFor(ctx, 1)
+
+	rep, err := svc.ReportMatchDirect(ctx, 400, 0, 2, 1, []string{"f1"}) // T4 says it won 2:1
+	if err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	if err := svc.ConfirmReport(ctx, 100, rep.ID); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	if prov.count("ReportMatch") != 1 {
+		t.Fatalf("ReportMatch calls = %d, want 1", prov.count("ReportMatch"))
+	}
+	if queued, _ := repo.GetUnsyncedReports(ctx); len(queued) != 0 {
+		t.Errorf("report left unsynced: %+v", queued)
+	}
+	ms, _ := repo.GetBracketMatches(ctx)
+	for _, got := range ms {
+		if got.ID != m.ID {
+			continue
+		}
+		if got.State != models.BracketComplete || got.WinnerID == nil || *got.WinnerID != 4 {
+			t.Fatalf("match after confirm = %+v, want T4 winner", got)
+		}
+		// Scores follow the team order: T1 first, so T4's 2:1 reads "1 - 2".
+		if *got.Team1ID == 1 && got.ScoresCSV != "1 - 2" {
+			t.Errorf("scores = %q, want team order 1 - 2", got.ScoresCSV)
+		}
+	}
+}
+
+// Reports the older build closed only in the cache are pushed by the queue.
+func TestFlushPushesMatchClosedOnlyInCache(t *testing.T) {
+	bsvc, repo, prov := buildFour(t)
+	ctx := context.Background()
+	m, _ := bsvc.OpenMatchFor(ctx, 1)
+
+	ms, _ := repo.GetBracketMatches(ctx)
+	for i := range ms {
+		if ms[i].ID == m.ID {
+			w := 1
+			ms[i].State = models.BracketComplete
+			ms[i].WinnerID = &w
+			ms[i].ScoresCSV = "2-0"
+		}
+	}
+	_ = repo.ReplaceBracketMatches(ctx, ms)
+	id := m.ID
+	_ = repo.CreateMatchReport(ctx, &models.TelegramMatchReport{WinnerTeamID: 1, LoserTeamID: 4, Score: "2:0", BracketMatchID: &id, Status: models.ReportConfirmed})
+
+	if _, err := bsvc.FlushPendingReports(ctx); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if prov.count("ReportMatch") != 1 {
+		t.Fatalf("ReportMatch calls = %d, want 1", prov.count("ReportMatch"))
+	}
+	if queued, _ := repo.GetUnsyncedReports(ctx); len(queued) != 0 {
+		t.Errorf("queue not drained: %+v", queued)
+	}
+}

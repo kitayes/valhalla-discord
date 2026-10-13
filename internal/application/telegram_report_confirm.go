@@ -124,13 +124,12 @@ func (s *TelegramServiceImpl) applyReport(ctx context.Context, rep *models.Teleg
 	if !ok {
 		return fmt.Errorf("некорректный счёт в отчёте: %q", rep.Score)
 	}
+	// With Challonge on this writes Challonge; a failure leaves the report
+	// unsynced and FlushPendingReports retries it.
 	if err := s.propagateBracketResult(ctx, *rep.BracketMatchID, rep.WinnerTeamID, win, lose); err != nil {
-		s.logger.Error("telegram: applyReport %d propagateBracketResult: %v", rep.ID, err)
-	}
-	if s.bracket != nil {
-		if _, err := s.bracket.ReportResult(ctx, *rep.BracketMatchID, rep.WinnerTeamID, win, lose); err != nil {
-			s.logger.Error("telegram: applyReport %d ReportResult: %v", rep.ID, err)
-		} else if err := s.repo.SetReportSynced(ctx, rep.ID); err == nil {
+		s.logger.Error("telegram: applyReport %d: %v", rep.ID, err)
+	} else if s.bracket != nil {
+		if err := s.repo.SetReportSynced(ctx, rep.ID); err == nil {
 			now := s.now()
 			rep.SyncedAt = &now
 		}
