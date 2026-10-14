@@ -54,7 +54,7 @@ type TelegramService interface {
 
 	DeleteTeam(ctx context.Context, tgID int64) string
 	GetTeamInfo(ctx context.Context, tgID int64) (string, string)
-	ToggleCheckIn(ctx context.Context, tgID int64) string
+	SetTeamCheckIn(ctx context.Context, tgID int64, want bool) CheckInResult
 
 	SetRegistrationOpen(ctx context.Context, isOpen bool)
 	RegistrationStatus(ctx context.Context) (open bool, reason string)
@@ -334,43 +334,78 @@ func (s *TelegramServiceImpl) GetTeamInfo(ctx context.Context, tgID int64) (stri
 	return s.teamCard(ctx, p)
 }
 
-func (s *TelegramServiceImpl) ToggleCheckIn(ctx context.Context, tgID int64) string {
+// CheckInResult is the outcome of a check-in request. CheckedIn is the
+// team's state afterwards, whatever happened.
+type CheckInResult struct {
+	OK        bool
+	CheckedIn bool
+	Message   string
+}
+
+// SetTeamCheckIn puts the captain's team into the wanted check-in state. It
+// is idempotent: check-in used to be a toggle, and a captain who had checked
+// in through the bot, then pressed the button in a Mini App still showing
+// "not confirmed", silently un-checked the team and got a technical defeat.
+func (s *TelegramServiceImpl) SetTeamCheckIn(ctx context.Context, tgID int64, want bool) CheckInResult {
 	p, _ := s.repo.GetPlayerByTelegramID(ctx, tgID)
 	if p == nil || p.TeamID == nil || !p.IsCaptain {
-		return "Только капитан может делать Check-in."
+		return CheckInResult{Message: "Только капитан может делать Check-in."}
 	}
 	t, err := s.repo.GetTeamByID(ctx, *p.TeamID)
 	if err != nil || t == nil {
-		return "Команда не найдена."
+		return CheckInResult{Message: "Команда не найдена."}
 	}
 	st, err := s.checkInState(ctx, t)
 	if err != nil {
 		s.logWrite("checkInState", err)
-		return "Не удалось изменить статус. Попробуйте ещё раз."
+		return CheckInResult{Message: "Не удалось изменить статус. Попробуйте ещё раз."}
 	}
 	if st.disqualified {
-		return fmt.Sprintf("Команда '%s' снята с турнира (тех. поражение). Вернуть её могут только организаторы.", t.Name)
+		return CheckInResult{CheckedIn: st.checkedIn, Message: fmt.Sprintf("Команда '%s' снята с турнира (тех. поражение). Вернуть её могут только организаторы.", t.Name)}
 	}
-	checkedIn := !st.checkedIn
-	if checkedIn {
-		members := s.roster(ctx, t.ID)
-		if len(members) < mainRosterSlots {
-			return fmt.Sprintf("Check-in невозможен: в команде %d из %d обязательных игроков. Доукомплектуйте состав (минимум %d игроков).", len(members), mainRosterSlots, mainRosterSlots)
+	if want == st.checkedIn {
+		if want {
+			return CheckInResult{OK: true, CheckedIn: true, Message: fmt.Sprintf("Check-in уже подтверждён. Команда '%s' участвует в турнире.", t.Name)}
+		}
+		return CheckInResult{OK: true, Message: fmt.Sprintf("Check-in не пройден: команда '%s' участие не подтвердила.", t.Name)}
+	}
+	if msg := s.checkInClosed(ctx, st); msg != "" {
+		return CheckInResult{CheckedIn: st.checkedIn, Message: msg}
+	}
+	if want {
+		members, _ := s.repo.GetTeamMembers(ctx, t.ID)
+		if n := mainRosterSize(models.TelegramTeam{Players: members}); n < mainRosterSlots {
+			return CheckInResult{Message: fmt.Sprintf("Check-in невозможен: в основном составе %d из %d игроков (запасные не считаются). Доукомплектуйте состав.", n, mainRosterSlots)}
 		}
 	}
-	if err := s.recordCheckIn(ctx, st, t.ID, checkedIn, tgID); err != nil {
-		if errors.Is(err, errNotEntered) {
-			return notEnteredMessage(t.Name, st.tournament)
+	if err := s.recordCheckIn(ctx, st, t.ID, want, tgID); err != nil {
+		switch {
+		case errors.Is(err, errNotEntered):
+			return CheckInResult{Message: notEnteredMessage(t.Name, st.tournament)}
+		case errors.Is(err, errMainStageClosed), errors.Is(err, errAlreadyQualified):
+			return CheckInResult{Message: "Check-in невозможен: " + err.Error() + "."}
 		}
 		s.logWrite("recordCheckIn", err)
-		return "Не удалось изменить статус. Попробуйте ещё раз."
+		return CheckInResult{CheckedIn: st.checkedIn, Message: "Не удалось изменить статус. Попробуйте ещё раз."}
 	}
-	// It is a toggle, so the reply must say which way it went: a captain who
-	// tapped twice used to un-check silently and collect a technical defeat.
-	if checkedIn {
-		return fmt.Sprintf("Check-in подтверждён. Команда '%s' участвует в турнире.", t.Name)
+	s.emit("checkin_update", map[string]any{"team_id": t.ID, "is_checked_in": want})
+	if want {
+		return CheckInResult{OK: true, CheckedIn: true, Message: fmt.Sprintf("Check-in подтверждён. Команда '%s' участвует в турнире.", t.Name)}
 	}
-	return fmt.Sprintf("Check-in снят. Команда '%s' НЕ подтверждена — нажмите кнопку ещё раз, чтобы подтвердить.", t.Name)
+	return CheckInResult{OK: true, Message: fmt.Sprintf("Check-in снят. Команда '%s' НЕ подтверждена и не попадёт в сетку, если не подтвердит участие до старта.", t.Name)}
+}
+
+// checkInClosed explains why a captain can no longer change the check-in, or
+// returns "". It closes at the start time or when the bracket is built,
+// whichever comes first; after that only organisers change it.
+func (s *TelegramServiceImpl) checkInClosed(ctx context.Context, st teamCheckIn) string {
+	if st.tournament != nil && !tournamentAcceptsEntries(st.tournament) {
+		return "Check-in закрыт: сетка уже сформирована. Изменить его могут только организаторы."
+	}
+	if start := s.GetTournamentTime(ctx); !start.IsZero() && !s.now().Before(start) {
+		return "Check-in закрыт: турнир уже начался. Изменить его могут только организаторы."
+	}
+	return ""
 }
 
 // errNotEntered: the team has no entry in a tournament whose bracket is
@@ -902,7 +937,6 @@ func (s *TelegramServiceImpl) LeaveTeam(ctx context.Context, playerTgID int64) e
 	return s.repo.UpdatePlayerFieldByID(ctx, p.ID, "team_id", nil)
 }
 
-
 // RegistrationCloseLead is how long before the tournament registration shuts
 // itself: late sign-ups have no time to check in anyway.
 const RegistrationCloseLead = time.Hour
@@ -1068,7 +1102,7 @@ func (s *TelegramServiceImpl) GetUncheckedTeams(ctx context.Context) ([]models.T
 	}
 	var unchecked []models.TelegramTeam
 	for _, t := range allTeams {
-		if !t.IsCheckedIn && t.Status != models.TeamStatusDisqualified {
+		if !t.IsCheckedIn && t.Status != models.TeamStatusDisqualified && t.Status != models.EntryNoShow {
 			unchecked = append(unchecked, t)
 		}
 	}
@@ -1170,8 +1204,20 @@ func (s *TelegramServiceImpl) AdminGetTeamDetails(ctx context.Context, name stri
 	return res
 }
 
+// checkInTeams are the teams the check-in concerns: the active tournament's
+// entries, or every team when nothing is entered (before tournaments).
+func (s *TelegramServiceImpl) checkInTeams(ctx context.Context) ([]models.TelegramTeam, error) {
+	if active, _ := s.repo.GetActiveTournament(ctx); active != nil {
+		tTeams, err := s.repo.GetTournamentTeams(ctx, active.ID)
+		if err == nil && len(tTeams) > 0 {
+			return tTeams, nil
+		}
+	}
+	return s.repo.GetAllTeams(ctx)
+}
+
 func (s *TelegramServiceImpl) GetCheckInStatus(ctx context.Context) string {
-	teams, err := s.repo.GetAllTeams(ctx)
+	teams, err := s.checkInTeams(ctx)
 	if err != nil {
 		return "Ошибка при получении данных команд."
 	}
@@ -1183,9 +1229,9 @@ func (s *TelegramServiceImpl) GetCheckInStatus(ctx context.Context) string {
 
 	for _, t := range teams {
 		switch {
-		case t.Status == models.TeamStatusDisqualified:
+		case t.Status == models.TeamStatusDisqualified, t.Status == models.EntryNoShow:
 			disqualified = append(disqualified, t)
-		case len(t.Players) < mainRosterSlots:
+		case mainRosterSize(t) < mainRosterSlots:
 			incomplete = append(incomplete, t)
 		case t.IsCheckedIn:
 			checkedIn = append(checkedIn, t)
@@ -1354,19 +1400,9 @@ func (s *TelegramServiceImpl) GetTeamForPlayer(ctx context.Context, tgID int64) 
 }
 
 func (s *TelegramServiceImpl) GetCheckInSummary(ctx context.Context) (*models.CheckInSummary, error) {
-	var teams []models.TelegramTeam
-	if active, _ := s.repo.GetActiveTournament(ctx); active != nil {
-		tTeams, err := s.repo.GetTournamentTeams(ctx, active.ID)
-		if err == nil && len(tTeams) > 0 {
-			teams = tTeams
-		}
-	}
-	if len(teams) == 0 {
-		var err error
-		teams, err = s.repo.GetAllTeams(ctx)
-		if err != nil {
-			return nil, err
-		}
+	teams, err := s.checkInTeams(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	summary := &models.CheckInSummary{
@@ -1392,10 +1428,11 @@ func (s *TelegramServiceImpl) GetCheckInSummary(ctx context.Context) (*models.Ch
 
 		status := "ok"
 		switch {
-		case t.Status == models.TeamStatusDisqualified:
+		// A no-show is out of the bracket just like a disqualified team.
+		case t.Status == models.TeamStatusDisqualified, t.Status == models.EntryNoShow:
 			status = "disqualified"
 			summary.DisqualifiedCount++
-		case len(t.Players) < mainRosterSlots:
+		case mainRosterSize(t) < mainRosterSlots:
 			status = "incomplete"
 			summary.IncompleteCount++
 		case !t.IsCheckedIn:
@@ -2064,6 +2101,3 @@ func (s *TelegramServiceImpl) GetTournamentTeamStatus(ctx context.Context, capta
 	}
 	return s.repo.GetTournamentTeam(ctx, tournamentID, *p.TeamID)
 }
-
-
-

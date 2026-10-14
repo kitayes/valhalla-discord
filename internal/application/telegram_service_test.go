@@ -732,10 +732,12 @@ func TestSoloRegistrationRefusedForTeamMember(t *testing.T) {
 	}
 }
 
-// /checkin toggles, so the reply must say which way it went — a captain who
-// tapped twice used to un-check silently and get a technical defeat.
-func TestCheckInReplyStatesResult(t *testing.T) {
+// Check-in sets an explicit state. It used to toggle: a captain who tapped
+// twice, or tapped a stale "not confirmed" button, un-checked the team and
+// got a technical defeat.
+func TestCheckInIsIdempotent(t *testing.T) {
 	svc, repo := newTelegramSvc()
+	ctx := context.Background()
 	team := 10
 	repo.teams[team] = &models.TelegramTeam{ID: team, Name: "A"}
 	repo.addPlayer(1, &team, true, models.StateIdle)
@@ -745,13 +747,21 @@ func TestCheckInReplyStatesResult(t *testing.T) {
 		})
 	}
 
-	on := svc.ToggleCheckIn(context.Background(), 1)
-	if !strings.Contains(on, "подтверждён") || !strings.Contains(on, "A") {
-		t.Errorf("first /checkin = %q, want confirmation naming the team", on)
+	on := svc.SetTeamCheckIn(ctx, 1, true)
+	if !on.OK || !on.CheckedIn || !strings.Contains(on.Message, "подтверждён") || !strings.Contains(on.Message, "A") {
+		t.Fatalf("first check-in = %+v, want confirmation naming the team", on)
 	}
-	off := svc.ToggleCheckIn(context.Background(), 1)
-	if !strings.Contains(off, "снят") {
-		t.Errorf("second /checkin = %q, want notice that check-in was removed", off)
+	writes := repo.checkInWrites
+	again := svc.SetTeamCheckIn(ctx, 1, true)
+	if !again.OK || !again.CheckedIn || !repo.teams[team].IsCheckedIn {
+		t.Errorf("second check-in = %+v, team checked = %v; want still checked in", again, repo.teams[team].IsCheckedIn)
+	}
+	if repo.checkInWrites != writes {
+		t.Error("a repeated check-in wrote again")
+	}
+	off := svc.SetTeamCheckIn(ctx, 1, false)
+	if !off.OK || off.CheckedIn || !strings.Contains(off.Message, "снят") || repo.teams[team].IsCheckedIn {
+		t.Errorf("explicit un-check = %+v, want removed", off)
 	}
 }
 
@@ -761,7 +771,7 @@ func TestCheckInRefusedOnIncompleteTeam(t *testing.T) {
 	repo.teams[team] = &models.TelegramTeam{ID: team, Name: "A"}
 	repo.addPlayer(1, &team, true, models.StateIdle)
 
-	resp := svc.ToggleCheckIn(context.Background(), 1)
+	resp := svc.SetTeamCheckIn(context.Background(), 1, true).Message
 	if !strings.Contains(resp, "невозможен") || !strings.Contains(resp, "1 из 5") {
 		t.Errorf("ToggleCheckIn on incomplete team = %q, want refusal", resp)
 	}
@@ -781,7 +791,7 @@ func TestCheckInRefusedOnIncompleteTeam(t *testing.T) {
 		})
 	}
 
-	resp = svc.ToggleCheckIn(context.Background(), 1)
+	resp = svc.SetTeamCheckIn(context.Background(), 1, true).Message
 	if !strings.Contains(resp, "подтверждён") {
 		t.Errorf("ToggleCheckIn with 5 players = %q, want success", resp)
 	}

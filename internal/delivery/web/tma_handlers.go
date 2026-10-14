@@ -15,12 +15,12 @@ import (
 )
 
 type MeResponse struct {
-	User             *TelegramUser              `json:"user"`
-	Player           *models.TelegramPlayer     `json:"player,omitempty"`
-	Team             *models.TelegramTeam       `json:"team,omitempty"`
-	Teammates        []models.TelegramPlayer    `json:"teammates,omitempty"`
-	IsAdmin          bool                       `json:"is_admin"`
-	RegistrationOpen bool                       `json:"registration_open"`
+	User             *TelegramUser           `json:"user"`
+	Player           *models.TelegramPlayer  `json:"player,omitempty"`
+	Team             *models.TelegramTeam    `json:"team,omitempty"`
+	Teammates        []models.TelegramPlayer `json:"teammates,omitempty"`
+	IsAdmin          bool                    `json:"is_admin"`
+	RegistrationOpen bool                    `json:"registration_open"`
 	// BotUsername lets the app build t.me links without hardcoding the bot.
 	BotUsername      string                     `json:"bot_username,omitempty"`
 	ActiveTournament *models.TelegramTournament `json:"active_tournament,omitempty"`
@@ -583,38 +583,30 @@ func (s *AdminServer) handleCheckIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	msg := s.services.TelegramService.ToggleCheckIn(r.Context(), user.ID)
-	msgLower := strings.ToLower(msg)
-	isRefusal := strings.Contains(msgLower, "только капитан") ||
-		strings.Contains(msgLower, "не найдена") ||
-		strings.Contains(msgLower, "невозможен") ||
-		strings.Contains(msgLower, "не удалось") ||
-		strings.Contains(msgLower, "снята с турнира")
-	isSuccess := !isRefusal && (strings.Contains(msgLower, "подтвержд") || strings.Contains(msgLower, "снят"))
-	isCheckedIn := isSuccess && strings.Contains(msgLower, "подтвержд") && !strings.Contains(msgLower, "не подтвержд")
+	// The body names the wanted state; an empty body confirms. The service
+	// is idempotent, so a stale page cannot flip a check-in the wrong way.
+	req := struct {
+		CheckedIn *bool `json:"checked_in"`
+	}{}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	want := req.CheckedIn == nil || *req.CheckedIn
+	res := s.services.TelegramService.SetTeamCheckIn(r.Context(), user.ID, want)
 
 	w.Header().Set("Content-Type", "application/json")
-	if !isSuccess {
+	if !res.OK {
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"ok":      false,
-			"error":   msg,
-			"message": msg,
+			"ok":            false,
+			"error":         res.Message,
+			"message":       res.Message,
+			"is_checked_in": res.CheckedIn,
 		})
 		return
 	}
-
-	if s.sseBroker != nil {
-		s.sseBroker.Broadcast("checkin_update", map[string]interface{}{
-			"user_id":       user.ID,
-			"is_checked_in": isCheckedIn,
-		})
-	}
-
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"ok":            true,
-		"message":       msg,
-		"is_checked_in": isCheckedIn,
+		"message":       res.Message,
+		"is_checked_in": res.CheckedIn,
 	})
 }
 
@@ -847,10 +839,10 @@ func (s *AdminServer) handleReportDecision(w http.ResponseWriter, r *http.Reques
 }
 
 type AdminDeskResponse struct {
-	GlobalPaused    bool                              `json:"global_paused"`
-	CheckIn         *models.CheckInSummary            `json:"checkin"`
-	ActiveMatches   []application.AdminMatchItem      `json:"active_matches"`
-	Disputes        []application.AdminMatchItem      `json:"disputes"`
+	GlobalPaused    bool                                 `json:"global_paused"`
+	CheckIn         *models.CheckInSummary               `json:"checkin"`
+	ActiveMatches   []application.AdminMatchItem         `json:"active_matches"`
+	Disputes        []application.AdminMatchItem         `json:"disputes"`
 	ArchivedMatches []application.AdminArchivedMatchItem `json:"archived_matches"`
 }
 
@@ -1125,9 +1117,9 @@ func (s *AdminServer) handleAdminPingDebtors(w http.ResponseWriter, r *http.Requ
 			if actionableCount == 0 {
 				w.Header().Set("Content-Type", "application/json")
 				_ = json.NewEncoder(w).Encode(map[string]interface{}{
-					"ok":      false,
-					"error":   "Все команды уже подтвердили Check-in! Должников нет.",
-					"count":   0,
+					"ok":    false,
+					"error": "Все команды уже подтвердили Check-in! Должников нет.",
+					"count": 0,
 				})
 				return
 			}
@@ -1249,7 +1241,6 @@ func (s *AdminServer) handleEventsSSE(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
-
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Пачка 4: In-app registration & roster management
@@ -1507,7 +1498,6 @@ func (s *AdminServer) handleLeaveTeam(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "message": "Вы вышли из команды"})
 }
-
 
 func (s *AdminServer) handleBracketMatchDetails(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -1871,4 +1861,3 @@ func (s *AdminServer) handleAdminTournamentSetTime(w http.ResponseWriter, r *htt
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "message": "Время начала турнира успешно сохранено!"})
 }
-

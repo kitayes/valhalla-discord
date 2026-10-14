@@ -192,6 +192,9 @@ func main() {
 					return err
 				})
 			}
+			if services.TelegramService != nil {
+				services.TelegramService.SetEventHook(adminServer.Broadcast)
+			}
 			srv := adminServer
 			go func() {
 				if err := srv.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {

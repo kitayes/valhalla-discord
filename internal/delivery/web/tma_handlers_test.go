@@ -52,6 +52,8 @@ type mockTelegramSvc struct {
 	tourneyTime time.Time
 	imported    []int // qualifier ids passed to ImportQualified
 	invited     []int // team ids passed to InviteTeam
+	// checkInWants records the state each check-in request asked for.
+	checkInWants []bool
 }
 
 func (m *mockTelegramSvc) GetActiveTournament(ctx context.Context) (*models.TelegramTournament, error) {
@@ -176,8 +178,9 @@ func (m *mockTelegramSvc) GetTeamForPlayer(ctx context.Context, tgID int64) (*mo
 	return m.team, m.teamMems, nil
 }
 
-func (m *mockTelegramSvc) ToggleCheckIn(ctx context.Context, tgID int64) string {
-	return "Check-in подтвержден!"
+func (m *mockTelegramSvc) SetTeamCheckIn(ctx context.Context, tgID int64, want bool) application.CheckInResult {
+	m.checkInWants = append(m.checkInWants, want)
+	return application.CheckInResult{OK: true, CheckedIn: want, Message: "ok"}
 }
 
 func (m *mockTelegramSvc) RegistrationStatus(ctx context.Context) (bool, string) {
@@ -404,24 +407,28 @@ func TestTMAHandlers(t *testing.T) {
 		}
 	})
 
-	t.Run("POST /api/team/checkin toggles status", func(t *testing.T) {
+	t.Run("POST /api/team/checkin sets the requested state", func(t *testing.T) {
 		user := &TelegramUser{ID: 12345}
 		ctx := context.WithValue(context.Background(), userCtxKey, user)
+		tgSvc.checkInWants = nil
 
-		req := httptest.NewRequest(http.MethodPost, "/api/team/checkin", nil).WithContext(ctx)
-		rec := httptest.NewRecorder()
-
-		server.handleCheckIn(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d", rec.Code)
+		for _, body := range []string{"", `{"checked_in":true}`, `{"checked_in":false}`} {
+			req := httptest.NewRequest(http.MethodPost, "/api/team/checkin", strings.NewReader(body)).WithContext(ctx)
+			rec := httptest.NewRecorder()
+			server.handleCheckIn(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("body %q: expected 200, got %d", body, rec.Code)
+			}
+			var result map[string]interface{}
+			if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if result["ok"] != true {
+				t.Errorf("body %q: expected ok: true, got %+v", body, result)
+			}
 		}
-
-		var result map[string]interface{}
-		if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-		if result["ok"] != true {
-			t.Errorf("expected ok: true, got %+v", result)
+		if want := []bool{true, true, false}; fmt.Sprint(tgSvc.checkInWants) != fmt.Sprint(want) {
+			t.Errorf("requested states = %v, want %v (an empty body confirms)", tgSvc.checkInWants, want)
 		}
 	})
 

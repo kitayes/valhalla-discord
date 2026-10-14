@@ -567,7 +567,7 @@ func TestTechnicalDefeatIsRecorded(t *testing.T) {
 		t.Errorf("second sweep reported %v", again)
 	}
 
-	if resp := svc.ToggleCheckIn(context.Background(), 1); !strings.Contains(resp, "снята") || repo.teams[out].IsCheckedIn {
+	if resp := svc.SetTeamCheckIn(context.Background(), 1, true).Message; !strings.Contains(resp, "снята") || repo.teams[out].IsCheckedIn {
 		t.Errorf("/checkin on a disqualified team: resp=%q checked=%v", resp, repo.teams[out].IsCheckedIn)
 	}
 	if resp, _ := act(t, svc, 1, "checkin", ""); !strings.Contains(resp, "снята") || repo.teams[out].IsCheckedIn {

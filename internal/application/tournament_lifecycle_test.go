@@ -33,10 +33,10 @@ func TestNewTournamentDropsPreviousCheckInsAndDisqualifications(t *testing.T) {
 		t.Fatalf("after new tournament: alpha checked=%v, gamma checked=%v status=%q; want clean teams",
 			alpha.IsCheckedIn, gamma.IsCheckedIn, gamma.Status)
 	}
-	if got := svc.ToggleCheckIn(ctx, captainOf(2)); !strings.Contains(got, "подтверждён") {
+	if got := svc.SetTeamCheckIn(ctx, captainOf(2), true).Message; !strings.Contains(got, "подтверждён") {
 		t.Errorf("Gamma check-in = %q, want confirmation", got)
 	}
-	if got := svc.ToggleCheckIn(ctx, captainOf(1)); !strings.Contains(got, "подтверждён") {
+	if got := svc.SetTeamCheckIn(ctx, captainOf(1), true).Message; !strings.Contains(got, "подтверждён") {
 		t.Errorf("Alpha first press = %q, want confirmation, not removal", got)
 	}
 	if dq, _ := svc.DisqualifyUnchecked(ctx); len(dq) != 0 {
@@ -53,7 +53,7 @@ func TestCheckInEntersTeamWhileRegistrationIsOpen(t *testing.T) {
 	addBracketTeam(repo, 2, "Beta", 10).IsCheckedIn = false
 	_ = repo.RegisterTeamForTournament(ctx, 1, 2) // Beta entered from the Mini App
 
-	if got := svc.ToggleCheckIn(ctx, captainOf(1)); !strings.Contains(got, "подтверждён") {
+	if got := svc.SetTeamCheckIn(ctx, captainOf(1), true).Message; !strings.Contains(got, "подтверждён") {
 		t.Fatalf("check-in = %q, want confirmation", got)
 	}
 	entry, _ := repo.GetTournamentTeam(ctx, 1, 1)
@@ -72,9 +72,9 @@ func TestCheckInRefusedForTeamOutsideBuiltBracket(t *testing.T) {
 	repo.tournaments[0].Status = models.TournamentStatusActive
 	addBracketTeam(repo, 1, "Alpha", 10).IsCheckedIn = false
 
-	got := svc.ToggleCheckIn(ctx, captainOf(1))
-	if !strings.Contains(got, "не заявлена") {
-		t.Errorf("check-in = %q, want refusal: team is not in the bracket", got)
+	got := svc.SetTeamCheckIn(ctx, captainOf(1), true).Message
+	if !strings.Contains(got, "закрыт") {
+		t.Errorf("check-in = %q, want refusal: the bracket is built", got)
 	}
 	if entry, _ := repo.GetTournamentTeam(ctx, 1, 1); entry != nil || repo.teams[1].IsCheckedIn {
 		t.Errorf("entry = %+v, team checked = %v; want nothing recorded", entry, repo.teams[1].IsCheckedIn)
@@ -119,7 +119,7 @@ func TestUnregisterDropsCheckInMirror(t *testing.T) {
 	svc, repo := newTelegramSvc()
 	ctx := context.Background()
 	addBracketTeam(repo, 1, "Alpha", 10).IsCheckedIn = false
-	svc.ToggleCheckIn(ctx, captainOf(1))
+	svc.SetTeamCheckIn(ctx, captainOf(1), true)
 
 	if err := svc.UnregisterTeamFromTournament(ctx, captainOf(1), 1); err != nil {
 		t.Fatal(err)
@@ -135,7 +135,7 @@ func TestLeaveTeamBlockedAfterCheckIn(t *testing.T) {
 	addBracketTeam(repo, 1, "Alpha", 10).IsCheckedIn = false
 	teamID := 1
 	repo.addPlayer(555, &teamID, false, models.StateIdle)
-	svc.ToggleCheckIn(ctx, captainOf(1))
+	svc.SetTeamCheckIn(ctx, captainOf(1), true)
 
 	err := svc.LeaveTeam(ctx, 555)
 	if err == nil || !strings.Contains(err.Error(), "Check-in") {
@@ -403,7 +403,7 @@ func TestMainStageRefusesSelfRegistration(t *testing.T) {
 	if err := svc.RegisterTeamForTournament(ctx, captainOf(1), 1); !errors.Is(err, errMainStageClosed) {
 		t.Errorf("RegisterTeamForTournament = %v, want main stage closed", err)
 	}
-	svc.ToggleCheckIn(ctx, captainOf(1))
+	svc.SetTeamCheckIn(ctx, captainOf(1), true)
 	if e, _ := repo.GetTournamentTeam(ctx, 1, 1); e != nil {
 		t.Errorf("check-in entered the team into the main stage: %+v", e)
 	}
@@ -478,5 +478,86 @@ func TestUpdateSettingsTurnsRunningTournamentIntoQualifier(t *testing.T) {
 		if m.Round != 1 {
 			t.Errorf("round %d still cached", m.Round)
 		}
+	}
+}
+
+func TestCheckInClosesAtStart(t *testing.T) {
+	svc, repo := newTelegramSvc()
+	ctx := context.Background()
+	addBracketTeam(repo, 1, "Alpha", 10).IsCheckedIn = false
+	addBracketTeam(repo, 2, "Beta", 10).IsCheckedIn = false
+	start := time.Date(2026, 10, 19, 15, 0, 0, 0, time.UTC)
+	svc.SetTournamentTime(ctx, start)
+	svc.now = func() time.Time { return start.Add(-time.Minute) }
+	if res := svc.SetTeamCheckIn(ctx, captainOf(2), true); !res.OK {
+		t.Fatalf("check-in before the start = %+v", res)
+	}
+
+	svc.now = func() time.Time { return start.Add(time.Minute) }
+	if res := svc.SetTeamCheckIn(ctx, captainOf(1), true); res.OK || !strings.Contains(res.Message, "закрыт") {
+		t.Errorf("check-in after the start = %+v, want closed", res)
+	}
+	if res := svc.SetTeamCheckIn(ctx, captainOf(2), false); res.OK || !res.CheckedIn {
+		t.Errorf("un-check after the start = %+v, want refused and still checked in", res)
+	}
+	// Repeating the current state is not a change and still answers.
+	if res := svc.SetTeamCheckIn(ctx, captainOf(2), true); !res.OK || !res.CheckedIn {
+		t.Errorf("repeated check-in after the start = %+v", res)
+	}
+}
+
+// The bracket counts only the main roster; check-in used to count
+// substitutes too and let in a team the bracket then dropped as incomplete.
+func TestCheckInCountsMainRosterOnly(t *testing.T) {
+	svc, repo := newTelegramSvc()
+	ctx := context.Background()
+	addBracketTeam(repo, 1, "Alpha", 10).IsCheckedIn = false
+	for _, m := range repo.members {
+		if m.TeamID != nil && *m.TeamID == 1 && m.ID == 14 {
+			m.IsSubstitute = true
+		}
+	}
+	res := svc.SetTeamCheckIn(ctx, captainOf(1), true)
+	if res.OK || !strings.Contains(res.Message, "4 из 5") {
+		t.Errorf("check-in with 4 main + 1 substitute = %+v, want refusal", res)
+	}
+}
+
+func TestCheckInRecordsActorAndPublishes(t *testing.T) {
+	svc, repo := newTelegramSvc()
+	ctx := context.Background()
+	addBracketTeam(repo, 1, "Alpha", 10).IsCheckedIn = false
+	var events []map[string]any
+	svc.SetEventHook(func(event string, payload map[string]any) {
+		if event == "checkin_update" {
+			events = append(events, payload)
+		}
+	})
+	if res := svc.SetTeamCheckIn(ctx, captainOf(1), true); !res.OK {
+		t.Fatalf("check-in = %+v", res)
+	}
+	e, _ := repo.GetTournamentTeam(ctx, 1, 1)
+	if e.CheckedInBy == nil || *e.CheckedInBy != captainOf(1) || e.CheckedInAt == nil {
+		t.Errorf("entry audit = by %v at %v, want the captain", e.CheckedInBy, e.CheckedInAt)
+	}
+	if len(events) != 1 || events[0]["is_checked_in"] != true {
+		t.Errorf("events = %v, want one checkin_update", events)
+	}
+	svc.SetTeamCheckIn(ctx, captainOf(1), true)
+	if len(events) != 1 {
+		t.Error("a repeated check-in published again")
+	}
+}
+
+// No-shows are left out of the bracket at build; the old sweep must not
+// disqualify them a second time.
+func TestNoShowIsNotDisqualifiedAgain(t *testing.T) {
+	svc, repo := newTelegramSvc()
+	ctx := context.Background()
+	addBracketTeam(repo, 1, "Alpha", 10).IsCheckedIn = false
+	_ = repo.RegisterTeamForTournament(ctx, 1, 1)
+	_ = repo.SetTournamentTeamStatus(ctx, 1, 1, models.EntryNoShow)
+	if dq, _ := svc.DisqualifyUnchecked(ctx); len(dq) != 0 {
+		t.Errorf("disqualified %d no-shows", len(dq))
 	}
 }

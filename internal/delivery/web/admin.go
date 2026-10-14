@@ -195,6 +195,12 @@ func (s *AdminServer) WithPhotoUploader(fn func(ctx context.Context, data []byte
 	return s
 }
 
+// Broadcast publishes a live update to every open Mini App. The Telegram
+// service uses it so that changes made in the bot reach the app too.
+func (s *AdminServer) Broadcast(event string, payload map[string]any) {
+	s.sseBroker.Broadcast(event, payload)
+}
+
 func (s *AdminServer) WithBracketBuilder(fn func(ctx context.Context, adminChatID int64) error) *AdminServer {
 	s.bracketBuilder = fn
 	return s

@@ -3,7 +3,6 @@ package application
 import (
 	"blackwatch/internal/models"
 	"context"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -789,42 +788,13 @@ func (s *TelegramServiceImpl) afterSlot(ctx context.Context, p *models.TelegramP
 	return ack + msg, kb
 }
 
-// confirmCheckIn is the reminder's button. Unlike /checkin it never toggles
-// off, and it works in any FSM state: the reminder arrives whatever the
-// captain happens to be doing in the bot.
+// confirmCheckIn is the reminder's button: it only ever confirms, and works
+// in any FSM state since the reminder arrives whatever the captain is doing.
 func (s *TelegramServiceImpl) confirmCheckIn(ctx context.Context, p *models.TelegramPlayer) (string, string) {
-	if p.TeamID == nil || !p.IsCaptain {
+	if p.TelegramID == nil {
 		return "Только капитан зарегистрированной команды может пройти check-in.", KbNone
 	}
-	team, err := s.repo.GetTeamByID(ctx, *p.TeamID)
-	if err != nil || team == nil {
-		return "Команда не найдена.", KbNone
-	}
-	st, err := s.checkInState(ctx, team)
-	if err != nil {
-		s.logWrite("checkInState", err)
-		return "Не удалось подтвердить участие. Попробуйте /checkin.", KbNone
-	}
-	if st.disqualified {
-		return fmt.Sprintf("Команда '%s' снята с турнира (тех. поражение). Вернуть её могут только организаторы.", team.Name), KbNone
-	}
-	if !st.checkedIn {
-		members := s.roster(ctx, team.ID)
-		if len(members) < mainRosterSlots {
-			return fmt.Sprintf("Check-in невозможен: в команде %d из %d обязательных игроков. Доукомплектуйте состав (минимум %d игроков).", len(members), mainRosterSlots, mainRosterSlots), KbNone
-		}
-		// This used to write only the team row, which the technical-defeat
-		// sweep does not read: a captain who pressed the reminder's button
-		// was still disqualified ten minutes after the start.
-		if err := s.recordCheckIn(ctx, st, team.ID, true, *p.TelegramID); err != nil {
-			if errors.Is(err, errNotEntered) {
-				return notEnteredMessage(team.Name, st.tournament), KbNone
-			}
-			s.logWrite("recordCheckIn", err)
-			return "Не удалось подтвердить участие. Попробуйте /checkin.", KbNone
-		}
-	}
-	return fmt.Sprintf("Check-in подтверждён. Команда '%s' участвует в турнире.", team.Name), KbNone
+	return s.SetTeamCheckIn(ctx, *p.TelegramID, true).Message, KbNone
 }
 
 func (s *TelegramServiceImpl) StartProfileEdit(ctx context.Context, tgID int64) (string, string) {

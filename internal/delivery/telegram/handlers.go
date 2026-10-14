@@ -434,7 +434,7 @@ func (b *Bot) handleUserCommand(ctx context.Context, chatID int64, text string, 
 
 	if !b.isAdmin(chatID) {
 		switch text {
-		case "/reg_team", "/reg_solo", "/my_team", "/checkin", "/report", "/profile", "/delete_team":
+		case "/reg_team", "/reg_solo", "/my_team", "/checkin", "/uncheckin", "/report", "/profile", "/delete_team":
 			appText := "Все действия турнира (регистрация, состав команды, чекин, отчёты и профиль) доступны в турнирном приложении."
 			if b.webAppURL != "" {
 				appText += fmt.Sprintf("\n\nПрямая ссылка:\n%s", b.webAppURL)
@@ -455,7 +455,11 @@ func (b *Bot) handleUserCommand(ctx context.Context, chatID int64, text string, 
 	case "/my_team":
 		response, kbType = b.service.GetTeamInfo(ctx, chatID)
 	case "/checkin":
-		response = b.service.ToggleCheckIn(ctx, chatID)
+		response = b.service.SetTeamCheckIn(ctx, chatID, true).Message
+		kbType = "main_menu"
+		b.notifyCheckIn(response)
+	case "/uncheckin":
+		response = b.service.SetTeamCheckIn(ctx, chatID, false).Message
 		kbType = "main_menu"
 		b.notifyCheckIn(response)
 	case "/checkin_status", "/checkins":
