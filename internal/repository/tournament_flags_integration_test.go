@@ -183,6 +183,15 @@ func TestIntegrationTournamentStagesAndEntries(t *testing.T) {
 	if e := entries[0]; e.Source != models.SourceQualified || e.QualifiedFrom == nil || *e.QualifiedFrom != qual.ID || e.TeamName != team.Name {
 		t.Fatalf("entry = %+v", e)
 	}
+	if err := repo.UpdateTournamentPlacements(ctx, qual.ID, map[int]int{team.ID: 3}, map[int]int{team.ID: 50}); err != nil {
+		t.Fatalf("UpdateTournamentPlacements: %v", err)
+	}
+	if err := repo.ClearTournamentPlacements(ctx, qual.ID); err != nil {
+		t.Fatalf("ClearTournamentPlacements: %v", err)
+	}
+	if e, _ := repo.GetTournamentTeam(ctx, qual.ID, team.ID); e.Placement != nil || e.Points != 0 {
+		t.Fatalf("placements not cleared: %+v", e)
+	}
 	if main.FormatRounds != models.DefaultFormatRounds || main.FormatFinal != models.DefaultFormatFinal {
 		t.Fatalf("defaults not applied: %+v", main)
 	}

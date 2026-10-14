@@ -1067,6 +1067,13 @@ func (r *TelegramPostgres) ClearTournamentTeamParticipantIDs(ctx context.Context
 	return err
 }
 
+// ClearTournamentPlacements removes the final places and league points of a
+// tournament's entries.
+func (r *TelegramPostgres) ClearTournamentPlacements(ctx context.Context, tournamentID int) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE telegram_tournament_teams SET placement = NULL, points = 0 WHERE tournament_id = $1`, tournamentID)
+	return err
+}
+
 func (r *TelegramPostgres) UpdateTournamentPlacements(ctx context.Context, tournamentID int, placements map[int]int, points map[int]int) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {

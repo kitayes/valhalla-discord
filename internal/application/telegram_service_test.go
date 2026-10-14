@@ -628,6 +628,15 @@ func (r *fakeTelegramRepo) UpdateTournamentPlacements(ctx context.Context, tourn
 	return nil
 }
 
+func (r *fakeTelegramRepo) ClearTournamentPlacements(ctx context.Context, tournamentID int) error {
+	for _, tt := range r.tournamentTeams {
+		if tt.TournamentID == tournamentID {
+			tt.Placement, tt.Points = nil, 0
+		}
+	}
+	return nil
+}
+
 func (r *fakeTelegramRepo) FinishTournamentRecord(ctx context.Context, tournamentID int, winnerTeamID *int, winnerTeamName string) error {
 	for _, t := range r.tournaments {
 		if t.ID == tournamentID {

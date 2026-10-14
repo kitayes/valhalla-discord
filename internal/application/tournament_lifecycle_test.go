@@ -561,3 +561,33 @@ func TestNoShowIsNotDisqualifiedAgain(t *testing.T) {
 		t.Errorf("disqualified %d no-shows", len(dq))
 	}
 }
+
+// The first qualifier may already have been closed as a plain tournament,
+// with league points. Marking it a qualifier afterwards and finishing it
+// again picks the qualified teams and takes the points back; a second finish
+// is refused.
+func TestCompletedTournamentCanBeFinishedAsQualifierOnce(t *testing.T) {
+	svc, repo := qualifierFixture(t, true)
+	ctx := context.Background()
+	q := repo.tournaments[0]
+	q.Stage, q.AdvanceCount = models.StageStandalone, 0
+	q.Status, q.IsActive = models.TournamentStatusCompleted, false
+	_ = repo.UpdateTournamentPlacements(ctx, 1, map[int]int{1: 9}, map[int]int{1: 10})
+
+	if _, err := svc.UpdateTournamentSettings(ctx, 1, TournamentSettings{Name: q.Name, Stage: models.StageQualifier, AdvanceCount: 8}); err != nil {
+		t.Fatalf("UpdateTournamentSettings: %v", err)
+	}
+	res, err := svc.FinishTournament(ctx, 1)
+	if err != nil || len(res.Qualified) != 8 {
+		t.Fatalf("FinishTournament = %+v, %v", res, err)
+	}
+	if e, _ := repo.GetTournamentTeam(ctx, 1, 1); e.Points != 0 || e.Placement != nil {
+		t.Errorf("qualifier entry kept league points: %+v", e)
+	}
+	if _, err := svc.FinishTournament(ctx, 1); err == nil {
+		t.Error("a qualifier was finished twice")
+	}
+	if _, err := svc.UpdateTournamentSettings(ctx, 1, TournamentSettings{Name: q.Name, Stage: models.StageQualifier, AdvanceCount: 4}); err == nil {
+		t.Error("a finished qualifier's advance count changed")
+	}
+}

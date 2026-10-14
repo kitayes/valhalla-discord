@@ -137,6 +137,7 @@ type Telegram interface {
 	SetTournamentTeamParticipantID(ctx context.Context, tournamentID, teamID int, participantID int64) error
 	ClearTournamentTeamParticipantIDs(ctx context.Context, tournamentID int) error
 	UpdateTournamentPlacements(ctx context.Context, tournamentID int, placements map[int]int, points map[int]int) error
+	ClearTournamentPlacements(ctx context.Context, tournamentID int) error
 	FinishTournamentRecord(ctx context.Context, tournamentID int, winnerTeamID *int, winnerTeamName string) error
 }
 

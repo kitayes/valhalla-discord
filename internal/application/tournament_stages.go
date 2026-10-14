@@ -181,8 +181,11 @@ func (s *TelegramServiceImpl) UpdateTournamentSettings(ctx context.Context, id i
 	if err := normalizeSettings(&set); err != nil {
 		return nil, err
 	}
-	if t.Status == models.TournamentStatusCompleted && (set.Stage != t.Stage || set.AdvanceCount != t.AdvanceCount) {
-		return nil, errors.New("турнир завершён: этап и число прошедших уже не меняются")
+	// A finished tournament may still become a qualifier — the first one ran
+	// before stages existed — but a finished qualifier keeps its line.
+	if t.Status == models.TournamentStatusCompleted && t.Stage == models.StageQualifier &&
+		(set.Stage != t.Stage || set.AdvanceCount != t.AdvanceCount) {
+		return nil, errors.New("квалификация завершена: этап и число прошедших уже не меняются")
 	}
 	if t.ChallongeID != nil && set.TournamentType != t.TournamentType {
 		return nil, errors.New("сетка уже построена: тип сетки менять нельзя")
@@ -226,9 +229,6 @@ func (s *TelegramServiceImpl) FinishTournament(ctx context.Context, id int) (*Fi
 	if err != nil || t == nil {
 		return nil, errors.New("турнир не найден")
 	}
-	if t.Status == models.TournamentStatusCompleted {
-		return nil, errors.New("турнир уже завершён")
-	}
 	matches, err := s.repo.GetBracketMatchesForTournament(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("не удалось получить матчи турнира: %w", err)
@@ -236,6 +236,9 @@ func (s *TelegramServiceImpl) FinishTournament(ctx context.Context, id int) (*Fi
 	entries, err := s.repo.GetTournamentEntries(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("не удалось получить команды турнира: %w", err)
+	}
+	if t.Status == models.TournamentStatusCompleted && !finishableQualifier(t, entries) {
+		return nil, errors.New("турнир уже завершён")
 	}
 	names := make(map[int]string, len(entries))
 	for _, e := range entries {
@@ -274,6 +277,11 @@ func (s *TelegramServiceImpl) FinishTournament(ctx context.Context, id int) (*Fi
 		if err := s.repo.ReplaceBracketMatchesForTournament(ctx, id, FilterStage(t, matches)); err != nil {
 			return nil, err
 		}
+		// A qualifier gives no league points; a tournament finished as a
+		// plain one before it was marked a qualifier had been given some.
+		if err := s.repo.ClearTournamentPlacements(ctx, id); err != nil {
+			return nil, err
+		}
 		if err := s.repo.FinishTournamentRecord(ctx, id, nil, ""); err != nil {
 			return nil, fmt.Errorf("не удалось завершить турнир: %w", err)
 		}
@@ -302,6 +310,21 @@ func (s *TelegramServiceImpl) FinishTournament(ctx context.Context, id int) (*Fi
 	s.emit("tournaments_update", map[string]any{"action": "finished", "id": id})
 	s.emit("bracket_update", map[string]any{"action": "finished"})
 	return res, nil
+}
+
+// finishableQualifier: a completed tournament can still be finished as a
+// qualifier once, when it was closed as a plain tournament before it was
+// marked a qualifier, so nobody has qualified from it yet.
+func finishableQualifier(t *models.TelegramTournament, entries []models.TournamentTeam) bool {
+	if !t.Qualifier() {
+		return false
+	}
+	for _, e := range entries {
+		if e.Status == models.EntryQualified {
+			return false
+		}
+	}
+	return true
 }
 
 // clearCurrentBracket detaches the finished tournament from the background
