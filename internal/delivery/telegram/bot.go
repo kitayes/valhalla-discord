@@ -19,8 +19,6 @@ import (
 const (
 	// checkInReminderLead is how long before the tournament captains are nudged.
 	checkInReminderLead = 30 * time.Minute
-	// technicalDefeatGrace is how long after the start teams have to check in.
-	technicalDefeatGrace = 10 * time.Minute
 	// scheduleCatchUpWindow bounds how late a missed deadline may still fire, so
 	// a restart does not replay an old tournament's notifications.
 	scheduleCatchUpWindow = time.Hour
@@ -49,9 +47,11 @@ type Bot struct {
 
 	// Tournament time each scheduled stage last fired for. Only touched by the
 	// single background worker goroutine.
-	remindedFor     time.Time
-	disqualifiedFor time.Time
-	quotaAlerted    bool
+	remindedFor time.Time
+	// qualifierAlert is the last qualifier-closing error sent to admins, so a
+	// stuck qualifier is reported once rather than every minute.
+	qualifierAlert string
+	quotaAlerted   bool
 }
 
 func NewBot(token string, adminIDs []int64, service application.TelegramService, profileLinkService application.ProfileLinkService, bettingService *application.BettingService, telegramChannelID string, tournamentChatID string, bets BetSettings, bracket *application.BracketService, location *time.Location, logger application.Logger) (*Bot, error) {
@@ -334,11 +334,11 @@ func (b *Bot) parseTournamentTime(dateStr string) (time.Time, string, error) {
 	if err != nil {
 		return time.Time{}, "", err
 	}
-	summary := fmt.Sprintf("Время турнира: %s (%s)\nРегистрация закроется: %s\nНапоминание капитанам: %s\nТех. поражение: %s",
+	summary := fmt.Sprintf("Время турнира: %s (%s)\nРегистрация закроется: %s\nНапоминание капитанам: %s\nCheck-in закроется и сетка построится: %s",
 		t.Format(tournamentLayout), b.location,
 		t.Add(-application.RegistrationCloseLead).Format("15:04"),
 		t.Add(-checkInReminderLead).Format("15:04"),
-		t.Add(technicalDefeatGrace).Format("15:04"))
+		t.Format("15:04"))
 	return t, summary, nil
 }
 
@@ -366,8 +366,9 @@ func (b *Bot) startBackgroundWorker(ctx context.Context) {
 	}
 }
 
-// runScheduledChecks fires the check-in reminder and the technical-defeat sweep
-// once each per tournament.
+// runScheduledChecks fires the check-in reminder once per tournament and runs
+// the bracket checks: the build at the start, forfeits, queued reports and the
+// end of a qualifier.
 //
 // It used to compare only the hour and minute of the current time against the
 // tournament time. That fired every day at that time of day regardless of the
@@ -386,10 +387,6 @@ func (b *Bot) runScheduledChecks(ctx context.Context) {
 
 	if b.shouldFire(tTime, tTime.Add(-checkInReminderLead), now, &b.remindedFor) {
 		b.broadcastCheckInReminder(ctx)
-	}
-
-	if b.shouldFire(tTime, tTime.Add(technicalDefeatGrace), now, &b.disqualifiedFor) {
-		b.processTechnicalDefeat(ctx)
 	}
 
 	b.runBracketChecks(ctx, tTime, now)
@@ -441,13 +438,13 @@ func (b *Bot) broadcastCheckInReminder(ctx context.Context) {
 		for _, p := range team.Players {
 			if p.TelegramID != nil && *p.TelegramID > 0 {
 				if p.IsCaptain {
-					if len(team.Players) < application.MainRosterSlots {
-						msg := fmt.Sprintf("ВНИМАНИЕ, Капитан!\nВ вашей команде '%s' не хватает игроков (%d из %d).\n\nСрочно доберите состав (минимум %d игроков) до %s, иначе — ТЕХНИЧЕСКОЕ ПОРАЖЕНИЕ.",
-							team.Name, len(team.Players), application.MainRosterSlots, application.MainRosterSlots, tTime.In(b.location).Add(technicalDefeatGrace).Format("15:04"))
+					if application.MainRosterSize(team) < application.MainRosterSlots {
+						msg := fmt.Sprintf("ВНИМАНИЕ, Капитан!\nВ вашей команде '%s' не хватает игроков (%d из %d).\n\nСрочно доберите основной состав (минимум %d игроков) и подтвердите участие до %s, иначе команда не попадёт в сетку.",
+							team.Name, application.MainRosterSize(team), application.MainRosterSlots, application.MainRosterSlots, tTime.In(b.location).Format("15:04"))
 						b.sendMessage(*p.TelegramID, msg, "empty")
 					} else {
-						msg := fmt.Sprintf("ВНИМАНИЕ, Капитан!\nВаша команда '%s' не прошла Check-in.\n\nПодтвердите участие в приложении до %s, иначе — ТЕХНИЧЕСКОЕ ПОРАЖЕНИЕ.",
-							team.Name, tTime.In(b.location).Add(technicalDefeatGrace).Format("15:04"))
+						msg := fmt.Sprintf("ВНИМАНИЕ, Капитан!\nВаша команда '%s' не прошла Check-in.\n\nПодтвердите участие в приложении до %s, иначе команда не попадёт в сетку.",
+							team.Name, tTime.In(b.location).Format("15:04"))
 						if b.webAppURL != "" {
 							b.SendMatchNotification(*p.TelegramID, msg, true)
 						} else {
@@ -455,8 +452,8 @@ func (b *Bot) broadcastCheckInReminder(ctx context.Context) {
 						}
 					}
 				} else {
-					msg := fmt.Sprintf("ВНИМАНИЕ!\nВаша команда '%s' ещё не прошла Check-in.\nНапомните капитану подтвердить участие в приложении до %s, иначе — ТЕХНИЧЕСКОЕ ПОРАЖЕНИЕ.",
-						team.Name, tTime.In(b.location).Add(technicalDefeatGrace).Format("15:04"))
+					msg := fmt.Sprintf("ВНИМАНИЕ!\nВаша команда '%s' ещё не прошла Check-in.\nНапомните капитану подтвердить участие в приложении до %s, иначе команда не попадёт в сетку.",
+						team.Name, tTime.In(b.location).Format("15:04"))
 					if b.webAppURL != "" {
 						b.SendMatchNotification(*p.TelegramID, msg, true)
 					} else {
@@ -465,40 +462,6 @@ func (b *Bot) broadcastCheckInReminder(ctx context.Context) {
 				}
 			}
 		}
-	}
-}
-
-func (b *Bot) processTechnicalDefeat(ctx context.Context) {
-	teams, err := b.service.DisqualifyUnchecked(ctx)
-	if err != nil {
-		b.logger.Error("telegram: technical-defeat sweep failed: %v", err)
-		return
-	}
-	if len(teams) == 0 {
-		return
-	}
-
-	var report strings.Builder
-	report.WriteString("СПИСОК ТЕХ. ПОРАЖЕНИЙ (Не прошли чекин):\n\n")
-
-	for _, team := range teams {
-		report.WriteString(fmt.Sprintf("- %s\n", team.Name))
-
-		for _, p := range team.Players {
-			if p.TelegramID != nil && *p.TelegramID > 0 {
-				b.sendMessage(*p.TelegramID, "ТЕХНИЧЕСКОЕ ПОРАЖЕНИЕ.\nКоманда не подтвердила участие вовремя и снята с турнира.", "empty")
-			}
-		}
-	}
-
-	for adminID := range b.adminIDs {
-		b.sendMessage(adminID, report.String(), "empty")
-	}
-	b.notifyTechnicalDefeats(report.String())
-	if b.bracket != nil {
-		ready, err := b.bracket.ForfeitDisqualified(ctx)
-		b.reportBracketError(ctx, "forfeit after technical defeat", err)
-		b.notifyMatchesReady(ctx, ready)
 	}
 }
 
@@ -552,4 +515,3 @@ func (b *Bot) SetBotCommands() {
 		_ = resp.Body.Close()
 	}
 }
-

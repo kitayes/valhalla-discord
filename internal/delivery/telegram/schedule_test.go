@@ -72,22 +72,6 @@ func TestRescheduledTournamentFiresAgain(t *testing.T) {
 	}
 }
 
-// The two stages track their deadlines independently.
-func TestStagesFireIndependently(t *testing.T) {
-	b := &Bot{}
-	tournament := time.Date(2026, 8, 16, 18, 0, 0, 0, time.UTC)
-
-	remind := tournament.Add(-checkInReminderLead)
-	if !b.shouldFire(tournament, remind, remind, &b.remindedFor) {
-		t.Fatal("reminder did not fire")
-	}
-
-	defeat := tournament.Add(technicalDefeatGrace)
-	if !b.shouldFire(tournament, defeat, defeat, &b.disqualifiedFor) {
-		t.Error("technical defeat sweep did not fire after the reminder")
-	}
-}
-
 // /set_tourney reads the date in the configured tournament zone and says which
 // zone it used, so an admin in Almaty and a server in UTC agree on 18:00.
 func TestParseTournamentTimeUsesConfiguredZone(t *testing.T) {
@@ -104,7 +88,7 @@ func TestParseTournamentTimeUsesConfiguredZone(t *testing.T) {
 	if got.Location() != almaty || got.Hour() != 18 {
 		t.Errorf("parsed %v, want 18:00 in Asia/Almaty", got)
 	}
-	for _, want := range []string{"20.05.2026 18:00", "Asia/Almaty", "17:00", "17:30", "18:10"} {
+	for _, want := range []string{"20.05.2026 18:00", "Asia/Almaty", "17:00", "17:30", "сетка построится: 18:00"} {
 		if !strings.Contains(summary, want) {
 			t.Errorf("summary %q lacks %q", summary, want)
 		}

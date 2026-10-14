@@ -374,7 +374,7 @@ func (s *TelegramServiceImpl) SetTeamCheckIn(ctx context.Context, tgID int64, wa
 	}
 	if want {
 		members, _ := s.repo.GetTeamMembers(ctx, t.ID)
-		if n := mainRosterSize(models.TelegramTeam{Players: members}); n < mainRosterSlots {
+		if n := MainRosterSize(models.TelegramTeam{Players: members}); n < mainRosterSlots {
 			return CheckInResult{Message: fmt.Sprintf("Check-in невозможен: в основном составе %d из %d игроков (запасные не считаются). Доукомплектуйте состав.", n, mainRosterSlots)}
 		}
 	}
@@ -1231,7 +1231,7 @@ func (s *TelegramServiceImpl) GetCheckInStatus(ctx context.Context) string {
 		switch {
 		case t.Status == models.TeamStatusDisqualified, t.Status == models.EntryNoShow:
 			disqualified = append(disqualified, t)
-		case mainRosterSize(t) < mainRosterSlots:
+		case MainRosterSize(t) < mainRosterSlots:
 			incomplete = append(incomplete, t)
 		case t.IsCheckedIn:
 			checkedIn = append(checkedIn, t)
@@ -1432,7 +1432,7 @@ func (s *TelegramServiceImpl) GetCheckInSummary(ctx context.Context) (*models.Ch
 		case t.Status == models.TeamStatusDisqualified, t.Status == models.EntryNoShow:
 			status = "disqualified"
 			summary.DisqualifiedCount++
-		case mainRosterSize(t) < mainRosterSlots:
+		case MainRosterSize(t) < mainRosterSlots:
 			status = "incomplete"
 			summary.IncompleteCount++
 		case !t.IsCheckedIn:

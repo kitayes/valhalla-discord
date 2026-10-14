@@ -76,7 +76,7 @@ type SeededTeam struct {
 	AvgStars float64
 }
 
-func mainRosterSize(team models.TelegramTeam) int {
+func MainRosterSize(team models.TelegramTeam) int {
 	n := 0
 	for _, player := range team.Players {
 		if !player.IsSubstitute {
@@ -100,7 +100,7 @@ func SeedTeamsWithStrategy(teams []models.TelegramTeam, strategy string) []Seede
 		if t.Status == models.TeamStatusDisqualified {
 			continue
 		}
-		if mainRosterSize(t) < MainRosterSlots {
+		if MainRosterSize(t) < MainRosterSlots {
 			continue
 		}
 		sum, n := 0, 0
@@ -339,7 +339,7 @@ func (s *BracketService) build(ctx context.Context, forTournament time.Time) (*B
 	seeded := SeedTeamsWithStrategy(playing, seedingType)
 	var incomplete []models.TelegramTeam
 	for _, team := range playing {
-		if mainRosterSize(team) < MainRosterSlots {
+		if MainRosterSize(team) < MainRosterSlots {
 			incomplete = append(incomplete, team)
 		}
 	}

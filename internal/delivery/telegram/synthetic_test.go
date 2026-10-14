@@ -518,29 +518,6 @@ func TestSyntheticTournamentBotStartup(t *testing.T) {
 	})
 
 	t.Run("8. Fault Injection and Error Recovery", func(t *testing.T) {
-		// 1. Technical Defeat Sweep for Unchecked Teams
-		_ = telegramService.RegisterUser(ctx, 3001, "captain_gamma", "Charlie")
-		_, _ = telegramService.StartTeamRegistration(ctx, 3001)
-		_, _ = telegramService.HandleUserInput(ctx, 3001, "Gamma Team")
-		_, _ = telegramService.HandleUserInput(ctx, 3001, "CharlieNick 777777 (3001) 40")
-		_, _ = telegramService.HandleRegAction(ctx, 3001, "role", "Mid")
-		for slot := 2; slot <= 5; slot++ {
-			_, _ = telegramService.HandleUserInput(ctx, 3001, fmt.Sprintf("GammaMate%d %d (300%d) 20", slot, 330000+slot, slot))
-			_, _ = telegramService.HandleRegAction(ctx, 3001, "role", "Roam")
-		}
-		_, _ = telegramService.HandleRegAction(ctx, 3001, "confirm", "")
-
-		// Team Gamma never checks in -> processTechnicalDefeat
-		bot.processTechnicalDefeat(ctx)
-
-		pGamma, _ := telegramRepo.GetPlayerByTelegramID(ctx, 3001)
-		if pGamma != nil && pGamma.TeamID != nil {
-			tGamma, _ := telegramRepo.GetTeamByID(ctx, *pGamma.TeamID)
-			if tGamma == nil || tGamma.Status != "disqualified" {
-				t.Errorf("expected Gamma Team to be disqualified, got status: %v", tGamma)
-			}
-		}
-
 		// 2. Challonge Quota Limit (429) Handling
 		bracketService.RecordAPIError(ctx, challonge.ErrQuotaExceeded)
 

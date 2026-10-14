@@ -41,9 +41,11 @@ func matchLine(m models.BracketMatch) string {
 	}
 }
 
-func formatBracketRound(url string, ms []models.BracketMatch, round int) []string {
-	total := application.TotalRounds(ms)
-	head := fmt.Sprintf("Сетка: %s\n\n%s\n", url, application.RoundLabel(round, total))
+// formatBracketRound lists one round of the bracket under its title and
+// best-of format. t may be nil: the layout is then read from the matches.
+func formatBracketRound(t *models.TelegramTournament, url string, ms []models.BracketMatch, round int) []string {
+	head := fmt.Sprintf("Сетка: %s\n\n%s, %s\n", url, application.RoundTitle(t, ms, round),
+		application.FormatLabel(application.MatchFormat(t, ms, round)))
 	var lines []string
 	for _, m := range ms {
 		if m.Round == round {
@@ -121,12 +123,14 @@ func parseScorePair(s string) (int, int, bool) {
 	return a, b, true
 }
 
+// bracketBuildDue: the bracket is built at the start, when check-in closes,
+// from the teams that checked in. It used to be built an hour early from
+// every entry, and the teams that never showed handed out walkovers.
 func bracketBuildDue(tournament, now time.Time) bool {
 	if tournament.IsZero() {
 		return false
 	}
-	closeAt := tournament.Add(-application.RegistrationCloseLead)
-	return !now.Before(closeAt) && now.Before(tournament)
+	return !now.Before(tournament) && now.Sub(tournament) <= scheduleCatchUpWindow
 }
 
 func (b *Bot) reportBracketError(ctx context.Context, what string, err error) {
@@ -183,14 +187,22 @@ func (b *Bot) notifyTeam(ctx context.Context, teamID int, text, kb string) {
 }
 
 func (b *Bot) notifyMatchesReady(ctx context.Context, ms []models.BracketMatch) {
+	if len(ms) == 0 {
+		return
+	}
+	t, _ := b.service.GetActiveTournament(ctx)
+	var all []models.BracketMatch
+	if b.bracket != nil {
+		all, _ = b.bracket.Matches(ctx)
+	}
 	for _, m := range ms {
 		if m.Team1ID == nil || m.Team2ID == nil {
 			continue
 		}
-		text1 := fmt.Sprintf("Матч #%d (Раунд %d): %s vs %s\n\nВаш соперник — команда «%s»!\nЗайдите в приложение для подтверждения готовности к игре.",
-			m.PlayOrder, m.Round, m.Team1Name, m.Team2Name, m.Team2Name)
-		text2 := fmt.Sprintf("Матч #%d (Раунд %d): %s vs %s\n\nВаш соперник — команда «%s»!\nЗайдите в приложение для подтверждения готовности к игре.",
-			m.PlayOrder, m.Round, m.Team1Name, m.Team2Name, m.Team1Name)
+		head := fmt.Sprintf("Матч #%d — %s, %s: %s vs %s", m.PlayOrder, application.RoundTitle(t, all, m.Round),
+			application.FormatLabel(application.MatchFormat(t, all, m.Round)), m.Team1Name, m.Team2Name)
+		text1 := fmt.Sprintf("%s\n\nВаш соперник — команда «%s»!\nЗайдите в приложение для подтверждения готовности к игре.", head, m.Team2Name)
+		text2 := fmt.Sprintf("%s\n\nВаш соперник — команда «%s»!\nЗайдите в приложение для подтверждения готовности к игре.", head, m.Team1Name)
 		b.notifyTeam(ctx, *m.Team1ID, text1, "main_menu")
 		b.notifyTeam(ctx, *m.Team2ID, text2, "main_menu")
 	}
@@ -217,10 +229,9 @@ func (b *Bot) applyBracketChange(ctx context.Context, ch *application.BracketCha
 }
 
 func (b *Bot) announceBracket(ctx context.Context, built *application.BracketBuilt) {
-	tTime := b.service.GetTournamentTime(ctx)
-	deadline := tTime.In(b.location).Add(technicalDefeatGrace).Format("15:04")
+	t, _ := b.service.GetActiveTournament(ctx)
 	ms, _ := b.bracket.Matches(ctx)
-	for _, part := range formatBracketRound(built.URL, ms, 1) {
+	for _, part := range formatBracketRound(t, built.URL, ms, 1) {
 		b.notifyTournamentChat("СЕТКА ГОТОВА\n\n" + part)
 	}
 	if len(built.Byes) > 0 {
@@ -241,13 +252,22 @@ func (b *Bot) announceBracket(ctx context.Context, built *application.BracketBui
 		if m.Team1ID == nil || m.Team2ID == nil {
 			continue
 		}
-		text := fmt.Sprintf("Сетка готова! Раунд 1, матч #%d: %s vs %s.\nСетка: %s\n\nПодтвердите участие кнопкой ниже до %s, иначе — техническое поражение.", m.PlayOrder, m.Team1Name, m.Team2Name, built.URL, deadline)
-		b.notifyTeam(ctx, *m.Team1ID, text, application.KbRegCheckin)
-		b.notifyTeam(ctx, *m.Team2ID, text, application.KbRegCheckin)
+		text := fmt.Sprintf("Сетка готова! %s, %s, матч #%d: %s vs %s.\nСетка: %s\n\nЗайдите в приложение для подтверждения готовности к игре.",
+			application.RoundTitle(t, ms, m.Round), application.FormatLabel(application.MatchFormat(t, ms, m.Round)), m.PlayOrder, m.Team1Name, m.Team2Name, built.URL)
+		b.notifyTeam(ctx, *m.Team1ID, text, "main_menu")
+		b.notifyTeam(ctx, *m.Team2ID, text, "main_menu")
 	}
 	for _, team := range built.Byes {
-		text := fmt.Sprintf("Сетка готова! В 1-м раунде у команды '%s' автопроход.\nСетка: %s\n\nЧек-ин обязателен: подтвердите участие кнопкой ниже до %s, иначе — техническое поражение.", team.Name, built.URL, deadline)
-		b.notifyTeam(ctx, team.ID, text, application.KbRegCheckin)
+		text := fmt.Sprintf("Сетка готова! В 1-м раунде у команды '%s' автопроход.\nСетка: %s", team.Name, built.URL)
+		b.notifyTeam(ctx, team.ID, text, "main_menu")
+	}
+	if len(built.NoShows) > 0 {
+		names := make([]string, 0, len(built.NoShows))
+		for _, team := range built.NoShows {
+			names = append(names, team.Name)
+			b.notifyTeam(ctx, team.ID, fmt.Sprintf("Команда '%s' не прошла check-in до старта и не попала в сетку.", team.Name), "main_menu")
+		}
+		b.notifyAdmins("Не прошли check-in и не попали в сетку: " + strings.Join(names, ", "))
 	}
 	if len(built.Later) > 0 {
 		b.notifyMatchesReady(ctx, built.Later)
@@ -277,6 +297,28 @@ func (b *Bot) runBracketChecks(ctx context.Context, tTime, now time.Time) {
 		ready, err = b.bracket.FlushPendingReports(ctx)
 		b.reportBracketError(ctx, "flush reports", err)
 		b.notifyMatchesReady(ctx, ready)
+		b.finishQualifierIfDone(ctx)
+	}
+}
+
+// finishQualifierIfDone closes the active qualifier once its last match before
+// the advance line is played and announces who goes on. A count that does not
+// add up is reported to admins once, who then close it by hand.
+func (b *Bot) finishQualifierIfDone(ctx context.Context) {
+	res, err := b.service.TryFinishQualifier(ctx)
+	if err != nil {
+		if msg := err.Error(); msg != b.qualifierAlert {
+			b.qualifierAlert = msg
+			b.notifyAdmins("Квалификация не закрылась автоматически: " + msg)
+		}
+		return
+	}
+	b.qualifierAlert = ""
+	if res != nil {
+		b.announceQualified(ctx, res)
+		if b.matchDesk != nil {
+			b.wakeMatchDesk()
+		}
 	}
 }
 
@@ -331,16 +373,18 @@ func (b *Bot) handleBracketCommand(ctx context.Context, chatID int64, text strin
 		}
 		url := b.bracket.URL(ctx)
 		if url == "" || len(ms) == 0 {
-			b.sendMessage(chatID, "Сетка ещё не построена. Она появится за час до старта турнира.", "main_menu")
+			b.sendMessage(chatID, "Сетка ещё не построена. Она появится в момент старта турнира из команд, прошедших check-in.", "main_menu")
 			return true
 		}
 		round := defaultBracketRound(ms)
 		if arg := strings.TrimSpace(strings.TrimPrefix(text, "/bracket")); arg != "" {
-			if n, err := strconv.Atoi(arg); err == nil && n > 0 {
+			// Negative numbers are lower-bracket rounds.
+			if n, err := strconv.Atoi(arg); err == nil && n != 0 {
 				round = n
 			}
 		}
-		for _, part := range formatBracketRound(url, ms, round) {
+		active, _ := b.service.GetActiveTournament(ctx)
+		for _, part := range formatBracketRound(active, url, ms, round) {
 			b.sendMessage(chatID, part, "main_menu")
 		}
 		return true

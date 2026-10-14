@@ -52,7 +52,7 @@ func buildDebtorsChatAnnouncement(pendingTeams, incompleteTeams []models.Telegra
 		}
 		sb.WriteString(fmt.Sprintf("Неполный состав (%d):\n", len(incompleteTeams)))
 		for i, t := range incompleteTeams {
-			sb.WriteString(fmt.Sprintf("%d. %s (%d/%d) — %s\n", i+1, t.Name, len(t.Players), application.MainRosterSlots, formatCaptainMention(t)))
+			sb.WriteString(fmt.Sprintf("%d. %s (%d/%d) — %s\n", i+1, t.Name, application.MainRosterSize(t), application.MainRosterSlots, formatCaptainMention(t)))
 		}
 	}
 
@@ -92,7 +92,7 @@ func buildDebtorsAdminReport(pendingTeams, incompleteTeams []models.TelegramTeam
 		sb.WriteString(fmt.Sprintf("- [-] %s: %s\n", t.Name, formatCaptainMention(t)))
 	}
 	for _, t := range incompleteTeams {
-		sb.WriteString(fmt.Sprintf("- [!] %s (%d/%d): %s\n", t.Name, len(t.Players), application.MainRosterSlots, formatCaptainMention(t)))
+		sb.WriteString(fmt.Sprintf("- [!] %s (%d/%d): %s\n", t.Name, application.MainRosterSize(t), application.MainRosterSlots, formatCaptainMention(t)))
 	}
 
 	return sb.String()
@@ -121,7 +121,7 @@ func (b *Bot) pingDebtors(ctx context.Context, adminChatID int64, customMsg stri
 
 	var incompleteTeams, pendingTeams []models.TelegramTeam
 	for _, t := range teams {
-		if len(t.Players) < application.MainRosterSlots {
+		if application.MainRosterSize(t) < application.MainRosterSlots {
 			incompleteTeams = append(incompleteTeams, t)
 		} else {
 			pendingTeams = append(pendingTeams, t)
@@ -136,7 +136,7 @@ func (b *Bot) pingDebtors(ctx context.Context, adminChatID int64, customMsg stri
 	tTime := b.service.GetTournamentTime(ctx)
 	deadlineStr := ""
 	if !tTime.IsZero() {
-		deadlineStr = "до " + tTime.In(b.location).Add(technicalDefeatGrace).Format("15:04")
+		deadlineStr = "до " + tTime.In(b.location).Format("15:04")
 	} else {
 		deadlineStr = "в ближайшее время"
 	}
@@ -148,8 +148,8 @@ func (b *Bot) pingDebtors(ctx context.Context, adminChatID int64, customMsg stri
 	for _, team := range incompleteTeams {
 		for _, p := range team.Players {
 			if p.IsCaptain && p.TelegramID != nil {
-				msg := fmt.Sprintf("ВНИМАНИЕ, Капитан!\nВ вашей команде '%s' не хватает игроков (%d из %d).\n\nСрочно доберите состав (минимум %d игроков) %s! Без полного состава команда не сможет подтвердить Check-in и получит ТЕХНИЧЕСКОЕ ПОРАЖЕНИЕ.",
-					team.Name, len(team.Players), application.MainRosterSlots, application.MainRosterSlots, deadlineStr)
+				msg := fmt.Sprintf("ВНИМАНИЕ, Капитан!\nВ вашей команде '%s' не хватает игроков (%d из %d).\n\nСрочно доберите основной состав (минимум %d игроков) %s! Без полного состава команда не сможет подтвердить Check-in и не попадёт в сетку.",
+					team.Name, application.MainRosterSize(team), application.MainRosterSlots, application.MainRosterSlots, deadlineStr)
 				if customMsg != "" {
 					msg += "\n\nСообщение от организаторов:\n" + customMsg
 				}
@@ -167,7 +167,7 @@ func (b *Bot) pingDebtors(ctx context.Context, adminChatID int64, customMsg stri
 	for _, team := range pendingTeams {
 		for _, p := range team.Players {
 			if p.IsCaptain && p.TelegramID != nil {
-				msg := fmt.Sprintf("ВНИМАНИЕ, Капитан!\nВаша команда '%s' ещё не подтвердила участие (Check-in).\n\nНажмите кнопку ниже %s или используйте /checkin, иначе — ТЕХНИЧЕСКОЕ ПОРАЖЕНИЕ.",
+				msg := fmt.Sprintf("ВНИМАНИЕ, Капитан!\nВаша команда '%s' ещё не подтвердила участие (Check-in).\n\nНажмите кнопку ниже %s, иначе команда не попадёт в сетку.",
 					team.Name, deadlineStr)
 				if customMsg != "" {
 					msg += "\n\nСообщение от организаторов:\n" + customMsg

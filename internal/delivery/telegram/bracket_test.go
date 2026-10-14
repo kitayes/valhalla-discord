@@ -29,13 +29,13 @@ func TestFormatBracketRound(t *testing.T) {
 		{PlayOrder: 2, Round: 1, Team1ID: bracketInt(2), Team2ID: bracketInt(3), Team1Name: "T2", Team2Name: "T3", State: models.BracketOpen},
 		{PlayOrder: 3, Round: 2, Team1ID: bracketInt(1), Team1Name: "T1", State: models.BracketPending},
 	}
-	text := formatBracketRound("https://challonge.com/x", ms, 1)[0]
-	for _, want := range []string{"https://challonge.com/x", "Раунд 1 — полуфинал", "#1 T1 vs T4 — 2 - 0, победа T1", "#2 T2 vs T3 — идёт"} {
+	text := formatBracketRound(nil, "https://challonge.com/x", ms, 1)[0]
+	for _, want := range []string{"https://challonge.com/x", "Полуфинал, BO3", "#1 T1 vs T4 — 2 - 0, победа T1", "#2 T2 vs T3 — идёт"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}
 	}
-	if r2 := formatBracketRound("u", ms, 2)[0]; !strings.Contains(r2, "#3 T1 vs ? — ожидает соперника") {
+	if r2 := formatBracketRound(nil, "u", ms, 2)[0]; !strings.Contains(r2, "#3 T1 vs ? — ожидает соперника") {
 		t.Errorf("pending line wrong:\n%s", r2)
 	}
 }
@@ -45,7 +45,7 @@ func TestFormatBracketRoundSplitsLongOutput(t *testing.T) {
 	for i := 1; i <= 64; i++ {
 		ms = append(ms, models.BracketMatch{PlayOrder: i, Round: 1, Team1ID: bracketInt(i), Team2ID: bracketInt(i + 100), Team1Name: strings.Repeat("A", 30), Team2Name: strings.Repeat("B", 30), State: models.BracketOpen})
 	}
-	parts := formatBracketRound("u", ms, 1)
+	parts := formatBracketRound(nil, "u", ms, 1)
 	if len(parts) < 2 {
 		t.Fatalf("64 long lines fit in one message")
 	}
@@ -83,9 +83,21 @@ func TestBracketBuildDue(t *testing.T) {
 	for _, tc := range []struct {
 		now  time.Time
 		want bool
-	}{{tourney.Add(-90 * time.Minute), false}, {tourney.Add(-60 * time.Minute), true}, {tourney.Add(-5 * time.Minute), true}, {tourney.Add(time.Minute), false}} {
+	}{{tourney.Add(-60 * time.Minute), false}, {tourney.Add(-time.Minute), false}, {tourney, true}, {tourney.Add(30 * time.Minute), true}, {tourney.Add(2 * time.Hour), false}} {
 		if got := bracketBuildDue(tourney, tc.now); got != tc.want {
 			t.Errorf("due(%s) = %v, want %v", tc.now, got, tc.want)
 		}
+	}
+}
+
+func TestQualifiedText(t *testing.T) {
+	res := &application.FinishResult{
+		Tournament: &models.TelegramTournament{Name: "Квалификация 1"},
+		Qualified:  []models.TelegramTeam{{ID: 3, Name: "Beta"}, {ID: 1, Name: "Alpha"}},
+	}
+	got := qualifiedText(res)
+	want := "КВАЛИФИКАЦИЯ ЗАВЕРШЕНА\n\n«Квалификация 1»: в основной этап прошли:\n1. Alpha\n2. Beta"
+	if got != want {
+		t.Errorf("qualifiedText =\n%s\nwant\n%s", got, want)
 	}
 }
