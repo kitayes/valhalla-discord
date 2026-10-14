@@ -261,7 +261,7 @@ func (b *Bot) handleAdminCommand(ctx context.Context, chatID int64, text string)
 			b.sendMessage(chatID, "Укажите название турнира: /new_tourney <название>", "main_menu")
 			return
 		}
-		t, err := b.service.CreateTournament(ctx, name, "", nil, models.TournamentTypeSingleElimination, false, models.SeedingTypeStars)
+		t, err := b.service.CreateTournament(ctx, application.TournamentSettings{Name: name})
 		if err != nil {
 			b.sendMessage(chatID, "Ошибка создания турнира: "+err.Error(), "main_menu")
 			return
@@ -293,10 +293,13 @@ func (b *Bot) handleAdminCommand(ctx context.Context, chatID int64, text string)
 			b.sendMessage(chatID, "Нет активного турнира для завершения.", "main_menu")
 			return
 		}
-		err = b.service.FinishTournament(ctx, active.ID)
+		res, err := b.service.FinishTournament(ctx, active.ID)
 		if err != nil {
 			b.sendMessage(chatID, "Ошибка завершения турнира: "+err.Error(), "main_menu")
 			return
+		}
+		if active.Qualifier() {
+			b.announceQualified(ctx, res)
 		}
 		b.sendMessage(chatID, fmt.Sprintf("Турнир '%s' (ID: %d) завершён и перенесён в архив!", active.Name, active.ID), "main_menu")
 		return

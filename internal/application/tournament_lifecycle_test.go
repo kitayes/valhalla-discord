@@ -26,7 +26,7 @@ func TestNewTournamentDropsPreviousCheckInsAndDisqualifications(t *testing.T) {
 	gamma.IsCheckedIn = false
 	gamma.Status = models.TeamStatusDisqualified
 
-	if _, err := svc.CreateTournament(ctx, "Этап 2", "", nil, "", false, ""); err != nil {
+	if _, err := svc.CreateTournament(ctx, TournamentSettings{Name: "Этап 2"}); err != nil {
 		t.Fatal(err)
 	}
 	if alpha.IsCheckedIn || gamma.IsCheckedIn || gamma.Status != models.TeamStatusActive {
@@ -251,6 +251,232 @@ func TestNormalizeChallongeSlug(t *testing.T) {
 	for _, bad := range []string{"valhalla-2", "кубок", "cup 2"} {
 		if _, err := normalizeChallongeSlug(bad); err == nil {
 			t.Errorf("normalizeChallongeSlug(%q) accepted an invalid slug", bad)
+		}
+	}
+}
+
+// qualifierFixture: tournament 1 is a running 16-team qualifier sending 8 on;
+// every team is entered with a Challonge participant id, the bracket holds
+// round 1 plus the quarterfinals Challonge opened after it.
+func qualifierFixture(t *testing.T, playAll bool) (*TelegramServiceImpl, *fakeTelegramRepo) {
+	t.Helper()
+	svc, repo := newTelegramSvc()
+	ctx := context.Background()
+	q := repo.tournaments[0]
+	q.Stage, q.AdvanceCount, q.BracketSize, q.Status = models.StageQualifier, 8, 16, models.TournamentStatusActive
+	for i := 1; i <= 16; i++ {
+		addBracketTeam(repo, i, fmt.Sprintf("T%02d", i), 10)
+		_ = repo.RegisterTeamForTournament(ctx, 1, i)
+		_ = repo.SetTournamentTeamParticipantID(ctx, 1, i, int64(5000+i))
+	}
+	var ms []models.BracketMatch
+	for i := 0; i < 8; i++ {
+		a, b := 2*i+1, 2*i+2
+		w := a
+		if !playAll && i == 7 {
+			w = 0
+		}
+		m := sm(1, i+1, a, b, w)
+		m.ChallongeMatchID = int64(i + 1)
+		ms = append(ms, m)
+	}
+	for i := 0; i < 3; i++ {
+		m := sm(2, 9+i, 4*i+1, 4*i+3, 0)
+		m.ChallongeMatchID = int64(9 + i)
+		ms = append(ms, m)
+	}
+	repo.bracket = ms
+	repo.settings[settingChallongeID] = "777"
+	repo.settings["tournament_time"] = "2026-10-12T15:00:00Z"
+	svc.tournamentTime = time.Date(2026, 10, 12, 15, 0, 0, 0, time.UTC)
+	return svc, repo
+}
+
+func TestFinishQualifierMarksQualified(t *testing.T) {
+	svc, repo := qualifierFixture(t, true)
+	ctx := context.Background()
+
+	res, err := svc.FinishTournament(ctx, 1)
+	if err != nil {
+		t.Fatalf("FinishTournament: %v", err)
+	}
+	if len(res.Qualified) != 8 {
+		t.Fatalf("qualified %d teams, want 8", len(res.Qualified))
+	}
+	for i := 1; i <= 16; i++ {
+		e, _ := repo.GetTournamentTeam(ctx, 1, i)
+		wantQualified := i%2 == 1
+		if (e.Status == models.EntryQualified) != wantQualified {
+			t.Errorf("team %d status %q, qualified want %v", i, e.Status, wantQualified)
+		}
+	}
+	for _, m := range repo.bracket {
+		if m.Round != 1 {
+			t.Errorf("round %d match left in the cache after the qualifier closed", m.Round)
+		}
+	}
+	if q := repo.tournaments[0]; q.Status != models.TournamentStatusCompleted || q.IsActive {
+		t.Errorf("tournament status=%q active=%v, want completed and inactive", q.Status, q.IsActive)
+	}
+	if repo.settings[settingChallongeID] != "" || !svc.GetTournamentTime(ctx).IsZero() {
+		t.Error("the finished qualifier must be detached from the background worker")
+	}
+}
+
+func TestFinishQualifierPendingFails(t *testing.T) {
+	svc, repo := qualifierFixture(t, false)
+	_, err := svc.FinishTournament(context.Background(), 1)
+	if err == nil || !strings.Contains(err.Error(), "#8") {
+		t.Fatalf("err = %v, want the unplayed match #8 named", err)
+	}
+	if repo.tournaments[0].Status == models.TournamentStatusCompleted {
+		t.Error("an unfinished qualifier was closed")
+	}
+}
+
+func TestTryFinishQualifierWaitsForTheLine(t *testing.T) {
+	svc, _ := qualifierFixture(t, false)
+	if res, err := svc.TryFinishQualifier(context.Background()); res != nil || err != nil {
+		t.Fatalf("TryFinishQualifier = %+v, %v; want nothing while round 1 runs", res, err)
+	}
+	svc, _ = qualifierFixture(t, true)
+	res, err := svc.TryFinishQualifier(context.Background())
+	if err != nil || res == nil || len(res.Qualified) != 8 {
+		t.Fatalf("TryFinishQualifier = %+v, %v; want the qualifier closed", res, err)
+	}
+}
+
+func TestImportQualifiedAndInvite(t *testing.T) {
+	svc, repo := qualifierFixture(t, true)
+	ctx := context.Background()
+	if _, err := svc.FinishTournament(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	addBracketTeam(repo, 40, "Guest", 10)
+	main, err := svc.CreateTournament(ctx, TournamentSettings{Name: "Основной этап", Stage: models.StageMain})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := svc.ImportQualified(ctx, main.ID, []int{1})
+	if err != nil || n != 8 {
+		t.Fatalf("ImportQualified = %d, %v; want 8", n, err)
+	}
+	e, _ := repo.GetTournamentTeam(ctx, main.ID, 3)
+	if e == nil || e.Source != models.SourceQualified || e.QualifiedFrom == nil || *e.QualifiedFrom != 1 {
+		t.Errorf("imported entry = %+v", e)
+	}
+	if e, _ := repo.GetTournamentTeam(ctx, main.ID, 2); e != nil {
+		t.Errorf("eliminated team 2 was imported: %+v", e)
+	}
+	if err := svc.InviteTeam(ctx, main.ID, 40); err != nil {
+		t.Fatalf("InviteTeam: %v", err)
+	}
+	if e, _ := repo.GetTournamentTeam(ctx, main.ID, 40); e == nil || e.Source != models.SourceInvited {
+		t.Errorf("invited entry = %+v", e)
+	}
+	if err := svc.InviteTeam(ctx, 1, 40); err == nil {
+		t.Error("inviting into a qualifier must be refused")
+	}
+}
+
+func TestImportRefusesUnfinishedQualifier(t *testing.T) {
+	svc, repo := qualifierFixture(t, false)
+	ctx := context.Background()
+	repo.tournaments[0].IsActive = false
+	main, err := svc.CreateTournament(ctx, TournamentSettings{Name: "Основной этап", Stage: models.StageMain})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// CreateTournament marks the previous active tournament completed; put
+	// the qualifier back to running.
+	repo.tournaments[0].Status = models.TournamentStatusActive
+	if _, err := svc.ImportQualified(ctx, main.ID, []int{1}); err == nil {
+		t.Error("import from a running qualifier must be refused")
+	}
+}
+
+func TestMainStageRefusesSelfRegistration(t *testing.T) {
+	svc, repo := newTelegramSvc()
+	ctx := context.Background()
+	repo.tournaments[0].Stage = models.StageMain
+	addBracketTeam(repo, 1, "Alpha", 10).IsCheckedIn = false
+	if err := svc.RegisterTeamForTournament(ctx, captainOf(1), 1); !errors.Is(err, errMainStageClosed) {
+		t.Errorf("RegisterTeamForTournament = %v, want main stage closed", err)
+	}
+	svc.ToggleCheckIn(ctx, captainOf(1))
+	if e, _ := repo.GetTournamentTeam(ctx, 1, 1); e != nil {
+		t.Errorf("check-in entered the team into the main stage: %+v", e)
+	}
+}
+
+func TestQualifiedTeamBlockedFromSecondQualifier(t *testing.T) {
+	svc, repo := qualifierFixture(t, true)
+	ctx := context.Background()
+	if _, err := svc.FinishTournament(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateTournament(ctx, TournamentSettings{Name: "Квала 2", Stage: models.StageQualifier, AdvanceCount: 8}); err != nil {
+		t.Fatal(err)
+	}
+	second := repo.tournaments[len(repo.tournaments)-1].ID
+	if err := svc.RegisterTeamForTournament(ctx, captainOf(1), second); !errors.Is(err, errAlreadyQualified) {
+		t.Errorf("qualified team 1: %v, want already qualified", err)
+	}
+	if err := svc.RegisterTeamForTournament(ctx, captainOf(2), second); err != nil {
+		t.Errorf("eliminated team 2: %v, want allowed", err)
+	}
+}
+
+func TestTournamentSettingsValidation(t *testing.T) {
+	bad := []TournamentSettings{
+		{Name: ""},
+		{Name: "Q", Stage: models.StageQualifier, AdvanceCount: 6},
+		{Name: "Q", Stage: models.StageQualifier, AdvanceCount: 0},
+		{Name: "Q", Stage: models.StageQualifier, AdvanceCount: 2, TournamentType: models.TournamentTypeDoubleElimination},
+		{Name: "Q", Stage: models.StageQualifier, AdvanceCount: 8, TournamentType: models.TournamentTypeSwiss},
+		{Name: "T", FormatFinal: 4},
+		{Name: "T", Stage: "playoff"},
+	}
+	for _, set := range bad {
+		s := set
+		if err := normalizeSettings(&s); err == nil {
+			t.Errorf("%+v accepted", set)
+		}
+	}
+	ok := TournamentSettings{Name: " Квала ", Stage: models.StageQualifier, AdvanceCount: 8, TournamentType: models.TournamentTypeDoubleElimination, FormatFinal: 5}
+	if err := normalizeSettings(&ok); err != nil {
+		t.Fatalf("valid settings rejected: %v", err)
+	}
+	if ok.Name != "Квала" || ok.FormatRounds != 1 || ok.FormatSemifinal != 3 || ok.FormatFinal != 5 {
+		t.Errorf("normalized = %+v", ok)
+	}
+	plain := TournamentSettings{Name: "T", AdvanceCount: 8}
+	_ = normalizeSettings(&plain)
+	if plain.AdvanceCount != 0 || plain.Stage != models.StageStandalone {
+		t.Errorf("standalone keeps no advance count: %+v", plain)
+	}
+}
+
+// Marking a running tournament as a qualifier after the fact (the first
+// qualifier ran before stages existed) records its size and cuts the cache.
+func TestUpdateSettingsTurnsRunningTournamentIntoQualifier(t *testing.T) {
+	svc, repo := qualifierFixture(t, true)
+	ctx := context.Background()
+	q := repo.tournaments[0]
+	q.Stage, q.AdvanceCount, q.BracketSize = models.StageStandalone, 0, 0
+	// The full bracket: add the remaining rounds so the size reads 16.
+	repo.bracket = append(repo.bracket, sm(3, 13, 0, 0, 0), sm(4, 15, 0, 0, 0))
+
+	got, err := svc.UpdateTournamentSettings(ctx, 1, TournamentSettings{Name: q.Name, Stage: models.StageQualifier, AdvanceCount: 8})
+	if err != nil {
+		t.Fatalf("UpdateTournamentSettings: %v", err)
+	}
+	if got.BracketSize != 16 {
+		t.Errorf("BracketSize = %d, want 16", got.BracketSize)
+	}
+	for _, m := range repo.bracket {
+		if m.Round != 1 {
+			t.Errorf("round %d still cached", m.Round)
 		}
 	}
 }

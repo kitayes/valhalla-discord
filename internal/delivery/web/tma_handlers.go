@@ -1659,6 +1659,36 @@ func (s *AdminServer) handleTournamentUnregister(w http.ResponseWriter, r *http.
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
 }
 
+// tournamentSettingsRequest is the body of tournament create and update.
+type tournamentSettingsRequest struct {
+	TournamentID    int     `json:"tournament_id"`
+	Name            string  `json:"name"`
+	Slug            string  `json:"slug"`
+	TournamentType  string  `json:"tournament_type"`
+	HoldThirdPlace  bool    `json:"hold_third_place"`
+	SeedingType     string  `json:"seeding_type"`
+	TournamentTime  *string `json:"tournament_time"`
+	Stage           string  `json:"stage"`
+	AdvanceCount    int     `json:"advance_count"`
+	FormatRounds    int     `json:"format_rounds"`
+	FormatSemifinal int     `json:"format_semifinal"`
+	FormatFinal     int     `json:"format_final"`
+}
+
+func (req tournamentSettingsRequest) settings() application.TournamentSettings {
+	var tTime *time.Time
+	if req.TournamentTime != nil && *req.TournamentTime != "" {
+		if t, err := time.Parse(time.RFC3339, *req.TournamentTime); err == nil {
+			tTime = &t
+		}
+	}
+	return application.TournamentSettings{
+		Name: req.Name, Slug: req.Slug, TournamentType: req.TournamentType, SeedingType: req.SeedingType,
+		Stage: req.Stage, HoldThirdPlace: req.HoldThirdPlace, TournamentTime: tTime,
+		AdvanceCount: req.AdvanceCount, FormatRounds: req.FormatRounds, FormatSemifinal: req.FormatSemifinal, FormatFinal: req.FormatFinal,
+	}
+}
+
 func (s *AdminServer) handleAdminTournamentCreate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
@@ -1669,26 +1699,12 @@ func (s *AdminServer) handleAdminTournamentCreate(w http.ResponseWriter, r *http
 		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 		return
 	}
-	var req struct {
-		Name           string  `json:"name"`
-		Slug           string  `json:"slug"`
-		TournamentType string  `json:"tournament_type"`
-		HoldThirdPlace bool    `json:"hold_third_place"`
-		SeedingType    string  `json:"seeding_type"`
-		TournamentTime *string `json:"tournament_time"`
-	}
+	var req tournamentSettingsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
 		return
 	}
-	var tTime *time.Time
-	if req.TournamentTime != nil && *req.TournamentTime != "" {
-		t, err := time.Parse(time.RFC3339, *req.TournamentTime)
-		if err == nil {
-			tTime = &t
-		}
-	}
-	created, err := s.services.TelegramService.CreateTournament(r.Context(), req.Name, req.Slug, tTime, req.TournamentType, req.HoldThirdPlace, req.SeedingType)
+	created, err := s.services.TelegramService.CreateTournament(r.Context(), req.settings())
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
 		return
@@ -1748,13 +1764,18 @@ func (s *AdminServer) handleAdminTournamentFinish(w http.ResponseWriter, r *http
 		http.Error(w, `{"error":"активный турнир не найден"}`, http.StatusBadRequest)
 		return
 	}
-	if err := s.services.TelegramService.FinishTournament(r.Context(), req.TournamentID); err != nil {
+	res, err := s.services.TelegramService.FinishTournament(r.Context(), req.TournamentID)
+	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
 		return
 	}
 	s.sseBroker.Broadcast("tournaments_update", map[string]interface{}{"action": "finished", "id": req.TournamentID})
+	qualified := []string{}
+	for _, t := range res.Qualified {
+		qualified = append(qualified, t.Name)
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "qualified": qualified})
 }
 
 func (s *AdminServer) handleAdminTournamentStart(w http.ResponseWriter, r *http.Request) {

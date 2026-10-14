@@ -3,8 +3,11 @@ package telegram
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
+
+	"blackwatch/internal/application"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -116,4 +119,30 @@ func (b *Bot) notifyTechnicalDefeats(report string) {
 		return
 	}
 	b.notifyTournamentChat(report)
+}
+
+// announceQualified posts a finished qualifier's results to the tournament
+// chat and tells each advancing team.
+func (b *Bot) announceQualified(ctx context.Context, res *application.FinishResult) {
+	if res == nil || res.Tournament == nil {
+		return
+	}
+	b.notifyTournamentChat(qualifiedText(res))
+	for _, team := range res.Qualified {
+		b.notifyTeam(ctx, team.ID, fmt.Sprintf("Команда '%s' прошла квалификацию «%s» и выходит в основной этап.", team.Name, res.Tournament.Name), "main_menu")
+	}
+}
+
+func qualifiedText(res *application.FinishResult) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("КВАЛИФИКАЦИЯ ЗАВЕРШЕНА\n\n«%s»: в основной этап прошли:\n", res.Tournament.Name))
+	names := make([]string, 0, len(res.Qualified))
+	for _, t := range res.Qualified {
+		names = append(names, t.Name)
+	}
+	sort.Strings(names)
+	for i, name := range names {
+		sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, name))
+	}
+	return strings.TrimRight(sb.String(), "\n")
 }

@@ -46,10 +46,12 @@ type mockTelegramSvc struct {
 	// the raw base64 the browser sent.
 	reportedPhotoIDs []string
 	// openReport is what GetOpenReportForMatch answers; decisions record here.
-	openReport *models.TelegramMatchReport
-	confirmed  []int
-	disputed   []int
+	openReport  *models.TelegramMatchReport
+	confirmed   []int
+	disputed    []int
 	tourneyTime time.Time
+	imported    []int // qualifier ids passed to ImportQualified
+	invited     []int // team ids passed to InviteTeam
 }
 
 func (m *mockTelegramSvc) GetActiveTournament(ctx context.Context) (*models.TelegramTournament, error) {
@@ -77,18 +79,53 @@ func (m *mockTelegramSvc) UnregisterTeamFromTournament(ctx context.Context, capt
 	return nil
 }
 
-func (m *mockTelegramSvc) CreateTournament(ctx context.Context, name, slug string, tTime *time.Time, tournamentType string, holdThirdPlace bool, seedingType string) (*models.TelegramTournament, error) {
+func (m *mockTelegramSvc) CreateTournament(ctx context.Context, set application.TournamentSettings) (*models.TelegramTournament, error) {
 	t := models.TelegramTournament{
 		ID:             len(m.tournaments) + 1,
-		Name:           name,
+		Name:           set.Name,
 		Status:         models.TournamentStatusRegistration,
-		TournamentType: tournamentType,
-		HoldThirdPlace: holdThirdPlace,
-		SeedingType:    seedingType,
+		TournamentType: set.TournamentType,
+		HoldThirdPlace: set.HoldThirdPlace,
+		SeedingType:    set.SeedingType,
+		Stage:          set.Stage,
+		AdvanceCount:   set.AdvanceCount,
+		FormatRounds:   set.FormatRounds,
+		FormatFinal:    set.FormatFinal,
 	}
 	m.tournaments = append(m.tournaments, t)
 	return &t, nil
 }
+
+func (m *mockTelegramSvc) UpdateTournamentSettings(ctx context.Context, id int, set application.TournamentSettings) (*models.TelegramTournament, error) {
+	for i := range m.tournaments {
+		if m.tournaments[i].ID == id {
+			m.tournaments[i].Name = set.Name
+			m.tournaments[i].Stage = set.Stage
+			m.tournaments[i].AdvanceCount = set.AdvanceCount
+			m.tournaments[i].FormatRounds = set.FormatRounds
+			m.tournaments[i].FormatSemifinal = set.FormatSemifinal
+			m.tournaments[i].FormatFinal = set.FormatFinal
+			return &m.tournaments[i], nil
+		}
+	}
+	return nil, errors.New("турнир не найден")
+}
+
+func (m *mockTelegramSvc) TryFinishQualifier(ctx context.Context) (*application.FinishResult, error) {
+	return nil, nil
+}
+
+func (m *mockTelegramSvc) ImportQualified(ctx context.Context, mainID int, fromIDs []int) (int, error) {
+	m.imported = append(m.imported, fromIDs...)
+	return len(fromIDs), nil
+}
+
+func (m *mockTelegramSvc) InviteTeam(ctx context.Context, mainID, teamID int) error {
+	m.invited = append(m.invited, teamID)
+	return nil
+}
+
+func (m *mockTelegramSvc) SetEventHook(fn func(event string, payload map[string]any)) {}
 
 func (m *mockTelegramSvc) SetActiveTournament(ctx context.Context, id int) error {
 	for i := range m.tournaments {
@@ -97,8 +134,8 @@ func (m *mockTelegramSvc) SetActiveTournament(ctx context.Context, id int) error
 	return nil
 }
 
-func (m *mockTelegramSvc) FinishTournament(ctx context.Context, id int) error {
-	return nil
+func (m *mockTelegramSvc) FinishTournament(ctx context.Context, id int) (*application.FinishResult, error) {
+	return &application.FinishResult{Tournament: &models.TelegramTournament{ID: id}}, nil
 }
 
 func (m *mockTelegramSvc) GetBracketForTournament(ctx context.Context, tournamentID int) ([]models.BracketMatch, error) {

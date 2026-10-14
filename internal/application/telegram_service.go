@@ -117,12 +117,19 @@ type TelegramService interface {
 	GetBracketMatchDetails(ctx context.Context, matchID int) (*BracketMatchDetails, error)
 
 	// League & Tournaments
-	CreateTournament(ctx context.Context, name, slug string, tTime *time.Time, tournamentType string, holdThirdPlace bool, seedingType string) (*models.TelegramTournament, error)
+	CreateTournament(ctx context.Context, set TournamentSettings) (*models.TelegramTournament, error)
+	UpdateTournamentSettings(ctx context.Context, id int, set TournamentSettings) (*models.TelegramTournament, error)
 	GetActiveTournament(ctx context.Context) (*models.TelegramTournament, error)
 	GetTournamentByID(ctx context.Context, id int) (*models.TelegramTournament, error)
 	GetAllTournaments(ctx context.Context) ([]models.TelegramTournament, error)
 	SetActiveTournament(ctx context.Context, id int) error
-	FinishTournament(ctx context.Context, id int) error
+	FinishTournament(ctx context.Context, id int) (*FinishResult, error)
+	// TryFinishQualifier closes the active qualifier once its advance line is
+	// reached; nil when there is nothing to close.
+	TryFinishQualifier(ctx context.Context) (*FinishResult, error)
+	ImportQualified(ctx context.Context, mainID int, fromIDs []int) (int, error)
+	InviteTeam(ctx context.Context, mainID, teamID int) error
+	SetEventHook(fn func(event string, payload map[string]any))
 	RegisterTeamForTournament(ctx context.Context, captainTgID int64, tournamentID int) error
 	UnregisterTeamFromTournament(ctx context.Context, captainTgID int64, tournamentID int) error
 	GetBracketForTournament(ctx context.Context, tournamentID int) ([]models.BracketMatch, error)
@@ -162,6 +169,12 @@ type TelegramServiceImpl struct {
 	reportDrafts map[int64]*MatchReportDraft
 
 	notifyMatchFunc func(ctx context.Context, chatID int64, text string, hasWebAppBtn bool)
+
+	// eventHook pushes live updates (SSE) to open Mini Apps. Changes made in
+	// the bot never reached them, so a captain who checked in there saw a
+	// stale "not confirmed" in the app and un-checked the team by tapping it.
+	hookMu    sync.RWMutex
+	eventHook func(event string, payload map[string]any)
 }
 
 // ProfileLookup is the slice of the profile-link repository registration
@@ -406,6 +419,9 @@ func (s *TelegramServiceImpl) recordCheckIn(ctx context.Context, st teamCheckIn,
 			}
 			if !tournamentAcceptsEntries(st.tournament) {
 				return errNotEntered
+			}
+			if err := s.entryRefusal(ctx, st.tournament, teamID); err != nil {
+				return err
 			}
 			if err := s.repo.RegisterTeamForTournament(ctx, st.tournament.ID, teamID); err != nil {
 				return err
@@ -1957,58 +1973,6 @@ func (s *TelegramServiceImpl) GetBracketMatchDetails(ctx context.Context, matchI
 	return details, nil
 }
 
-func (s *TelegramServiceImpl) CreateTournament(ctx context.Context, name, slug string, tTime *time.Time, tournamentType string, holdThirdPlace bool, seedingType string) (*models.TelegramTournament, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return nil, errors.New("название турнира не может быть пустым")
-	}
-	slug, err := normalizeChallongeSlug(slug)
-	if err != nil {
-		return nil, err
-	}
-	if slug == "" {
-		slug = "tourney_" + time.Now().UTC().Format("20060102_150405")
-	}
-	if tournamentType == "" {
-		tournamentType = models.TournamentTypeSingleElimination
-	}
-	if seedingType == "" {
-		seedingType = models.SeedingTypeStars
-	}
-	t := &models.TelegramTournament{
-		Name:           name,
-		Slug:           slug,
-		Status:         models.TournamentStatusRegistration,
-		TournamentType: tournamentType,
-		HoldThirdPlace: holdThirdPlace,
-		SeedingType:    seedingType,
-		TournamentTime: tTime,
-		IsActive:       true,
-	}
-
-	created, err := s.repo.CreateTournament(ctx, t)
-	if err != nil {
-		return nil, fmt.Errorf("не удалось создать турнир: %w", err)
-	}
-
-	if tTime != nil {
-		s.mu.Lock()
-		s.tournamentTime = *tTime
-		s.mu.Unlock()
-		_ = s.repo.SetSetting(ctx, "tournament_time", tTime.Format(time.RFC3339))
-	} else {
-		s.mu.Lock()
-		s.tournamentTime = time.Time{}
-		s.mu.Unlock()
-		_ = s.repo.SetSetting(ctx, "tournament_time", "")
-	}
-	_ = s.repo.SetSetting(ctx, settingChallongeID, "")
-	_ = s.repo.SetSetting(ctx, settingChallongeURL, "")
-	_ = s.repo.SetSetting(ctx, settingChallongeFor, "")
-
-	return created, nil
-}
-
 func (s *TelegramServiceImpl) GetActiveTournament(ctx context.Context) (*models.TelegramTournament, error) {
 	return s.repo.GetActiveTournament(ctx)
 }
@@ -2049,52 +2013,6 @@ func (s *TelegramServiceImpl) SetActiveTournament(ctx context.Context, id int) e
 	return nil
 }
 
-func (s *TelegramServiceImpl) FinishTournament(ctx context.Context, id int) error {
-	tourney, err := s.repo.GetTournamentByID(ctx, id)
-	if err != nil || tourney == nil {
-		return errors.New("турнир не найден")
-	}
-
-	matches, err := s.repo.GetBracketMatchesForTournament(ctx, id)
-	if err != nil {
-		return fmt.Errorf("не удалось получить матчи турнира: %w", err)
-	}
-
-	teams, err := s.repo.GetTournamentTeams(ctx, id)
-	if err != nil {
-		return fmt.Errorf("не удалось получить команды турнира: %w", err)
-	}
-
-	ids := make([]int, 0, len(teams))
-	for _, t := range teams {
-		ids = append(ids, t.ID)
-	}
-	placements, points := Placements(tourney, matches, ids)
-	_ = s.repo.UpdateTournamentPlacements(ctx, id, placements, points)
-
-	var winnerID *int
-	var winnerName string
-	for teamID, place := range placements {
-		if place == 1 {
-			wID := teamID
-			winnerID = &wID
-			for _, t := range teams {
-				if t.ID == teamID {
-					winnerName = t.Name
-					break
-				}
-			}
-			break
-		}
-	}
-
-	if err := s.repo.FinishTournamentRecord(ctx, id, winnerID, winnerName); err != nil {
-		return fmt.Errorf("не удалось завершить турнир: %w", err)
-	}
-
-	return nil
-}
-
 func (s *TelegramServiceImpl) RegisterTeamForTournament(ctx context.Context, captainTgID int64, tournamentID int) error {
 	p, err := s.repo.GetPlayerByTelegramID(ctx, captainTgID)
 	if err != nil || p == nil || p.TeamID == nil || !p.IsCaptain {
@@ -2106,6 +2024,9 @@ func (s *TelegramServiceImpl) RegisterTeamForTournament(ctx context.Context, cap
 	}
 	if tourney.Status != models.TournamentStatusRegistration && tourney.Status != models.TournamentStatusDraft {
 		return errors.New("регистрация на этот турнир закрыта")
+	}
+	if err := s.entryRefusal(ctx, tourney, *p.TeamID); err != nil {
+		return err
 	}
 	return s.repo.RegisterTeamForTournament(ctx, tournamentID, *p.TeamID)
 }
