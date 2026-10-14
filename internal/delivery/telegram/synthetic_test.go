@@ -60,8 +60,8 @@ func newMockTelegramServer(t *testing.T) (*httptest.Server, *mockTelegramServer)
 		case strings.Contains(r.URL.Path, "/sendMediaGroup"):
 			_, _ = fmt.Fprint(w, `{"ok":true,"result":[{"message_id":3,"chat":{"id":100,"type":"private"}}]}`)
 		case strings.Contains(r.URL.Path, "/answerCallbackQuery"):
-			var cb tgbotapi.CallbackConfig
-			_ = json.NewDecoder(r.Body).Decode(&cb)
+			_ = r.ParseForm()
+			cb := tgbotapi.CallbackConfig{CallbackQueryID: r.FormValue("callback_query_id"), Text: r.FormValue("text")}
 			mock.callbacks = append(mock.callbacks, cb)
 			_, _ = fmt.Fprint(w, `{"ok":true,"result":true}`)
 		case strings.Contains(r.URL.Path, "/getChat"):
@@ -543,7 +543,13 @@ func TestSyntheticTournamentBotStartup(t *testing.T) {
 				}
 			}
 			if id == 0 {
-				t.Fatalf("game %d was not recorded: %+v", no, games)
+				mockTG.mu.Lock()
+				var answers []string
+				for _, c := range mockTG.callbacks {
+					answers = append(answers, c.Text)
+				}
+				mockTG.mu.Unlock()
+				t.Fatalf("game %d was not recorded: %+v; callback answers: %q", no, games, answers)
 			}
 			if !said(2001, "Всё верно?") {
 				t.Fatalf("Beta's captain was not asked to confirm game %d", no)

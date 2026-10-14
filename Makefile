@@ -19,9 +19,11 @@ test-race: ## Run unit tests under the race detector (needs cgo + a C compiler)
 # the wrong arity or a join that does not resolve compiles and vets cleanly, and
 # fails only when a user presses the button. These run it against a real
 # Postgres. BW_TEST_DSN must point at a database with the migrations applied.
-test-integration: ## Run repository tests against a real Postgres (needs BW_TEST_DSN)
+# -p 1: the packages share one database, and the bot's synthetic tournament
+# breaks when the repository tests switch the active tournament under it.
+test-integration: ## Run repository and synthetic bot tests against a real Postgres (needs BW_TEST_DSN)
 	@test -n "$(BW_TEST_DSN)" || { echo "set BW_TEST_DSN first — see 'make db-test-up'"; exit 1; }
-	go test -tags integration ./internal/repository/... -count=1
+	go test -p 1 -tags integration ./internal/... -count=1
 
 db-test-up: ## Start a throwaway Postgres with pgvector for test-integration
 	docker rm -f bw_testdb 2>/dev/null || true
