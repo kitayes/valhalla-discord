@@ -56,16 +56,34 @@ func syncDesk(d *models.MatchDesk, matches []models.BracketMatch, tournament, no
 	// Old cards must not be delivered after a changed pair or a finished match.
 	pending := d.Outbox[:0]
 	for _, n := range d.Outbox {
-		m := d.Matches[n.MatchID]
-		if m == nil || (!m.Active && n.Kind != "alert") || m.Generation != n.Generation {
-			continue
+		if !deskNoticeStale(d, n) {
+			pending = append(pending, n)
 		}
-		if n.Kind == "card" && n.Revision != m.Revision {
-			continue
-		}
-		pending = append(pending, n)
 	}
 	d.Outbox = pending
+}
+
+// Ready reminders go out this long before the lobby deadline.
+var deskReminderLeads = [...]time.Duration{5 * time.Minute, time.Minute}
+
+// deskNoticeStale reports whether a queued notice no longer applies: its
+// match changed or closed, a card was superseded, an alert resolved, or a
+// reminder's team has since pressed ready.
+func deskNoticeStale(d *models.MatchDesk, n models.DeskNotice) bool {
+	m := d.Matches[n.MatchID]
+	if m == nil || (!m.Active && n.Kind != "alert") || m.Generation != n.Generation {
+		return true
+	}
+	switch n.Kind {
+	case "card":
+		return n.Revision != m.Revision
+	case "alert":
+		return n.AlertKey != "" && n.AlertKey != m.AlertKey
+	case "remind":
+		side, err := strconv.Atoi(strings.TrimPrefix(n.AlertKey, "remind:"))
+		return err != nil || side < 0 || side > 1 || m.Ready[side] || !m.PausedAt.IsZero()
+	}
+	return false
 }
 
 func deskEvent(m *models.DeskMatch, now time.Time, text string) {

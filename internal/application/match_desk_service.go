@@ -110,9 +110,11 @@ func (s *MatchDeskService) AdminAction(ctx context.Context, actor int64, id int,
 			}
 		case "extend_5":
 			m.Deadline = m.Deadline.Add(5 * time.Minute)
+			m.Reminded = [2]int{}
 			deskEvent(m, now, "Администратор продлил время лобби (+5 мин)")
 		case "extend_10":
 			m.Deadline = m.Deadline.Add(10 * time.Minute)
+			m.Reminded = [2]int{}
 			deskEvent(m, now, "Администратор продлил время лобби (+10 мин)")
 		case "reset_ready":
 			m.Ready = [2]bool{false, false}
@@ -287,6 +289,17 @@ func (s *MatchDeskService) attentionCard(m *models.DeskMatch, c models.DeskConte
 	if m.Active {
 		buttons = append(buttons, []models.DeskButton{{Text: pauseText, Data: DeskCallback(m, pauseAction)}})
 	}
+	// Past the lobby deadline the referee decides in one tap: a technical
+	// defeat for a team that is not ready, or five more minutes.
+	if m.Active && m.PausedAt.IsZero() && !s.now().Before(m.Deadline) && (!m.Ready[0] || !m.Ready[1]) {
+		var row []models.DeskButton
+		for side := range m.Teams {
+			if !m.Ready[side] {
+				row = append(row, models.DeskButton{Text: "ТП «" + m.Names[side] + "»", Data: DeskCallback(m, fmt.Sprintf("forfeit%d", side))})
+			}
+		}
+		buttons = append(buttons, row, []models.DeskButton{{Text: "+5 минут", Data: DeskCallback(m, "extend_5")}})
+	}
 	if m.Issues != [2]string{} {
 		buttons = append(buttons, []models.DeskButton{{Text: "Обращения решены", Data: DeskCallback(m, "resolve")}})
 	}
@@ -318,6 +331,7 @@ func (s *MatchDeskService) queueNotices(d *models.MatchDesk, c models.DeskContex
 				m.CardRevision[side] = m.Revision
 			}
 		}
+		s.queueReminders(m, c, now, enqueue)
 		problems := deskAllProblems(m, c, now)
 		key := strings.Join(problems, "\n")
 		if key != m.AlertKey {
@@ -333,19 +347,56 @@ func (s *MatchDeskService) queueNotices(d *models.MatchDesk, c models.DeskContex
 	}
 	pending := d.Outbox[:0]
 	for _, n := range d.Outbox {
-		m := d.Matches[n.MatchID]
-		if m == nil || (!m.Active && n.Kind != "alert") || m.Generation != n.Generation {
-			continue
+		if !deskNoticeStale(d, n) {
+			pending = append(pending, n)
 		}
-		if n.Kind == "card" && n.Revision != m.Revision {
-			continue
-		}
-		if n.Kind == "alert" && n.AlertKey != m.AlertKey {
-			continue
-		}
-		pending = append(pending, n)
 	}
 	d.Outbox = pending
+}
+
+// queueReminders nudges every player of a team that has not pressed ready, five
+// minutes and one minute before the lobby deadline. Only the card reached the
+// captain before, and a captain away from the phone cost the team the match.
+func (s *MatchDeskService) queueReminders(m *models.DeskMatch, c models.DeskContext, now time.Time, enqueue func(models.DeskNotice)) {
+	if !m.Active || !m.PausedAt.IsZero() || (m.Ready[0] && m.Ready[1]) {
+		return
+	}
+	format := FormatLong(MatchFormat(c.Tournament, c.Matches, deskRound(m, c)))
+	for side, team := range m.Teams {
+		if m.Ready[side] || m.Reminded[side] >= len(deskReminderLeads) || now.Before(m.Deadline.Add(-deskReminderLeads[m.Reminded[side]])) {
+			continue
+		}
+		m.Reminded[side]++
+		captain := c.Captains[team]
+		chats := c.Members[team]
+		if len(chats) == 0 && captain.TelegramID != nil {
+			chats = []int64{*captain.TelegramID}
+		}
+		deadline := m.Deadline.In(s.location).Format("15:04")
+		for _, chatID := range chats {
+			isCaptain := captain.TelegramID != nil && *captain.TelegramID == chatID
+			text := fmt.Sprintf("Матч #%d против «%s» ждёт вашу команду (%s).\n", m.Number, m.Names[1-side], format)
+			var buttons [][]models.DeskButton
+			if isCaptain {
+				text += fmt.Sprintf("Зайдите в лобби и нажмите «Мы в лобби / Готовы» до %s — иначе судья может засчитать техническое поражение.", deadline)
+				buttons = [][]models.DeskButton{{{Text: "Мы в лобби / Готовы", Data: DeskCallback(m, "ready")}}}
+			} else {
+				text += fmt.Sprintf("Капитан ещё не подтвердил готовность. Напомните капитану и будьте в лобби до %s — иначе судья может засчитать техническое поражение.", deadline)
+			}
+			enqueue(models.DeskNotice{MatchID: m.ID, Generation: m.Generation, Kind: "remind", AlertKey: fmt.Sprintf("remind:%d", side), ChatID: chatID, Text: text, Buttons: buttons})
+		}
+		deskEvent(m, now, fmt.Sprintf("Напоминание о готовности: %s", m.Names[side]))
+	}
+}
+
+// deskRound is the bracket round of a desk match, 1 when unknown.
+func deskRound(m *models.DeskMatch, c models.DeskContext) int {
+	for _, b := range c.Matches {
+		if b.ID == m.ID {
+			return b.Round
+		}
+	}
+	return 1
 }
 
 func deskAllProblems(m *models.DeskMatch, c models.DeskContext, now time.Time) []string {

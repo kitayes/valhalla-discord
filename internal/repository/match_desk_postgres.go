@@ -108,6 +108,29 @@ func (r *TelegramPostgres) UpdateMatchDesk(ctx context.Context, change func(*mod
 		return err
 	}
 
+	// Every player's chat, for reminders that must reach the whole team.
+	snapshot.Members = map[int][]int64{}
+	err = func() error {
+		rows, err := tx.QueryContext(ctx, `SELECT p.team_id, p.telegram_id FROM telegram_players p JOIN telegram_teams t ON t.id = p.team_id
+ WHERE p.telegram_id IS NOT NULL AND p.telegram_id > 0 AND t.status = 'active' ORDER BY p.team_id, p.id`)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var team int
+			var chat int64
+			if err = rows.Scan(&team, &chat); err != nil {
+				return err
+			}
+			snapshot.Members[team] = append(snapshot.Members[team], chat)
+		}
+		return rows.Err()
+	}()
+	if err != nil {
+		return err
+	}
+
 	if err = change(&d, snapshot); err != nil {
 		return err
 	}

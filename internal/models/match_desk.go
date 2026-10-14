@@ -33,7 +33,10 @@ type DeskMatch struct {
 	CardRevision    [2]int64
 	CaptainKeys     [2]string
 	AlertKey        string
-	History         []DeskEvent
+	// Reminded counts the "press ready" reminders sent to each side since the
+	// lobby deadline was last set.
+	Reminded [2]int
+	History  []DeskEvent
 }
 
 type DeskEvent struct {
@@ -77,5 +80,7 @@ type DeskContext struct {
 	Revisions  map[int]int64
 	Matches    []BracketMatch
 	Captains   map[int]TelegramPlayer
-	StartsAt   time.Time
+	// Members are the Telegram chats of every player per team id.
+	Members  map[int][]int64
+	StartsAt time.Time
 }

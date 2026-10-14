@@ -297,3 +297,111 @@ func TestDeskServiceGetMatchDeskDetailProtocolFields(t *testing.T) {
 	}
 }
 
+
+func remindersIn(ns []models.DeskNotice) map[int64]int {
+	out := map[int64]int{}
+	for _, n := range ns {
+		if n.Kind == "remind" {
+			out[n.ChatID]++
+		}
+	}
+	return out
+}
+
+// Every player of a team that has not pressed ready is reminded five minutes
+// and one minute before the deadline; a team that is ready is left alone.
+func TestDeskRemindsEveryPlayerBeforeTheDeadline(t *testing.T) {
+	s, store, now := deskServiceFixture(t)
+	ctx := context.Background()
+	store.snapshot.Members = map[int][]int64{10: {100, 101, 102}, 20: {200, 201}}
+	clock := now
+	s.now = func() time.Time { return clock }
+	if err := s.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	gen := store.state.Matches[1].Generation
+	if err := s.CaptainAction(ctx, 200, 1, gen, "ready"); err != nil {
+		t.Fatal(err)
+	}
+	if got := remindersIn(store.state.Outbox); len(got) != 0 {
+		t.Fatalf("reminders before the window: %v", got)
+	}
+
+	clock = now.Add(5*time.Minute + time.Second) // deadline is start + 10 minutes
+	notices, _ := s.Pending(ctx)
+	got := remindersIn(notices)
+	if got[100] != 1 || got[101] != 1 || got[102] != 1 || got[200] != 0 || got[201] != 0 {
+		t.Fatalf("first wave = %v, want Alpha's three players only", got)
+	}
+	notices, _ = s.Pending(ctx)
+	if got := remindersIn(notices); got[100] != 1 {
+		t.Fatalf("the first wave was queued again: %v", got)
+	}
+	for _, n := range notices {
+		_ = s.Acknowledge(ctx, n)
+	}
+
+	clock = now.Add(9*time.Minute + time.Second)
+	notices, _ = s.Pending(ctx)
+	if got := remindersIn(notices); got[100] != 1 || got[101] != 1 {
+		t.Fatalf("second wave = %v", got)
+	}
+	// Alpha presses ready: the queued reminders are dropped.
+	if err := s.CaptainAction(ctx, 100, 1, gen, "ready"); err != nil {
+		t.Fatal(err)
+	}
+	notices, _ = s.Pending(ctx)
+	if got := remindersIn(notices); len(got) != 0 {
+		t.Errorf("reminders kept after the team became ready: %v", got)
+	}
+}
+
+// Past the deadline the referee's alert offers a technical defeat for the
+// side that is not ready and five more minutes.
+func TestDeskAlertOffersForfeitAndExtension(t *testing.T) {
+	s, store, now := deskServiceFixture(t)
+	ctx := context.Background()
+	clock := now
+	s.now = func() time.Time { return clock }
+	if err := s.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	gen := store.state.Matches[1].Generation
+	if err := s.CaptainAction(ctx, 200, 1, gen, "ready"); err != nil {
+		t.Fatal(err)
+	}
+	clock = now.Add(11 * time.Minute)
+	notices, _ := s.Pending(ctx)
+	var labels []string
+	for _, n := range notices {
+		if n.Kind == "alert" && n.ChatID == 999 {
+			for _, row := range n.Buttons {
+				for _, btn := range row {
+					labels = append(labels, btn.Text+"="+btn.Data)
+				}
+			}
+		}
+	}
+	want := map[string]bool{"ТП «Alpha»=" + DeskCallback(store.state.Matches[1], "forfeit0"): false, "+5 минут=" + DeskCallback(store.state.Matches[1], "extend_5"): false}
+	for _, l := range labels {
+		if _, ok := want[l]; ok {
+			want[l] = true
+		}
+		if l == "ТП «Beta»="+DeskCallback(store.state.Matches[1], "forfeit1") {
+			t.Error("a forfeit was offered for the team that is ready")
+		}
+	}
+	for l, seen := range want {
+		if !seen {
+			t.Errorf("alert lacks %q; has %v", l, labels)
+		}
+	}
+	if err := s.AdminAction(ctx, 999, 1, gen, "extend_5"); err != nil {
+		t.Fatal(err)
+	}
+	// The extension re-arms the reminders, and with the new deadline five
+	// minutes away the first one goes out at once — to Alpha only.
+	if r := store.state.Matches[1].Reminded; r != [2]int{1, 0} {
+		t.Errorf("reminders after the extension = %v, want [1 0]", r)
+	}
+}

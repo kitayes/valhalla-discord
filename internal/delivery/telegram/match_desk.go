@@ -282,8 +282,10 @@ func (b *Bot) handleDeskCallback(ctx context.Context, cb *tgbotapi.CallbackQuery
 		return
 	}
 	switch action {
-	case "pause", "resume", "resolve":
+	case "pause", "resume", "resolve", "extend_5":
 		err = b.matchDesk.AdminAction(ctx, cb.From.ID, id, generation, action)
+	case "forfeit0", "forfeit1":
+		err = b.deskForfeit(ctx, cb.From.ID, id, generation, action == "forfeit1")
 	default:
 		err = b.matchDesk.CaptainAction(ctx, cb.From.ID, id, generation, action)
 	}
@@ -313,4 +315,39 @@ func deskMatchNumber(value string) (int, error) {
 		return 0, fmt.Errorf("неверный номер матча")
 	}
 	return n, nil
+}
+
+// deskForfeit is the referee's one-tap technical defeat for a side that did
+// not press ready by the lobby deadline: the other side wins with the
+// configured walkover score.
+func (b *Bot) deskForfeit(ctx context.Context, actor int64, id int, generation int64, secondSideLoses bool) error {
+	if !b.isAdmin(actor) {
+		return errors.New("действие доступно только администратору")
+	}
+	if b.bracket == nil {
+		return errors.New("сетка не подключена")
+	}
+	// The card must still describe the current match.
+	if err := b.matchDesk.AdminAction(ctx, actor, id, generation, "resolve"); err != nil {
+		return err
+	}
+	ms, err := b.bracket.Matches(ctx)
+	if err != nil {
+		return err
+	}
+	for _, m := range ms {
+		if m.ID != id {
+			continue
+		}
+		if !m.Ready() {
+			return application.ErrDeskStale
+		}
+		winner := m.Team1Name
+		if !secondSideLoses {
+			winner = m.Team2Name
+		}
+		w, l := b.bracket.Walkover()
+		return b.service.SetWinnerDirect(ctx, id, winner, w, l)
+	}
+	return application.ErrDeskStale
 }
