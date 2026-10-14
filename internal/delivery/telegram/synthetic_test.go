@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -44,8 +45,11 @@ func newMockTelegramServer(t *testing.T) (*httptest.Server, *mockTelegramServer)
 		case strings.Contains(r.URL.Path, "/getMe"):
 			_, _ = fmt.Fprint(w, `{"ok":true,"result":{"id":12345678,"is_bot":true,"first_name":"ValhallaBot","username":"valhalla_test_bot"}}`)
 		case strings.Contains(r.URL.Path, "/sendMessage"):
+			// The SDK posts form values, not JSON.
+			_ = r.ParseForm()
 			var msg tgbotapi.MessageConfig
-			_ = json.NewDecoder(r.Body).Decode(&msg)
+			msg.Text = r.FormValue("text")
+			msg.ChatID, _ = strconv.ParseInt(r.FormValue("chat_id"), 10, 64)
 			mock.messagesSent = append(mock.messagesSent, msg)
 			_, _ = fmt.Fprint(w, `{"ok":true,"result":{"message_id":1,"chat":{"id":100,"type":"private"}}}`)
 		case strings.Contains(r.URL.Path, "/sendPhoto"):
@@ -246,6 +250,11 @@ func TestSyntheticTournamentBotStartup(t *testing.T) {
 		   OR telegram_id IN (1001, 1002, 1003, 1004, 1005, 2001, 2002, 2003, 2004, 2005, 3001, 3002, 3003, 3004, 3005, 9999)`)
 	_, _ = db.Exec(`DELETE FROM telegram_teams WHERE name IN ('Alpha Team', 'Beta Team', 'Gamma Team')`)
 	_, _ = db.Exec(`DELETE FROM telegram_settings WHERE key IN ('tournament_time', 'challonge_tournament_id', 'challonge_tournament_url', 'challonge_tournament_for', 'challonge_quota_blocked_until')`)
+	// The scenario runs a fresh tournament: check-in is closed for one that
+	// already started or finished, so a leftover active tournament from an
+	// earlier run is put back to registration.
+	_, _ = db.Exec(`UPDATE telegram_tournaments SET status = 'registration', stage = 'standalone', advance_count = 0,
+		challonge_id = NULL, challonge_url = '', challonge_for = NULL, bracket_size = 0 WHERE is_active`)
 	var leftovers int
 	if err := db.QueryRow(`SELECT count(*) FROM telegram_teams WHERE name IN ('Alpha Team', 'Beta Team', 'Gamma Team')`).Scan(&leftovers); err != nil {
 		t.Fatal(err)
@@ -254,7 +263,7 @@ func TestSyntheticTournamentBotStartup(t *testing.T) {
 		t.Fatalf("synthetic cleanup left %d tournament teams", leftovers)
 	}
 
-	server, _ := newMockTelegramServer(t)
+	server, mockTG := newMockTelegramServer(t)
 	defer server.Close()
 
 	api, err := tgbotapi.NewBotAPIWithClient("synthetic-token", server.URL+"/bot%s/%s", server.Client())
@@ -427,8 +436,11 @@ func TestSyntheticTournamentBotStartup(t *testing.T) {
 	})
 
 	t.Run("5. Check-in and Debtors Workflow", func(t *testing.T) {
-		// Team Alpha confirms checkin
-		bot.handleUserCommand(ctx, 1001, "/checkin", "captain_alpha")
+		// Team Alpha confirms check-in in the Mini App (captains are sent there
+		// from the bot's /checkin).
+		if res := telegramService.SetTeamCheckIn(ctx, 1001, true); !res.OK {
+			t.Fatalf("Alpha check-in: %+v", res)
+		}
 
 		// Checkin status should show 1 checked in, 1 pending
 		status := telegramService.GetCheckInStatus(ctx)
@@ -441,8 +453,11 @@ func TestSyntheticTournamentBotStartup(t *testing.T) {
 	})
 
 	t.Run("6. Build Bracket and MatchDesk Routing", func(t *testing.T) {
-		// Team Beta also checks in so bracket can be built
-		bot.handleUserCommand(ctx, 2001, "/checkin", "captain_beta")
+		// Team Beta also checks in so the bracket can be built: it is seeded
+		// from checked-in teams only.
+		if res := telegramService.SetTeamCheckIn(ctx, 2001, true); !res.OK {
+			t.Fatalf("Beta check-in: %+v", res)
+		}
 
 		// Admin builds bracket
 		tTime := telegramService.GetTournamentTime(ctx)
@@ -450,7 +465,13 @@ func TestSyntheticTournamentBotStartup(t *testing.T) {
 
 		ms, err := bracketService.Matches(ctx)
 		if err != nil || len(ms) == 0 {
-			t.Fatalf("bracket matches empty after build: %v", err)
+			var said []string
+			mockTG.mu.Lock()
+			for _, m := range mockTG.messagesSent {
+				said = append(said, m.Text)
+			}
+			mockTG.mu.Unlock()
+			t.Fatalf("bracket matches empty after build: %v\nbot said:\n%s", err, strings.Join(said[max(0, len(said)-6):], "\n---\n"))
 		}
 
 		// MatchDesk should pick up matches and create cards
@@ -485,36 +506,68 @@ func TestSyntheticTournamentBotStartup(t *testing.T) {
 		bot.handleDeskCommand(ctx, 9999, fmt.Sprintf("/resume_match %d", ms[0].PlayOrder))
 	})
 
-	t.Run("7. Match Report Submission and Result Sync", func(t *testing.T) {
-		// Captain Alpha starts report
-		bot.handleUserCommand(ctx, 1001, "/report", "captain_alpha")
-
-		// Selects opponent Beta Team
-		pBeta, _ := telegramRepo.GetPlayerByTelegramID(ctx, 2001)
-		if pBeta != nil && pBeta.TeamID != nil {
-			bot.handleReportCallback(ctx, &tgbotapi.CallbackQuery{
-				ID:   "rep-opp",
-				From: &tgbotapi.User{ID: 1001},
-				Data: fmt.Sprintf("rep:opp:%d", *pBeta.TeamID),
+	t.Run("7. Series Played Game by Game in the Bot", func(t *testing.T) {
+		said := func(chatID int64, want string) bool {
+			mockTG.mu.Lock()
+			defer mockTG.mu.Unlock()
+			for _, m := range mockTG.messagesSent {
+				if m.ChatID == chatID && strings.Contains(m.Text, want) {
+					return true
+				}
+			}
+			return false
+		}
+		press := func(from int64, data string) {
+			bot.handleCallbackQuery(ctx, &tgbotapi.CallbackQuery{
+				ID: "cb", From: &tgbotapi.User{ID: from}, Data: data,
+				Message: &tgbotapi.Message{MessageID: 1, Chat: &tgbotapi.Chat{ID: from, Type: "private"}},
 			})
 		}
-
-		// Selects score 2:0
-		bot.handleReportCallback(ctx, &tgbotapi.CallbackQuery{
-			ID:   "rep-score",
-			From: &tgbotapi.User{ID: 1001},
-			Data: "rep:score:2:0",
-		})
-
-		// Adds photo
-		_, _, _ = telegramService.AddReportPhoto(ctx, 1001, "mock-photo-file-id")
-
-		// Submits report
-		bot.handleReportCallback(ctx, &tgbotapi.CallbackQuery{
-			ID:   "rep-submit",
-			From: &tgbotapi.User{ID: 1001},
-			Data: "rep:submit",
-		})
+		pAlpha, _ := telegramRepo.GetPlayerByTelegramID(ctx, 1001)
+		match, err := bracketService.OpenMatchFor(ctx, *pAlpha.TeamID)
+		if err != nil || match == nil {
+			t.Fatalf("Alpha has no open match: %v", err)
+		}
+		playGame := func(no int) {
+			bot.handleSeriesPhoto(ctx, 1001, fmt.Sprintf("game-%d-shot", no))
+			time.Sleep(albumSettle + 300*time.Millisecond)
+			if !said(1001, fmt.Sprintf("Катка %d из максимум 3", no)) {
+				t.Fatalf("no prompt for game %d", no)
+			}
+			press(1001, fmt.Sprintf("game:claim:%d:1", match.ID))
+			games, _ := telegramRepo.ListMatchGames(ctx, match.ID, match.Revision)
+			var id int
+			for _, g := range games {
+				if g.GameNo == no && g.Status == "pending" {
+					id = g.ID
+				}
+			}
+			if id == 0 {
+				t.Fatalf("game %d was not recorded: %+v", no, games)
+			}
+			if !said(2001, "Всё верно?") {
+				t.Fatalf("Beta's captain was not asked to confirm game %d", no)
+			}
+			press(2001, fmt.Sprintf("game:ok:%d", id))
+		}
+		playGame(1)
+		if !said(1001, "Счёт серии: Alpha Team 1:0 Beta Team") && !said(1001, "Счёт серии: Beta Team 0:1 Alpha Team") {
+			t.Error("the series score after game 1 was not announced")
+		}
+		playGame(2)
+		ms, _ := bracketService.Matches(ctx)
+		var done bool
+		for _, m := range ms {
+			if m.ID == match.ID {
+				done = m.State == "complete" && m.WinnerID != nil && *m.WinnerID == *pAlpha.TeamID
+			}
+		}
+		if !done {
+			t.Fatalf("the 2:0 series did not complete the match: %+v", ms)
+		}
+		if !said(1001, "Серия завершена") {
+			t.Error("the end of the series was not announced")
+		}
 	})
 
 	t.Run("8. Fault Injection and Error Recovery", func(t *testing.T) {

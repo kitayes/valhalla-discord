@@ -593,12 +593,14 @@ func (b *Bot) handlePhoto(ctx context.Context, chatID int64, msg *tgbotapi.Messa
 		return
 	}
 
+	photoID := msg.Photo[len(msg.Photo)-1].FileID
 	if p.FSMState != models.StateReportScreenshots && p.FSMState != models.StateWaitingReport {
-		b.sendMessage(chatID, "Чтобы отправить скриншот результата матча, сначала нажмите кнопку /report в меню.", "main_menu")
+		// Outside the admin's /report dialogue a screenshot is a game of the
+		// captain's current series.
+		b.handleSeriesPhoto(ctx, chatID, photoID)
 		return
 	}
 
-	photoID := msg.Photo[len(msg.Photo)-1].FileID
 	resp, kbType, count := b.service.AddReportPhoto(ctx, chatID, photoID)
 	if count == 0 {
 		b.sendMessage(chatID, resp, kbType)

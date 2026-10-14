@@ -42,7 +42,10 @@ type Bot struct {
 	location  *time.Location
 	webAppURL string
 
-	photoTimers   map[int64]*time.Timer
+	photoTimers map[int64]*time.Timer
+	// seriesBatches gathers an album of game screenshots per chat; guarded by
+	// photoTimersMu like photoTimers.
+	seriesBatches map[int64]*seriesBatch
 	photoTimersMu sync.Mutex
 
 	// Tournament time each scheduled stage last fired for. Only touched by the
@@ -80,6 +83,7 @@ func NewBot(token string, adminIDs []int64, service application.TelegramService,
 		tournamentChatID:   tournamentChatID,
 		location:           location,
 		photoTimers:        make(map[int64]*time.Timer),
+		seriesBatches:      make(map[int64]*seriesBatch),
 	}
 
 	// Initialize betting extension
@@ -194,6 +198,10 @@ func (b *Bot) handleCallbackQuery(parent context.Context, callback *tgbotapi.Cal
 	defer cancel()
 	if strings.HasPrefix(callback.Data, "desk:") {
 		b.handleDeskCallback(ctx, callback)
+		return
+	}
+	if strings.HasPrefix(callback.Data, gameCallbackPrefix) {
+		b.handleGameCallback(ctx, callback)
 		return
 	}
 
@@ -377,6 +385,7 @@ func (b *Bot) startBackgroundWorker(ctx context.Context) {
 // as a full timestamp and remembered once it has fired.
 func (b *Bot) runScheduledChecks(ctx context.Context) {
 	b.autoConfirmReports(ctx)
+	b.autoConfirmGames(ctx)
 
 	tTime := b.service.GetTournamentTime(ctx)
 	if tTime.IsZero() {

@@ -24,7 +24,9 @@ func TestIntegrationTournamentSwitchSyncsTeamFlags(t *testing.T) {
 	var created []int
 	t.Cleanup(func() {
 		if prev != nil {
+			// Creating an active tournament completed the previous one.
 			_ = repo.SetActiveTournament(ctx, prev.ID)
+			_ = repo.UpdateTournamentStatus(ctx, prev.ID, prev.Status)
 		}
 		for _, id := range created {
 			_, _ = db.Exec(`DELETE FROM telegram_tournaments WHERE id = $1`, id)
@@ -103,7 +105,9 @@ func TestIntegrationTournamentStagesAndEntries(t *testing.T) {
 	var created []int
 	t.Cleanup(func() {
 		if prev != nil {
+			// Creating an active tournament completed the previous one.
 			_ = repo.SetActiveTournament(ctx, prev.ID)
+			_ = repo.UpdateTournamentStatus(ctx, prev.ID, prev.Status)
 		}
 		for _, id := range created {
 			_, _ = db.Exec(`DELETE FROM telegram_tournaments WHERE id = $1`, id)
@@ -252,5 +256,33 @@ func TestIntegrationMatchGames(t *testing.T) {
 	// The bracket cache now reads desk_revision too.
 	if _, err := repo.GetBracketMatchesForTournament(ctx, 0); err != nil {
 		t.Fatalf("GetBracketMatches: %v", err)
+	}
+}
+
+// Report statuses: every confirmation, dispute and auto-confirm goes through
+// SetReportStatus, which Postgres rejected outright before its parameters
+// were cast.
+func TestIntegrationSetReportStatus(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	repo := NewTelegramPostgres(db)
+	team, err := repo.CreateTeam(ctx, uniqueName(t, "rep"))
+	if err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM telegram_teams WHERE id = $1`, team.ID) })
+	rep := &models.TelegramMatchReport{ReporterTelegramID: 1, WinnerTeamID: team.ID, LoserTeamID: team.ID, Score: "2:0", Status: models.ReportPending}
+	if err := repo.CreateMatchReport(ctx, rep); err != nil {
+		t.Fatalf("CreateMatchReport: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM telegram_match_reports WHERE id = $1`, rep.ID) })
+	for _, status := range []string{models.ReportDisputed, models.ReportConfirmed} {
+		if err := repo.SetReportStatus(ctx, rep.ID, status); err != nil {
+			t.Fatalf("SetReportStatus(%s): %v", status, err)
+		}
+		got, _ := repo.GetMatchReport(ctx, rep.ID)
+		if got.Status != status || got.ResolvedAt == nil {
+			t.Errorf("after %s: status %q resolved %v", status, got.Status, got.ResolvedAt)
+		}
 	}
 }
