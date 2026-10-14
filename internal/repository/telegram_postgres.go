@@ -497,11 +497,15 @@ func (r *TelegramPostgres) GetExpiredPendingReports(ctx context.Context, now tim
 	return out, rows.Err()
 }
 
+// SetReportStatus moves a report on. The casts are required: Postgres refuses
+// to deduce one type for a parameter used both as the varchar column and in a
+// comparison, and without them every confirmation, dispute and auto-confirm
+// failed and no captain-reported result reached the bracket.
 func (r *TelegramPostgres) SetReportStatus(ctx context.Context, id int, status string) error {
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE telegram_match_reports
-		SET status = $2,
-		    resolved_at = CASE WHEN $2 = $3 THEN NULL ELSE NOW() END
+		SET status = $2::varchar,
+		    resolved_at = CASE WHEN $2::varchar = $3::varchar THEN NULL ELSE NOW() END
 		WHERE id = $1`, id, status, models.ReportPending)
 	return err
 }
