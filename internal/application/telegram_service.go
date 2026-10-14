@@ -2065,7 +2065,11 @@ func (s *TelegramServiceImpl) FinishTournament(ctx context.Context, id int) erro
 		return fmt.Errorf("не удалось получить команды турнира: %w", err)
 	}
 
-	placements, points := CalculatePlacements(matches, teams)
+	ids := make([]int, 0, len(teams))
+	for _, t := range teams {
+		ids = append(ids, t.ID)
+	}
+	placements, points := Placements(tourney, matches, ids)
 	_ = s.repo.UpdateTournamentPlacements(ctx, id, placements, points)
 
 	var winnerID *int

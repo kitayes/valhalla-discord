@@ -118,3 +118,17 @@ func TestRoundSortKey(t *testing.T) {
 		t.Errorf("got %d, want 2000", got)
 	}
 }
+
+// In double elimination a team goes out on its lower-bracket loss, which the
+// cache lists before the upper rounds.
+func TestEliminationMatchDouble(t *testing.T) {
+	ms := []models.BracketMatch{
+		sm(-1, 5, 7, 3, 3),
+		sm(1, 1, 7, 8, 8),
+		sm(2, 3, 8, 2, 8),
+	}
+	got := eliminationMatch(ms, 7)
+	if got == nil || got.Round != -1 {
+		t.Fatalf("eliminationMatch = %+v, want the lower-bracket loss", got)
+	}
+}

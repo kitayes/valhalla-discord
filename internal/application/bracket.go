@@ -147,6 +147,9 @@ type BracketBuilt struct {
 	Later []models.BracketMatch
 	// Incomplete teams were deliberately excluded from the bracket.
 	Incomplete []models.TelegramTeam
+	// NoShows were entered but did not check in, so they are not in the
+	// bracket.
+	NoShows []models.TelegramTeam
 }
 
 func (s *BracketService) tournamentID(ctx context.Context) int64 {
@@ -293,10 +296,12 @@ func (s *BracketService) Build(ctx context.Context, forTournament time.Time) (*B
 func (s *BracketService) build(ctx context.Context, forTournament time.Time) (*BracketBuilt, error) {
 	activeTourney, _ := s.repo.GetActiveTournament(ctx)
 	var teams []models.TelegramTeam
+	fromEntries := false
 	if activeTourney != nil {
 		tTeams, err := s.repo.GetTournamentTeams(ctx, activeTourney.ID)
 		if err == nil && len(tTeams) > 0 {
 			teams = tTeams
+			fromEntries = true
 		}
 	}
 	if len(teams) == 0 {
@@ -304,6 +309,19 @@ func (s *BracketService) build(ctx context.Context, forTournament time.Time) (*B
 		teams, err = s.repo.GetAllTeams(ctx)
 		if err != nil {
 			return nil, err
+		}
+	}
+	// Only checked-in teams are seeded. Building from every entry and
+	// disqualifying the absent ten minutes after the start handed their
+	// opponents a walkover and left holes all over round 1.
+	var playing, noShows []models.TelegramTeam
+	for _, team := range teams {
+		switch {
+		case team.Status == models.TeamStatusDisqualified:
+		case !team.IsCheckedIn:
+			noShows = append(noShows, team)
+		default:
+			playing = append(playing, team)
 		}
 	}
 	seedingType := models.SeedingTypeStars
@@ -318,10 +336,10 @@ func (s *BracketService) build(ctx context.Context, forTournament time.Time) (*B
 		}
 		holdThirdPlace = activeTourney.HoldThirdPlace
 	}
-	seeded := SeedTeamsWithStrategy(teams, seedingType)
+	seeded := SeedTeamsWithStrategy(playing, seedingType)
 	var incomplete []models.TelegramTeam
-	for _, team := range teams {
-		if team.Status != models.TeamStatusDisqualified && mainRosterSize(team) < MainRosterSlots {
+	for _, team := range playing {
+		if mainRosterSize(team) < MainRosterSlots {
 			incomplete = append(incomplete, team)
 		}
 	}
@@ -399,6 +417,7 @@ func (s *BracketService) build(ctx context.Context, forTournament time.Time) (*B
 		activeTourney.ChallongeURL = tr.URL
 		nowFor := forTournament.UTC()
 		activeTourney.ChallongeFor = &nowFor
+		activeTourney.BracketSize = NextPow2(len(seeded))
 		_ = s.repo.UpdateTournament(ctx, activeTourney)
 	}
 
@@ -456,7 +475,16 @@ func (s *BracketService) build(ctx context.Context, forTournament time.Time) (*B
 		activeTourney.Status = models.TournamentStatusActive
 		s.logWrite("UpdateTournament", s.repo.UpdateTournament(ctx, activeTourney))
 	}
-	return &BracketBuilt{URL: tr.URL, Round1: round1, Byes: byes, Later: later, Incomplete: incomplete}, nil
+	built := &BracketBuilt{URL: tr.URL, Round1: round1, Byes: byes, Later: later, Incomplete: incomplete}
+	// Without entries the teams come from every team ever registered, so an
+	// unchecked one there is history, not a no-show.
+	if fromEntries {
+		for _, team := range noShows {
+			s.logWrite("SetTournamentTeamStatus", s.repo.SetTournamentTeamStatus(ctx, activeTourney.ID, team.ID, models.EntryNoShow))
+		}
+		built.NoShows = noShows
+	}
+	return built, nil
 }
 
 // Sync pulls the bracket from Challonge, rewrites the cache and returns the
@@ -507,7 +535,23 @@ func (s *BracketService) sync(ctx context.Context, tID int64) ([]models.BracketM
 		bm.TournamentID = tIDPtr
 		ms = append(ms, bm)
 	}
-	return s.replaceAndReady(ctx, ms)
+	s.recordBracketSize(ctx, activeTourney, ms)
+	return s.replaceAndReady(ctx, FilterStage(activeTourney, ms))
+}
+
+// recordBracketSize stores the bracket size of a tournament built before it
+// was recorded, read from the full match list Challonge returned. Once a
+// qualifier's cache is cut at the advance line it no longer shows the size.
+func (s *BracketService) recordBracketSize(ctx context.Context, t *models.TelegramTournament, full []models.BracketMatch) {
+	if t == nil || t.BracketSize > 0 || len(full) == 0 {
+		return
+	}
+	l := NewLayout(t, full)
+	if l.Other || l.UBRounds == 0 {
+		return
+	}
+	t.BracketSize = 1 << l.UBRounds
+	s.logWrite("UpdateTournament", s.repo.UpdateTournament(ctx, t))
 }
 
 var challongeSlugPattern = regexp.MustCompile(`^[A-Za-z0-9_]{1,60}$`)
@@ -607,10 +651,15 @@ func (s *BracketService) syncAfterReport(ctx context.Context, tID int64, reporte
 		m := bracketMatchFromRemote(remote, byPID)
 		if i, ok := byRemoteID[remote.ID]; ok {
 			m.ID = ms[i].ID
+			m.TournamentID = ms[i].TournamentID
 			ms[i] = m
 		}
 	}
-	return s.replaceAndReady(ctx, ms)
+	active, err := s.repo.GetActiveTournament(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return s.replaceAndReady(ctx, FilterStage(active, ms))
 }
 
 func (s *BracketService) logWrite(op string, err error) {
@@ -1042,72 +1091,4 @@ func (s *BracketService) FlushPendingReports(ctx context.Context) ([]models.Brac
 		out = append(out, ready...)
 	}
 	return out, nil
-}
-
-// Points distribution for tournament placements in the League.
-var DefaultPlacementPoints = map[int]int{
-	1: 100, // 1st place
-	2: 70,  // 2nd place
-	3: 50,  // 3-4th place (semi-finalists)
-	5: 20,  // 5-8th place (quarter-finalists)
-	9: 10,  // 9-16th place
-	0: 5,   // Participation (check-in / registered)
-}
-
-// CalculatePlacements derives final team placements and league points from bracket matches and team list.
-func CalculatePlacements(matches []models.BracketMatch, teams []models.TelegramTeam) (map[int]int, map[int]int) {
-	placements := make(map[int]int)
-	points := make(map[int]int)
-	if len(matches) == 0 {
-		return placements, points
-	}
-
-	totalRounds := TotalRounds(matches)
-
-	var finalMatch *models.BracketMatch
-	for i := range matches {
-		if matches[i].Round == totalRounds && matches[i].WinnerID != nil {
-			finalMatch = &matches[i]
-			break
-		}
-	}
-
-	if finalMatch != nil && finalMatch.WinnerID != nil {
-		winnerID := *finalMatch.WinnerID
-		loserID := finalMatch.Opponent(winnerID)
-		placements[winnerID] = 1
-		points[winnerID] = DefaultPlacementPoints[1]
-		if loserID != nil {
-			placements[*loserID] = 2
-			points[*loserID] = DefaultPlacementPoints[2]
-		}
-	}
-
-	for r := totalRounds - 1; r >= 1; r-- {
-		place := 3
-		if r == totalRounds-2 {
-			place = 5
-		} else if r <= totalRounds-3 {
-			place = 9
-		}
-		pts := DefaultPlacementPoints[place]
-		for _, m := range matches {
-			if m.Round == r && m.WinnerID != nil {
-				loserID := m.Opponent(*m.WinnerID)
-				if loserID != nil && placements[*loserID] == 0 {
-					placements[*loserID] = place
-					points[*loserID] = pts
-				}
-			}
-		}
-	}
-
-	for _, t := range teams {
-		if placements[t.ID] == 0 {
-			placements[t.ID] = 17
-			points[t.ID] = DefaultPlacementPoints[0]
-		}
-	}
-
-	return placements, points
 }

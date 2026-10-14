@@ -76,7 +76,6 @@ func FormatScheduledTime(startsAt time.Time, round int, loc *time.Location) stri
 	return t.Format("15:04 (МСК)")
 }
 
-
 // StageLabel names a round by how far it is from the final: "финал",
 // "полуфинал", "1/4". The bracket is single elimination, so the distance to
 // the last round is the whole story.
@@ -116,15 +115,25 @@ func TotalRounds(ms []models.BracketMatch) int {
 	return total
 }
 
-// eliminationMatch returns the completed match this team lost, or nil while it
-// is still in the bracket. Callers pass the cache in round order, which
-// GetBracketMatches guarantees, so the last such match is the elimination.
+// eliminationMatch returns the completed match in which the team went out:
+// its latest loss in play order, which in double elimination is the
+// lower-bracket loss rather than the earlier upper one. Nil while the team is
+// still in the bracket or has never lost.
 func eliminationMatch(ms []models.BracketMatch, teamID int) *models.BracketMatch {
+	total := TotalRounds(ms)
+	hasNegative := false
+	for _, m := range ms {
+		hasNegative = hasNegative || m.Round < 0
+	}
 	var lost *models.BracketMatch
+	best := 0
 	for i := range ms {
 		m := &ms[i]
-		if m.State == models.BracketComplete && m.Has(teamID) && m.WinnerID != nil && *m.WinnerID != teamID {
-			lost = m
+		if m.State != models.BracketComplete || !m.Has(teamID) || m.WinnerID == nil || *m.WinnerID == teamID {
+			continue
+		}
+		if k := RoundSortKey(m.Round, total, hasNegative); lost == nil || k >= best {
+			lost, best = m, k
 		}
 	}
 	return lost

@@ -917,3 +917,69 @@ func TestFlushPendingReports(t *testing.T) {
 		t.Errorf("stale report still queued: %+v", q)
 	}
 }
+
+// enter registers a team for the active tournament (id 1), checked in or not.
+func enter(repo *fakeTelegramRepo, teamID int, checkedIn bool) {
+	_ = repo.RegisterTeamForTournament(context.Background(), 1, teamID)
+	_ = repo.SetTournamentCheckIn(context.Background(), 1, teamID, checkedIn, 0)
+}
+
+func TestBuildOnlyCheckedIn(t *testing.T) {
+	svc, repo, prov := newBracketSvc(t)
+	for i := 1; i <= 4; i++ {
+		addBracketTeam(repo, i, fmt.Sprintf("T%d", i), 10)
+		enter(repo, i, i != 4)
+	}
+	built, err := svc.Build(context.Background(), tourneyAt)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if n := len(prov.tourneys[prov.onlyTourney()].participants); n != 3 {
+		t.Errorf("participants = %d, want 3", n)
+	}
+	if len(built.NoShows) != 1 || built.NoShows[0].ID != 4 {
+		t.Errorf("NoShows = %+v, want team 4", built.NoShows)
+	}
+	if e, _ := repo.GetTournamentTeam(context.Background(), 1, 4); e.Status != models.EntryNoShow {
+		t.Errorf("team 4 entry status = %q, want no_show", e.Status)
+	}
+}
+
+func TestBuildStoresBracketSize(t *testing.T) {
+	svc, repo, _ := newBracketSvc(t)
+	for i := 1; i <= 5; i++ {
+		addBracketTeam(repo, i, fmt.Sprintf("T%d", i), 10)
+		enter(repo, i, true)
+	}
+	if _, err := svc.Build(context.Background(), tourneyAt); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	active, _ := repo.GetActiveTournament(context.Background())
+	if active.BracketSize != 8 {
+		t.Errorf("BracketSize = %d, want 8", active.BracketSize)
+	}
+}
+
+// A qualifier sending two of four teams on plays round 1 only; the final
+// never reaches the cache.
+func TestSyncQualifierDropsLaterRounds(t *testing.T) {
+	svc, repo, _ := newBracketSvc(t)
+	active, _ := repo.GetActiveTournament(context.Background())
+	active.Stage, active.AdvanceCount = models.StageQualifier, 2
+	for i := 1; i <= 4; i++ {
+		addBracketTeam(repo, i, fmt.Sprintf("T%d", i), 10)
+		enter(repo, i, true)
+	}
+	if _, err := svc.Build(context.Background(), tourneyAt); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	ms, _ := repo.GetBracketMatches(context.Background())
+	if len(ms) != 2 {
+		t.Fatalf("cached %d matches, want the 2 of round 1", len(ms))
+	}
+	for _, m := range ms {
+		if m.Round != 1 {
+			t.Errorf("cached round %d past the advance line", m.Round)
+		}
+	}
+}
