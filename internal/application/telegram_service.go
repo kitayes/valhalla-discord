@@ -1614,7 +1614,7 @@ func (s *TelegramServiceImpl) SetWinnerDirect(ctx context.Context, matchID int, 
 	if err != nil || team == nil {
 		return fmt.Errorf("команда '%s' не найдена", winnerTeamName)
 	}
-	if err := s.propagateBracketResult(ctx, matchID, team.ID, winScore, loseScore); err != nil {
+	if err := s.recordResult(ctx, matchID, team.ID, winScore, loseScore, true); err != nil {
 		return err
 	}
 	s.closeOpenReport(ctx, matchID)
