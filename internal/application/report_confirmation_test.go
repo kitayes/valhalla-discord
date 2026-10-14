@@ -216,3 +216,32 @@ func TestLoserCanReportAndWinnerConfirms(t *testing.T) {
 		t.Fatalf("winner not set: %+v", got)
 	}
 }
+
+// The round is a BO3 semifinal: a 1:0 or 3:0 result cannot have happened.
+func TestReportScoreMustFitTheFormat(t *testing.T) {
+	ctx := context.Background()
+	for _, score := range [][2]int{{1, 0}, {3, 0}, {3, 1}} {
+		svc, _, _, _ := twoTeamBracket(t)
+		if _, err := svc.ReportMatchDirect(ctx, 1001, 0, score[0], score[1], nil); err == nil || !strings.Contains(err.Error(), "BO3") {
+			t.Errorf("score %d:%d accepted (err %v)", score[0], score[1], err)
+		}
+	}
+	svc, _, _, _ := twoTeamBracket(t)
+	if _, err := svc.ReportMatchDirect(ctx, 1001, 0, 1, 2, nil); err != nil {
+		t.Errorf("a 1:2 loss reported by the loser was refused: %v", err)
+	}
+}
+
+// With the bracket gone (finished tournament, cut qualifier) a report must not
+// fall back to "any opponent".
+func TestReportWithoutBracketIsRefused(t *testing.T) {
+	ctx := context.Background()
+	svc, repo, _, _ := twoTeamBracket(t)
+	repo.bracket = nil
+	if _, err := svc.ReportMatchDirect(ctx, 1001, 12, 2, 0, nil); err == nil {
+		t.Fatal("a report for a vanished match was accepted")
+	}
+	if len(repo.reports) != 0 {
+		t.Errorf("reports created: %+v", repo.reports)
+	}
+}

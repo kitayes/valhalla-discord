@@ -582,7 +582,17 @@ func (r *fakeTelegramRepo) HasQualifiedEntry(ctx context.Context, teamID, except
 		if tt.TeamID != teamID || tt.TournamentID == exceptTournamentID || tt.Status != models.EntryQualified {
 			continue
 		}
-		if t, _ := r.GetTournamentByID(ctx, tt.TournamentID); t != nil && t.Stage == models.StageQualifier {
+		t, _ := r.GetTournamentByID(ctx, tt.TournamentID)
+		if t == nil || t.Stage != models.StageQualifier {
+			continue
+		}
+		expired := false
+		for _, m := range r.tournaments {
+			if m.Stage == models.StageMain && m.Status == models.TournamentStatusCompleted && m.ID > t.ID {
+				expired = true
+			}
+		}
+		if !expired {
 			return true, nil
 		}
 	}

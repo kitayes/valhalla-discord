@@ -5784,7 +5784,7 @@
         }
 
         async function startTournamentAdmin() {
-            const confirmed = await appConfirm('Сформировать турнирную сетку и начать турнир? Участники получат уведомления о матчах 1-го раунда.');
+            const confirmed = await appConfirm('Сформировать сетку и начать турнир сейчас? Check-in закроется: команды, которые ещё не подтвердили участие, НЕ попадут в сетку. Участники получат уведомления о матчах 1-го раунда.');
             if (!confirmed) return;
             haptic('warning');
             const res = await apiFetch('/api/admin/tournament/start', {

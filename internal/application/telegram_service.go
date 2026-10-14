@@ -175,6 +175,9 @@ type TelegramServiceImpl struct {
 	// stale "not confirmed" in the app and un-checked the team by tapping it.
 	hookMu    sync.RWMutex
 	eventHook func(event string, payload map[string]any)
+
+	// finishMu serialises FinishTournament.
+	finishMu sync.Mutex
 }
 
 // ProfileLookup is the slice of the profile-link repository registration
@@ -1516,11 +1519,28 @@ func (s *TelegramServiceImpl) ReportMatchDirect(ctx context.Context, reporterTgI
 			return nil, errors.New("команда соперника не найдена")
 		}
 	} else {
+		// No bracket to report into. With Challonge configured, or for a
+		// specific match, that means the match is gone (the tournament
+		// finished or the qualifier was cut); picking "any opponent" here
+		// filed results against teams that never played.
+		if s.bracket != nil || matchID > 0 {
+			return nil, errors.New("сейчас у вашей команды нет открытого матча в сетке")
+		}
 		opponents, err := s.GetEligibleOpponents(ctx, reporterTgID)
 		if err != nil || len(opponents) == 0 {
 			return nil, errors.New("нет доступных команд-соперников")
 		}
 		oppTeam = &opponents[0]
+	}
+	if bracketMatch != nil {
+		active, _ := s.repo.GetActiveTournament(ctx)
+		hi, lo := myScore, oppScore
+		if lo > hi {
+			hi, lo = lo, hi
+		}
+		if err := ValidateScore(MatchFormat(active, ms, bracketMatch.Round), hi, lo); err != nil {
+			return nil, err
+		}
 	}
 
 	var winnerID, loserID int
@@ -2027,12 +2047,18 @@ func (s *TelegramServiceImpl) SetActiveTournament(ctx context.Context, id int) e
 	if err := s.repo.SetActiveTournament(ctx, id); err != nil {
 		return err
 	}
+	// Always replace the cached start time: a tournament without one used to
+	// inherit the previous tournament's, which closed its check-in at once.
+	timeSetting := ""
+	s.mu.Lock()
 	if t.TournamentTime != nil {
-		s.mu.Lock()
 		s.tournamentTime = *t.TournamentTime
-		s.mu.Unlock()
-		_ = s.repo.SetSetting(ctx, "tournament_time", t.TournamentTime.Format(time.RFC3339))
+		timeSetting = t.TournamentTime.Format(time.RFC3339)
+	} else {
+		s.tournamentTime = time.Time{}
 	}
+	s.mu.Unlock()
+	_ = s.repo.SetSetting(ctx, "tournament_time", timeSetting)
 	if t.ChallongeID != nil {
 		_ = s.repo.SetSetting(ctx, settingChallongeID, strconv.FormatInt(*t.ChallongeID, 10))
 	} else {

@@ -48,6 +48,10 @@ func FormatRoundTitleWithContext(round, total int, tourneyType string) string {
 // Losers bracket rounds come next (-1, -2, -3, ...).
 // Grand final comes last (total, total+1).
 func RoundSortKey(round, total int, hasNegative bool) int {
+	// The third-place match (round 0) is shown with the final, not first.
+	if round == 0 && !hasNegative {
+		return total
+	}
 	if !hasNegative {
 		return round
 	}

@@ -195,6 +195,9 @@ func MatchFormat(t *models.TelegramTournament, ms []models.BracketMatch, round i
 	switch {
 	case l.Other:
 		return rounds
+	case round == 0:
+		// The third-place match is played like a semifinal.
+		return semi
 	case t.Qualifier():
 		if l.Cutoff(t.AdvanceCount).Decider(round) {
 			return final
@@ -246,6 +249,10 @@ func RoundTitle(t *models.TelegramTournament, ms []models.BracketMatch, round in
 	}
 	var title string
 	switch {
+	case round == 0:
+		// Round 0 is where a third-place match lands when Challonge numbers
+		// it apart from the final.
+		title = "Матч за 3-е место"
 	case !l.Double:
 		typ := ""
 		if t != nil {

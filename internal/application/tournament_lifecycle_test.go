@@ -591,3 +591,92 @@ func TestCompletedTournamentCanBeFinishedAsQualifierOnce(t *testing.T) {
 		t.Error("a finished qualifier's advance count changed")
 	}
 }
+
+// Activating a tournament without a start time used to keep the previous
+// tournament's (past) time, which closed the new check-in at once.
+func TestActivatingTournamentWithoutTimeClearsTheOldOne(t *testing.T) {
+	svc, repo := newTelegramSvc()
+	ctx := context.Background()
+	past := time.Date(2026, 10, 12, 15, 0, 0, 0, time.UTC)
+	repo.tournaments[0].TournamentTime = &past
+	if err := svc.SetActiveTournament(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	repo.tournaments = append(repo.tournaments, &models.TelegramTournament{ID: 2, Name: "Квала 2", Status: models.TournamentStatusRegistration})
+	if err := svc.SetActiveTournament(ctx, 2); err != nil {
+		t.Fatal(err)
+	}
+	if got := svc.GetTournamentTime(ctx); !got.IsZero() {
+		t.Errorf("start time = %v, want none", got)
+	}
+	addBracketTeam(repo, 1, "Alpha", 10).IsCheckedIn = false
+	if res := svc.SetTeamCheckIn(ctx, captainOf(1), true); !res.OK {
+		t.Errorf("check-in for the new tournament = %+v", res)
+	}
+}
+
+// A quarterfinal reported before the qualifier closed is not a result: its
+// report is closed instead of auto-confirmed later.
+func TestFinishQualifierClosesReportsOfCutMatches(t *testing.T) {
+	svc, repo := qualifierFixture(t, true)
+	ctx := context.Background()
+	var qf models.BracketMatch
+	for _, m := range repo.bracket {
+		if m.Round == 2 {
+			qf = m
+			break
+		}
+	}
+	id := qf.ID
+	repo.reports = append(repo.reports, models.TelegramMatchReport{ID: 77, BracketMatchID: &id, Status: models.ReportPending})
+	if _, err := svc.FinishTournament(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	if rep, _ := repo.GetMatchReport(ctx, 77); rep == nil || rep.Open() {
+		t.Errorf("report of a cut match = %+v, want closed", rep)
+	}
+}
+
+// A bracket built before participant ids were kept per tournament: the teams
+// in the cached matches count as participants.
+func TestFinishQualifierWithoutEntryParticipantIDs(t *testing.T) {
+	svc, repo := qualifierFixture(t, true)
+	for _, tt := range repo.tournamentTeams {
+		tt.ChallongeParticipantID = nil
+	}
+	res, err := svc.FinishTournament(context.Background(), 1)
+	if err != nil || len(res.Qualified) != 8 {
+		t.Fatalf("FinishTournament = %+v, %v", res, err)
+	}
+}
+
+// Qualifying blocks other qualifiers only until the main stage it led to is
+// over; next season's qualifiers are open again.
+func TestQualificationExpiresWithItsMainStage(t *testing.T) {
+	svc, _ := qualifierFixture(t, true)
+	ctx := context.Background()
+	if _, err := svc.FinishTournament(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	main, _ := svc.CreateTournament(ctx, TournamentSettings{Name: "Основа", Stage: models.StageMain})
+	if _, err := svc.FinishTournament(ctx, main.ID); err != nil {
+		t.Fatalf("finish main: %v", err)
+	}
+	next, _ := svc.CreateTournament(ctx, TournamentSettings{Name: "Квала нового сезона", Stage: models.StageQualifier, AdvanceCount: 8})
+	if err := svc.RegisterTeamForTournament(ctx, captainOf(1), next.ID); err != nil {
+		t.Errorf("last season's qualified team: %v, want allowed", err)
+	}
+}
+
+func TestThirdPlaceRoundZero(t *testing.T) {
+	se := &models.TelegramTournament{TournamentType: models.TournamentTypeSingleElimination, BracketSize: 8, FormatRounds: 1, FormatSemifinal: 3, FormatFinal: 5}
+	if got := RoundTitle(se, nil, 0); got != "Матч за 3-е место" {
+		t.Errorf("title = %q", got)
+	}
+	if got := MatchFormat(se, nil, 0); got != 3 {
+		t.Errorf("format = %d, want the semifinal's 3", got)
+	}
+	if RoundSortKey(0, 3, false) < RoundSortKey(2, 3, false) {
+		t.Error("third-place match sorted before the semifinals")
+	}
+}

@@ -225,6 +225,11 @@ func (s *TelegramServiceImpl) UpdateTournamentSettings(ctx context.Context, id i
 // the matches past the line leave the cache. Other tournaments get final
 // placements and league points.
 func (s *TelegramServiceImpl) FinishTournament(ctx context.Context, id int) (*FinishResult, error) {
+	// The worker's auto-close and the admin's button can land in the same
+	// second; without this both passed the "already finished" check and the
+	// qualified teams were announced twice.
+	s.finishMu.Lock()
+	defer s.finishMu.Unlock()
 	t, err := s.repo.GetTournamentByID(ctx, id)
 	if err != nil || t == nil {
 		return nil, errors.New("турнир не найден")
@@ -248,12 +253,7 @@ func (s *TelegramServiceImpl) FinishTournament(ctx context.Context, id int) (*Fi
 	wasActive := t.IsActive
 	res := &FinishResult{Tournament: t}
 	if t.Qualifier() {
-		var participants []int
-		for _, e := range entries {
-			if e.ChallongeParticipantID != nil {
-				participants = append(participants, e.TeamID)
-			}
-		}
+		participants := bracketParticipants(entries, matches)
 		if len(participants) == 0 {
 			return nil, errors.New("сетка квалификации не построена")
 		}
@@ -274,6 +274,7 @@ func (s *TelegramServiceImpl) FinishTournament(ctx context.Context, id int) (*Fi
 			}
 			res.Qualified = append(res.Qualified, models.TelegramTeam{ID: teamID, Name: names[teamID]})
 		}
+		s.closeCutReports(ctx, t, matches)
 		if err := s.repo.ReplaceBracketMatchesForTournament(ctx, id, FilterStage(t, matches)); err != nil {
 			return nil, err
 		}
@@ -310,6 +311,55 @@ func (s *TelegramServiceImpl) FinishTournament(ctx context.Context, id int) (*Fi
 	s.emit("tournaments_update", map[string]any{"action": "finished", "id": id})
 	s.emit("bracket_update", map[string]any{"action": "finished"})
 	return res, nil
+}
+
+// bracketParticipants are the teams seeded into a tournament's bracket: entries
+// with a Challonge participant id, plus every team in the cached matches. A
+// bracket built before participant ids were kept per tournament has entries
+// without them, while its matches still name the teams.
+func bracketParticipants(entries []models.TournamentTeam, matches []models.BracketMatch) []int {
+	seen := map[int]bool{}
+	var out []int
+	add := func(id int) {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	for _, e := range entries {
+		if e.ChallongeParticipantID != nil {
+			add(e.TeamID)
+		}
+	}
+	for _, m := range matches {
+		if m.Team1ID != nil {
+			add(*m.Team1ID)
+		}
+		if m.Team2ID != nil {
+			add(*m.Team2ID)
+		}
+	}
+	return out
+}
+
+// closeCutReports closes the open reports of matches past a qualifier's
+// advance line. Their matches leave the cache, and left open the reports were
+// later auto-confirmed and announced as results of games that were cancelled.
+func (s *TelegramServiceImpl) closeCutReports(ctx context.Context, t *models.TelegramTournament, matches []models.BracketMatch) {
+	cut := NewLayout(t, matches).Cutoff(t.AdvanceCount)
+	if cut.All {
+		return
+	}
+	for _, m := range matches {
+		if cut.InStage(m.Round) {
+			continue
+		}
+		rep, err := s.repo.GetOpenReportForMatch(ctx, m.ID)
+		if err != nil || rep == nil {
+			continue
+		}
+		s.logWrite("SetReportStatus", s.repo.SetReportStatus(ctx, rep.ID, models.ReportOverridden))
+	}
 }
 
 // finishableQualifier: a completed tournament can still be finished as a
@@ -354,13 +404,7 @@ func (s *TelegramServiceImpl) TryFinishQualifier(ctx context.Context) (*FinishRe
 	if err != nil {
 		return nil, err
 	}
-	var participants []int
-	for _, e := range entries {
-		if e.ChallongeParticipantID != nil {
-			participants = append(participants, e.TeamID)
-		}
-	}
-	out := QualifierStatus(t, matches, participants)
+	out := QualifierStatus(t, matches, bracketParticipants(entries, matches))
 	if !out.Done {
 		return nil, nil
 	}

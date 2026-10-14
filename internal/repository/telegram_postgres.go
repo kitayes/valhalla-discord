@@ -994,7 +994,9 @@ func (r *TelegramPostgres) EnterTeam(ctx context.Context, tournamentID, teamID i
 }
 
 // HasQualifiedEntry reports whether the team advanced out of a qualifier other
-// than exceptTournamentID.
+// than exceptTournamentID that still leads to a main stage: a qualification
+// expires once a main stage created after that qualifier is completed, so
+// next season's qualifiers are open again.
 func (r *TelegramPostgres) HasQualifiedEntry(ctx context.Context, teamID, exceptTournamentID int) (bool, error) {
 	var ok bool
 	err := r.db.QueryRowContext(ctx, `
@@ -1002,6 +1004,10 @@ func (r *TelegramPostgres) HasQualifiedEntry(ctx context.Context, teamID, except
 			SELECT 1 FROM telegram_tournament_teams tt
 			JOIN telegram_tournaments t ON t.id = tt.tournament_id
 			WHERE tt.team_id = $1 AND tt.tournament_id <> $2 AND tt.status = 'qualified' AND t.stage = 'qualifier'
+			  AND NOT EXISTS (
+				SELECT 1 FROM telegram_tournaments m
+				WHERE m.stage = 'main' AND m.status = 'completed' AND m.id > t.id
+			  )
 		)
 	`, teamID, exceptTournamentID).Scan(&ok)
 	return ok, err
