@@ -133,6 +133,9 @@ func NewAdminServer(services *application.Service, logger application.Logger, po
 	mux.HandleFunc("/api/admin/tournament/time", tmaAuth(s.handleAdminTournamentSetTime))
 	mux.HandleFunc("/api/admin/tournament/activate", tmaAuth(s.handleAdminTournamentActivate))
 	mux.HandleFunc("/api/admin/tournament/finish", tmaAuth(s.handleAdminTournamentFinish))
+	mux.HandleFunc("/api/admin/tournament/update", tmaAuth(s.handleAdminTournamentUpdate))
+	mux.HandleFunc("/api/admin/tournament/import-qualified", tmaAuth(s.handleAdminTournamentImportQualified))
+	mux.HandleFunc("/api/admin/tournament/invite", tmaAuth(s.handleAdminTournamentInvite))
 
 	s.srv = &http.Server{
 		Addr:    ":" + port,

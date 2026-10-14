@@ -51,10 +51,22 @@ type RoundScheduleItem struct {
 	MatchFormat   string `json:"match_format"`
 }
 
+// BracketMatchView is a cached match with its round title and best-of, so
+// the Mini App labels every card without re-deriving the bracket rules.
+type BracketMatchView struct {
+	models.BracketMatch
+	RoundName   string `json:"round_name"`
+	MatchFormat string `json:"match_format"`
+}
+
 type BracketResponse struct {
-	Matches      []models.BracketMatch `json:"matches"`
-	Schedule     []RoundScheduleItem   `json:"schedule,omitempty"`
-	ChallongeURL string                `json:"challonge_url,omitempty"`
+	Matches      []BracketMatchView  `json:"matches"`
+	Schedule     []RoundScheduleItem `json:"schedule,omitempty"`
+	ChallongeURL string              `json:"challonge_url,omitempty"`
+	// TournamentStatus decides whether open matches are live: a finished
+	// tournament has none.
+	TournamentStatus string `json:"tournament_status,omitempty"`
+	Stage            string `json:"stage,omitempty"`
 }
 
 type TeamTournamentStatus struct {
@@ -204,51 +216,57 @@ func (s *AdminServer) handleBracket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tourneyIDStr := r.URL.Query().Get("tournament_id")
+	ctx := r.Context()
+	var tourney *models.TelegramTournament
 	var matches []models.BracketMatch
 	var err error
 	var tTime time.Time
-	var challongeURL string
-	var tourneyType string
-	if tourneyIDStr != "" && s.services.TelegramService != nil {
-		tID, _ := strconv.Atoi(tourneyIDStr)
+	if svc := s.services.TelegramService; svc != nil {
+		tID, _ := strconv.Atoi(r.URL.Query().Get("tournament_id"))
 		if tID > 0 {
-			matches, err = s.services.TelegramService.GetBracketForTournament(r.Context(), tID)
-			tourney, _ := s.services.TelegramService.GetTournamentByID(r.Context(), tID)
-			if tourney != nil {
-				if tourney.TournamentTime != nil {
-					tTime = *tourney.TournamentTime
-				}
-				challongeURL = tourney.ChallongeURL
-				tourneyType = tourney.TournamentType
+			tourney, _ = svc.GetTournamentByID(ctx, tID)
+		}
+		if tourney != nil {
+			// An explicitly chosen tournament shows its own bracket, even an
+			// empty one, never the active tournament's.
+			matches, err = svc.GetBracketForTournament(ctx, tourney.ID)
+			if tourney.TournamentTime != nil {
+				tTime = *tourney.TournamentTime
 			}
+		} else {
+			matches, err = svc.GetBracket(ctx)
+			tTime = svc.GetTournamentTime(ctx)
+			tourney, _ = svc.GetActiveTournament(ctx)
 		}
-	}
-	if matches == nil && s.services.TelegramService != nil {
-		matches, err = s.services.TelegramService.GetBracket(r.Context())
-		tTime = s.services.TelegramService.GetTournamentTime(r.Context())
-		activeTourney, _ := s.services.TelegramService.GetActiveTournament(r.Context())
-		if activeTourney != nil {
-			challongeURL = activeTourney.ChallongeURL
-			tourneyType = activeTourney.TournamentType
-		}
-	}
-	if challongeURL == "" && s.services.Bracket != nil {
-		challongeURL = s.services.Bracket.URL(r.Context())
-	}
-	if challongeURL != "" && !strings.HasPrefix(challongeURL, "http://") && !strings.HasPrefix(challongeURL, "https://") {
-		challongeURL = "https://challonge.com/" + challongeURL
 	}
 	if err != nil {
 		http.Error(w, `{"error":"failed to load bracket"}`, http.StatusInternalServerError)
 		return
 	}
-	if matches == nil {
-		matches = []models.BracketMatch{}
+	challongeURL := ""
+	if tourney != nil {
+		challongeURL = tourney.ChallongeURL
+		// A qualifier's rounds past the advance line belong to no one.
+		matches = application.FilterStage(tourney, matches)
+	}
+	if challongeURL == "" && s.services.Bracket != nil {
+		challongeURL = s.services.Bracket.URL(ctx)
+	}
+	if challongeURL != "" && !strings.HasPrefix(challongeURL, "http://") && !strings.HasPrefix(challongeURL, "https://") {
+		challongeURL = "https://challonge.com/" + challongeURL
+	}
+
+	views := make([]BracketMatchView, 0, len(matches))
+	for _, m := range matches {
+		views = append(views, BracketMatchView{
+			BracketMatch: m,
+			RoundName:    application.RoundTitle(tourney, matches, m.Round),
+			MatchFormat:  application.FormatLabel(application.MatchFormat(tourney, matches, m.Round)),
+		})
 	}
 
 	var schedule []RoundScheduleItem
-	if len(matches) > 0 && s.services.TelegramService != nil {
+	if len(matches) > 0 {
 		totalRounds := application.TotalRounds(matches)
 		roundSet := make(map[int]bool)
 		var hasNegative bool
@@ -266,23 +284,23 @@ func (s *AdminServer) handleBracket(w http.ResponseWriter, r *http.Request) {
 			return application.RoundSortKey(distinctRounds[i], totalRounds, hasNegative) <
 				application.RoundSortKey(distinctRounds[j], totalRounds, hasNegative)
 		})
-
 		for _, rNum := range distinctRounds {
-			fmtStr := "BO1"
-			if rNum == totalRounds || (rNum == totalRounds-1 && totalRounds > 1 && !hasNegative) {
-				fmtStr = "BO3"
-			}
 			schedule = append(schedule, RoundScheduleItem{
 				Round:         rNum,
-				RoundName:     application.FormatRoundTitleWithContext(rNum, totalRounds, tourneyType),
+				RoundName:     application.RoundTitle(tourney, matches, rNum),
 				ScheduledTime: application.FormatScheduledTime(tTime, rNum, time.FixedZone("MSK", 3*3600)),
-				MatchFormat:   fmtStr,
+				MatchFormat:   application.FormatLabel(application.MatchFormat(tourney, matches, rNum)),
 			})
 		}
 	}
 
+	resp := BracketResponse{Matches: views, Schedule: schedule, ChallongeURL: challongeURL}
+	if tourney != nil {
+		resp.TournamentStatus = tourney.Status
+		resp.Stage = tourney.Stage
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(BracketResponse{Matches: matches, Schedule: schedule, ChallongeURL: challongeURL})
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *AdminServer) handleActiveMatch(w http.ResponseWriter, r *http.Request) {

@@ -357,6 +357,43 @@ func TestTMAHandlers(t *testing.T) {
 		if len(resp.Matches) != 1 || resp.Matches[0].Team1Name != "Alpha" {
 			t.Errorf("unexpected matches: %+v", resp.Matches)
 		}
+		// The only round is the final: default BO3, and the client is told
+		// the tournament is not running yet, so the open match is not live.
+		if m := resp.Matches[0]; m.MatchFormat != "BO3" || m.RoundName != "Финал" {
+			t.Errorf("match labels = %q %q, want BO3 Финал", m.MatchFormat, m.RoundName)
+		}
+		if resp.TournamentStatus != models.TournamentStatusRegistration {
+			t.Errorf("tournament_status = %q", resp.TournamentStatus)
+		}
+	})
+
+	t.Run("admin tournament stage endpoints", func(t *testing.T) {
+		admin := context.WithValue(context.Background(), userCtxKey, &TelegramUser{ID: 99999})
+		tgSvc.tournaments = []models.TelegramTournament{{ID: 1, Name: "Квала"}, {ID: 2, Name: "Основа", Stage: models.StageMain}}
+
+		post := func(h http.HandlerFunc, body string, ctx context.Context) *httptest.ResponseRecorder {
+			req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body)).WithContext(ctx)
+			rec := httptest.NewRecorder()
+			h(rec, req)
+			return rec
+		}
+		rec := post(server.handleAdminTournamentUpdate, `{"tournament_id":1,"name":"Квала","stage":"qualifier","advance_count":8,"format_final":5}`, admin)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("update: %d %s", rec.Code, rec.Body.String())
+		}
+		if q := tgSvc.tournaments[0]; q.Stage != models.StageQualifier || q.AdvanceCount != 8 || q.FormatFinal != 5 {
+			t.Errorf("update did not reach the service: %+v", q)
+		}
+		if rec := post(server.handleAdminTournamentImportQualified, `{"tournament_id":2,"from_ids":[1]}`, admin); rec.Code != http.StatusOK || fmt.Sprint(tgSvc.imported) != "[1]" {
+			t.Errorf("import: %d %s, imported %v", rec.Code, rec.Body.String(), tgSvc.imported)
+		}
+		if rec := post(server.handleAdminTournamentInvite, `{"tournament_id":2,"team_id":7}`, admin); rec.Code != http.StatusOK || fmt.Sprint(tgSvc.invited) != "[7]" {
+			t.Errorf("invite: %d %s, invited %v", rec.Code, rec.Body.String(), tgSvc.invited)
+		}
+		captain := context.WithValue(context.Background(), userCtxKey, &TelegramUser{ID: 12345})
+		if rec := post(server.handleAdminTournamentInvite, `{"tournament_id":2,"team_id":8}`, captain); rec.Code != http.StatusForbidden {
+			t.Errorf("non-admin invite: %d, want 403", rec.Code)
+		}
 	})
 
 	t.Run("GET /api/me with authenticated context", func(t *testing.T) {

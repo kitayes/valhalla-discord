@@ -51,6 +51,10 @@ func (s *AdminServer) handleAdminTeams(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tournamentID, _ := strconv.Atoi(r.URL.Query().Get("tournament_id"))
+	if r.URL.Query().Get("scope") == "all" {
+		// Every team, entered or not: the main stage invites from here.
+		tournamentID = application.AllTeams
+	}
 	teams, err := s.services.TelegramService.AdminListTeams(r.Context(), tournamentID)
 	if err != nil {
 		writeAdminResult(w, err, "")
