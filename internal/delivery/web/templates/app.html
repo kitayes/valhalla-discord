@@ -1135,6 +1135,15 @@
         }
 
         /* ── UX Enhancement 7: Bracket live badge ── */
+        .bracket-meta {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: -4px 0 10px;
+            min-height: 0;
+        }
+        .bracket-meta .bracket-live-count { margin-left: 0; }
+
         .bracket-live-count {
             color: var(--accent-red);
             font-size: 11px;
@@ -1314,7 +1323,7 @@
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                         <span>Время начала матча:</span>
                     </span>
-                    <strong id="matchScheduledTimeVal" style="color: #fff;">18:00 (МСК)</strong>
+                    <strong id="matchScheduledTimeVal" style="color: #fff;">—</strong>
                 </div>
 
                 <!-- Step Guidance Banner: Что делать прямо сейчас -->
@@ -1477,11 +1486,7 @@
     <!-- Tab 2: Tournament Bracket -->
     <main id="tabBracket" class="tab-content">
         <div class="card-header" style="margin-bottom: 10px;">
-            <span class="card-title">
-                Турнирная сетка
-                <span class="status-pill status-waiting" id="bracketStageBadge" style="display:none; font-size: 10px; padding: 2px 8px;"></span>
-                <span class="bracket-live-count" id="bracketLiveCount" style="display:none;"></span>
-            </span>
+            <span class="card-title">Турнирная сетка</span>
             <div style="display: flex; gap: 6px; align-items: center;">
                 <button class="btn-copy" id="btnOpenChallonge" onclick="openChallongeUrl()" style="display: none;" title="Открыть на Challonge">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
@@ -1492,6 +1497,12 @@
                     <span>Обновить</span>
                 </button>
             </div>
+        </div>
+        <!-- Stage and live counter on their own line: next to the title they
+             wrapped under it on a phone. -->
+        <div class="bracket-meta" id="bracketMeta">
+            <span class="status-pill status-waiting" id="bracketStageBadge" style="display:none; font-size: 10px; padding: 2px 8px;"></span>
+            <span class="bracket-live-count" id="bracketLiveCount" style="display:none;"></span>
         </div>
         <div id="bracketStageSelectorRow" style="margin-bottom: 12px; display: none;">
             <div style="display: flex; align-items: center; gap: 8px;">
@@ -1854,6 +1865,9 @@
                         <span>Подвести итоги квалы</span>
                     </button>
                 </div>
+                <button class="btn-copy" id="btnAnnounceRegistration" onclick="announceRegistrationSelected()" style="justify-content: center; display: none;">
+                    <span>Оповестить капитанов о регистрации</span>
+                </button>
                 <div id="mainStageTools" style="display: none; border: 1px solid var(--card-border); border-radius: 10px; padding: 10px; flex-direction: column; gap: 8px;">
                     <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 700;">Участники основного этапа</div>
                     <div id="mainStageQualifierList" style="display: flex; flex-direction: column; gap: 6px; font-size: 13px;"></div>
@@ -2716,7 +2730,13 @@
                             const btnReg = document.getElementById('btnRegisterStage');
                             const btnUnreg = document.getElementById('btnUnregisterStage');
 
-                            if (data.tournament_team) {
+                            if (data.qualified_for_main && !data.tournament_team) {
+                                // Advanced from the last qualifier: this one is not for them.
+                                stageBadge.textContent = 'ВЫ В ОСНОВНОМ ЭТАПЕ';
+                                stageBadge.className = 'status-pill status-ready';
+                                btnReg.style.display = 'none';
+                                btnUnreg.style.display = 'none';
+                            } else if (data.tournament_team) {
                                 const entry = data.tournament_team;
                                 if (entry.status === 'no_show') {
                                     stageBadge.textContent = 'НЕ ПРОШЛИ CHECK-IN';
@@ -4705,6 +4725,10 @@
                 stageBadge.textContent = stageText;
                 stageBadge.style.display = stageText ? 'inline-flex' : 'none';
             }
+            const metaRow = document.getElementById('bracketMeta');
+            if (metaRow) {
+                metaRow.style.display = (data.stage === 'qualifier' || data.stage === 'main' || liveCount > 0) ? 'flex' : 'none';
+            }
 
             const roundMap = {};
             const roundOrder = {};
@@ -4733,7 +4757,7 @@
                             <span>${escapeHtml(rInfo ? rInfo.round_name : 'Раунд ' + lastRound)}</span>
                             ${rInfo && rInfo.match_format ? `<span class="badge-role" style="font-size:10px;">${escapeHtml(rInfo.match_format)}</span>` : ''}
                         </span>
-                        <span style="font-size: 11px; color: var(--accent-blue); font-weight: 600;">
+                        <span style="font-size: 11px; color: var(--accent-blue); font-weight: 600; white-space: nowrap; flex-shrink: 0; margin-left: 8px;">
                             ${rInfo && rInfo.scheduled_time ? escapeHtml(rInfo.scheduled_time) : ''}
                         </span>
                     `;
@@ -6002,6 +6026,12 @@
                 loadTournamentsForBracketSelect();
                 loadBracket();
                 loadProfile();
+                // A new qualifier starts with an empty list: everyone enters
+                // again, so offer to tell the captains right away.
+                if (!editing && res.tournament && res.tournament.stage !== 'main') {
+                    const announce = await appConfirm(`Разослать всем капитанам, что открыта регистрация на «${res.tournament.name}»?`);
+                    if (announce) await announceRegistration(res.tournament);
+                }
             } else {
                 // Keep the form open so a validation error can be fixed.
                 showToast(res?.error || (editing ? 'Ошибка сохранения настроек' : 'Ошибка создания турнира'), false);
@@ -6079,6 +6109,10 @@
             if (finishBtn) {
                 finishBtn.style.display = (t && t.stage === 'qualifier' && t.status !== 'registration' && t.status !== 'draft') ? 'flex' : 'none';
             }
+            const announceBtn = document.getElementById('btnAnnounceRegistration');
+            if (announceBtn) {
+                announceBtn.style.display = (t && t.stage !== 'main' && (t.status === 'registration' || t.status === 'draft')) ? 'flex' : 'none';
+            }
             const tools = document.getElementById('mainStageTools');
             if (!tools) return;
             const open = t && t.stage === 'main' && (t.status === 'registration' || t.status === 'draft');
@@ -6108,6 +6142,27 @@
                 return;
             }
             openTourneySettingsModal(t);
+        }
+
+        async function announceRegistration(t) {
+            const res = await apiFetch('/api/admin/tournament/announce-registration', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tournament_id: t.id })
+            });
+            if (res && res.ok) {
+                showToast(res.message || 'Оповещение отправляется', true);
+            } else {
+                showToast(res?.error || 'Не удалось разослать оповещение', false);
+            }
+        }
+
+        async function announceRegistrationSelected() {
+            const t = selectedAdminTourney();
+            if (!t) return;
+            const confirmed = await appConfirm(`Разослать всем капитанам, что открыта регистрация на «${t.name}»? Команды, уже прошедшие в основной этап, получат сообщение, что заявляться им не нужно.`);
+            if (!confirmed) return;
+            await announceRegistration(t);
         }
 
         async function finishSelectedQualifier() {

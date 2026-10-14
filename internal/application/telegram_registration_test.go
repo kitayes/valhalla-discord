@@ -549,6 +549,8 @@ func TestDuplicateGameIDIgnoresSoloRows(t *testing.T) {
 // check itself back in, only an admin can reinstate it.
 func TestTechnicalDefeatIsRecorded(t *testing.T) {
 	svc, repo := newTelegramSvc()
+	// Teams without entries: the bot before tournaments existed.
+	repo.tournaments[0].IsActive = false
 	in, out := 10, 11
 	repo.teams[in] = &models.TelegramTeam{ID: in, Name: "In", IsCheckedIn: true}
 	repo.teams[out] = &models.TelegramTeam{ID: out, Name: "Out"}

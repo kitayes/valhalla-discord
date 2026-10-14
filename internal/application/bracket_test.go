@@ -299,6 +299,12 @@ func addBracketTeam(repo *fakeTelegramRepo, id int, name string, stars ...int) *
 	}
 	t := &models.TelegramTeam{ID: id, Name: name, Status: models.TeamStatusActive, IsCheckedIn: true}
 	repo.teams[id] = t
+	if repo.autoEnter {
+		if active, _ := repo.GetActiveTournament(context.Background()); active != nil {
+			_ = repo.RegisterTeamForTournament(context.Background(), active.ID, id)
+			_ = repo.SetTournamentCheckIn(context.Background(), active.ID, id, true, 0)
+		}
+	}
 	// The fake's GetAllTeams/GetTeamMembers read players from repo.players
 	// (captains, keyed by telegram id) and repo.members (the rest).
 	for i, s := range stars {
@@ -316,6 +322,7 @@ func addBracketTeam(repo *fakeTelegramRepo, id int, name string, stars ...int) *
 func newBracketSvc(t *testing.T) (*BracketService, *fakeTelegramRepo, *fakeChallonge) {
 	t.Helper()
 	repo := newFakeTelegramRepo()
+	repo.autoEnter = true
 	prov := newFakeChallonge()
 	svc := NewBracketService(repo, prov, 1, 0, nopLogger{})
 	svc.now = func() time.Time { return time.Date(2026, 9, 20, 17, 0, 0, 0, time.UTC) }

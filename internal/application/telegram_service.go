@@ -143,6 +143,8 @@ type TelegramService interface {
 	// CloseOpenReport closes the captains' open report on a match the referee
 	// decided; matchID is the bracket id or the play order.
 	CloseOpenReport(ctx context.Context, matchID int)
+	TeamQualifiedElsewhere(ctx context.Context, tgID int64, tournamentID int) bool
+	RegistrationInvites(ctx context.Context, tournamentID int) (*models.TelegramTournament, []RegistrationInvite, error)
 	RegisterTeamForTournament(ctx context.Context, captainTgID int64, tournamentID int) error
 	UnregisterTeamFromTournament(ctx context.Context, captainTgID int64, tournamentID int) error
 	GetBracketForTournament(ctx context.Context, tournamentID int) ([]models.BracketMatch, error)
@@ -1108,19 +1110,9 @@ func (s *TelegramServiceImpl) GetTournamentTime(ctx context.Context) time.Time {
 }
 
 func (s *TelegramServiceImpl) GetUncheckedTeams(ctx context.Context) ([]models.TelegramTeam, error) {
-	var allTeams []models.TelegramTeam
-	if active, _ := s.repo.GetActiveTournament(ctx); active != nil {
-		tTeams, err := s.repo.GetTournamentTeams(ctx, active.ID)
-		if err == nil && len(tTeams) > 0 {
-			allTeams = tTeams
-		}
-	}
-	if len(allTeams) == 0 {
-		var err error
-		allTeams, err = s.repo.GetAllTeams(ctx)
-		if err != nil {
-			return nil, err
-		}
+	allTeams, err := s.checkInTeams(ctx)
+	if err != nil {
+		return nil, err
 	}
 	var unchecked []models.TelegramTeam
 	for _, t := range allTeams {
@@ -1227,13 +1219,17 @@ func (s *TelegramServiceImpl) AdminGetTeamDetails(ctx context.Context, name stri
 }
 
 // checkInTeams are the teams the check-in concerns: the active tournament's
-// entries, or every team when nothing is entered (before tournaments).
+// entries, none for a tournament nobody has entered yet. Falling back to
+// every team sent a new qualifier's check-in reminders to all of the last
+// one's teams, qualified ones included. Only without any tournament (the bot
+// before tournaments existed) is every team concerned.
 func (s *TelegramServiceImpl) checkInTeams(ctx context.Context) ([]models.TelegramTeam, error) {
-	if active, _ := s.repo.GetActiveTournament(ctx); active != nil {
-		tTeams, err := s.repo.GetTournamentTeams(ctx, active.ID)
-		if err == nil && len(tTeams) > 0 {
-			return tTeams, nil
-		}
+	active, err := s.repo.GetActiveTournament(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if active != nil {
+		return s.repo.GetTournamentTeams(ctx, active.ID)
 	}
 	return s.repo.GetAllTeams(ctx)
 }
@@ -2021,7 +2017,7 @@ func (s *TelegramServiceImpl) GetBracketMatchDetails(ctx context.Context, matchI
 	tTime := s.tournamentTime
 	s.mu.RUnlock()
 	if !tTime.IsZero() {
-		sTime = FormatScheduledTime(tTime, found.Round, time.FixedZone("MSK", 3*3600))
+		sTime = FormatScheduledTime(tTime, found.Round)
 	}
 	mFormat := FormatLabel(MatchFormat(active, matches, found.Round))
 

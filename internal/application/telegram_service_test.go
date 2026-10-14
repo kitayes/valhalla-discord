@@ -26,6 +26,9 @@ type fakeTelegramRepo struct {
 	tournamentTeams map[string]*models.TournamentTeam
 	checkInWrites   int // SetTournamentCheckIn calls that hit an entry
 	games           []models.TelegramMatchGame
+	// autoEnter makes addBracketTeam enter its teams, checked in, into the
+	// active tournament, as bracket fixtures need.
+	autoEnter bool
 	// failSetting, when set for a key, makes SetSetting return that error
 	// instead of writing, so tests can exercise write-failure paths.
 	failSetting map[string]error
@@ -229,7 +232,14 @@ func (r *fakeTelegramRepo) SetCheckIn(_ context.Context, id int, v bool) error {
 	return nil
 }
 func (r *fakeTelegramRepo) GetAllCaptains(context.Context) ([]models.TelegramPlayer, error) {
-	return nil, nil
+	var out []models.TelegramPlayer
+	for _, p := range r.allRows() {
+		if p.IsCaptain && p.TeamID != nil {
+			out = append(out, *p)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return *out[i].TeamID < *out[j].TeamID })
+	return out, nil
 }
 func (r *fakeTelegramRepo) GetSoloPlayers(context.Context) ([]models.TelegramPlayer, error) {
 	return nil, nil
@@ -901,6 +911,8 @@ func TestTeamNameLengthIsValidated(t *testing.T) {
 
 func TestGetCheckInStatus(t *testing.T) {
 	svc, repo := newTelegramSvc()
+	// Teams without entries: the bot before tournaments existed.
+	repo.tournaments[0].IsActive = false
 
 	// Empty state
 	if got := svc.GetCheckInStatus(context.Background()); got != "Команд пока нет." {
@@ -1162,5 +1174,24 @@ func TestLeaveTeam(t *testing.T) {
 	}
 	if repo.players[memTgID].TeamID != nil {
 		t.Fatalf("expected member team_id nil")
+	}
+}
+
+// A new tournament nobody has entered yet concerns no team: falling back to
+// every team sent its check-in reminders to the whole previous field.
+func TestNewTournamentWithoutEntriesConcernsNobody(t *testing.T) {
+	svc, repo := newTelegramSvc()
+	ctx := context.Background()
+	team := 1
+	repo.teams[team] = &models.TelegramTeam{ID: team, Name: "Old"}
+	repo.addPlayer(101, &team, true, models.StateIdle)
+	if teams, _ := svc.GetUncheckedTeams(ctx); len(teams) != 0 {
+		t.Errorf("unchecked teams of an empty tournament = %+v", teams)
+	}
+	if teams, _ := svc.AdminListTeams(ctx, 0); len(teams) != 0 {
+		t.Errorf("admin list of an empty tournament = %+v", teams)
+	}
+	if teams, _ := svc.AdminListTeams(ctx, AllTeams); len(teams) != 1 {
+		t.Errorf("all teams = %+v", teams)
 	}
 }

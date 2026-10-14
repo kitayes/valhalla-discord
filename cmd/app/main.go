@@ -188,6 +188,7 @@ func main() {
 				adminServer.WithPhotoUploader(telegramBot.UploadPhoto)
 				adminServer.WithBotUsername(telegramBot.Username())
 				adminServer.WithQualifierAnnouncer(telegramBot.AnnounceQualified)
+				adminServer.WithRegistrationAnnouncer(telegramBot.AnnounceRegistration)
 				adminServer.WithBracketBuilder(func(ctx context.Context, adminChatID int64) error {
 					_, err := telegramBot.BuildBracket(ctx, adminChatID)
 					return err

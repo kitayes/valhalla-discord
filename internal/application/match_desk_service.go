@@ -494,7 +494,7 @@ func (s *MatchDeskService) GetMatchDeskDetail(ctx context.Context, actor int64) 
 					}
 					format := FormatLabel(MatchFormat(c.Tournament, c.Matches, round))
 					rName := RoundTitle(c.Tournament, c.Matches, round)
-					schedTime := FormatScheduledTime(c.StartsAt, round, s.location)
+					schedTime := FormatScheduledTime(c.StartsAt, round)
 					roomRules := "Режим: Custom -> Draft Pick 5v5 | Наблюдатели: Выкл"
 
 					detail = &MatchDeskDetail{
@@ -637,7 +637,7 @@ func (s *MatchDeskService) GetAdminMatches(ctx context.Context, actor int64) (bo
 				}
 			}
 			rName := RoundTitle(c.Tournament, c.Matches, round)
-			schedTime := FormatScheduledTime(c.StartsAt, round, s.location)
+			schedTime := FormatScheduledTime(c.StartsAt, round)
 			matches = append(matches, AdminMatchItem{
 				MatchID:           m.ID,
 				Number:            m.Number,
@@ -697,7 +697,7 @@ func (s *MatchDeskService) GetAdminMatches(ctx context.Context, actor int64) (bo
 					WinnerID:      wID,
 					WinnerName:    wName,
 					Score:         b.ScoresCSV,
-					ScheduledTime: FormatScheduledTime(c.StartsAt, b.Round, s.location),
+					ScheduledTime: FormatScheduledTime(c.StartsAt, b.Round),
 					History:       hist,
 				})
 			}

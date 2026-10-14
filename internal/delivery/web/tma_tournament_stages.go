@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -85,4 +86,31 @@ func (s *AdminServer) handleAdminTournamentInvite(w http.ResponseWriter, r *http
 	s.sseBroker.Broadcast("team_update", map[string]interface{}{"action": "invited", "team_id": req.TeamID})
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "message": "Команда приглашена в основной этап"})
+}
+
+// handleAdminTournamentAnnounceRegistration tells every captain that a
+// tournament's registration is open.
+func (s *AdminServer) handleAdminTournamentAnnounceRegistration(w http.ResponseWriter, r *http.Request) {
+	if !s.adminGate(w, r, http.MethodPost) {
+		return
+	}
+	var req struct {
+		TournamentID int `json:"tournament_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TournamentID <= 0 {
+		http.Error(w, `{"error":"invalid request"}`, http.StatusBadRequest)
+		return
+	}
+	if s.registrationAnnouncer == nil {
+		http.Error(w, `{"error":"бот недоступен"}`, http.StatusServiceUnavailable)
+		return
+	}
+	n, err := s.registrationAnnouncer(context.WithoutCancel(r.Context()), req.TournamentID)
+	if err != nil {
+		writeJSONError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "count": n,
+		"message": fmt.Sprintf("Оповещение отправляется капитанам: %d", n)})
 }

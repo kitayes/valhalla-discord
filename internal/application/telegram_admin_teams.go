@@ -25,9 +25,10 @@ const (
 const AllTeams = -1
 
 // AdminListTeams returns the teams with their rosters. AllTeams lists every
-// team; another tournamentID <= 0 means the active tournament, and with no
-// active tournament (or nobody entered) every team is listed, matching what
-// the check-in summary counts.
+// team; another tournamentID <= 0 means the active tournament. A tournament's
+// list is its entries — empty for a new one until teams enter — and only
+// without any tournament is every team listed, matching what the check-in
+// summary counts.
 func (s *TelegramServiceImpl) AdminListTeams(ctx context.Context, tournamentID int) ([]models.TelegramTeam, error) {
 	if tournamentID == AllTeams {
 		return s.repo.GetAllTeams(ctx)
@@ -38,13 +39,7 @@ func (s *TelegramServiceImpl) AdminListTeams(ctx context.Context, tournamentID i
 		}
 	}
 	if tournamentID > 0 {
-		teams, err := s.repo.GetTournamentTeams(ctx, tournamentID)
-		if err != nil {
-			return nil, err
-		}
-		if len(teams) > 0 {
-			return teams, nil
-		}
+		return s.repo.GetTournamentTeams(ctx, tournamentID)
 	}
 	return s.repo.GetAllTeams(ctx)
 }

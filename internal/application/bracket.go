@@ -297,14 +297,17 @@ func (s *BracketService) build(ctx context.Context, forTournament time.Time) (*B
 	activeTourney, _ := s.repo.GetActiveTournament(ctx)
 	var teams []models.TelegramTeam
 	fromEntries := false
+	// The active tournament's entries, even none: falling back to every
+	// team ever registered entered the last tournament's losers into a new
+	// qualifier nobody had entered yet. Only without any tournament (the bot
+	// before tournaments existed) is every team the field.
 	if activeTourney != nil {
 		tTeams, err := s.repo.GetTournamentTeams(ctx, activeTourney.ID)
-		if err == nil && len(tTeams) > 0 {
-			teams = tTeams
-			fromEntries = true
+		if err != nil {
+			return nil, err
 		}
-	}
-	if len(teams) == 0 {
+		teams, fromEntries = tTeams, true
+	} else {
 		var err error
 		teams, err = s.repo.GetAllTeams(ctx)
 		if err != nil {

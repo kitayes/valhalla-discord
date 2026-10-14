@@ -64,8 +64,14 @@ func RoundSortKey(round, total int, hasNegative bool) int {
 	return round
 }
 
-// FormatScheduledTime formats the estimated start time for a given round based on tournament start.
-func FormatScheduledTime(startsAt time.Time, round int, loc *time.Location) string {
+// DisplayZone is the time zone the league's schedule is shown in: Kazakhstan,
+// one zone (UTC+5) for the whole country since 2024. It is fixed rather than
+// loaded from tzdata, which older images still ship with Almaty at UTC+6.
+var DisplayZone = time.FixedZone("КЗ", 5*3600)
+
+// FormatScheduledTime is the estimated start of a round in Kazakhstan time:
+// rounds are planned 35 minutes apart from the tournament start.
+func FormatScheduledTime(startsAt time.Time, round int) string {
 	if startsAt.IsZero() {
 		return "По готовности"
 	}
@@ -74,10 +80,7 @@ func FormatScheduledTime(startsAt time.Time, round int, loc *time.Location) stri
 		effectiveRound = -round + 1
 	}
 	t := startsAt.Add(time.Duration((effectiveRound-1)*35) * time.Minute)
-	if loc != nil {
-		t = t.In(loc)
-	}
-	return t.Format("15:04 (МСК)")
+	return t.In(DisplayZone).Format("15:04") + " (КЗ)"
 }
 
 // StageLabel names a round by how far it is from the final: "финал",

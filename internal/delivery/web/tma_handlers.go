@@ -25,6 +25,9 @@ type MeResponse struct {
 	BotUsername      string                     `json:"bot_username,omitempty"`
 	ActiveTournament *models.TelegramTournament `json:"active_tournament,omitempty"`
 	TournamentTeam   *models.TournamentTeam     `json:"tournament_team,omitempty"`
+	// QualifiedForMain: the team already advanced from another qualifier and
+	// takes no part in the active one.
+	QualifiedForMain bool `json:"qualified_for_main,omitempty"`
 }
 
 // inviteStartPrefix marks a /start payload that carries an invite token:
@@ -249,6 +252,9 @@ func (s *AdminServer) handleMe(w http.ResponseWriter, r *http.Request) {
 			if team != nil {
 				tt, _ := s.services.TelegramService.GetTournamentTeamStatus(r.Context(), user.ID, activeTourney.ID)
 				resp.TournamentTeam = tt
+				if activeTourney.Stage == models.StageQualifier {
+					resp.QualifiedForMain = s.services.TelegramService.TeamQualifiedElsewhere(r.Context(), user.ID, activeTourney.ID)
+				}
 			}
 		}
 	}
@@ -340,7 +346,7 @@ func (s *AdminServer) handleBracket(w http.ResponseWriter, r *http.Request) {
 			schedule = append(schedule, RoundScheduleItem{
 				Round:         rNum,
 				RoundName:     application.RoundTitle(tourney, matches, rNum),
-				ScheduledTime: application.FormatScheduledTime(tTime, rNum, time.FixedZone("MSK", 3*3600)),
+				ScheduledTime: application.FormatScheduledTime(tTime, rNum),
 				MatchFormat:   application.FormatLabel(application.MatchFormat(tourney, matches, rNum)),
 			})
 		}
@@ -458,7 +464,6 @@ func (s *AdminServer) getTeamTournamentStatus(ctx context.Context, userID int64)
 
 	totalRounds := application.TotalRounds(matches)
 	tTime := s.services.TelegramService.GetTournamentTime(ctx)
-	loc := time.FixedZone("MSK", 3*3600)
 
 	// Find the team's latest match (by Round, then PlayOrder)
 	var latest *models.BracketMatch
@@ -488,7 +493,7 @@ func (s *AdminServer) getTeamTournamentStatus(ctx context.Context, userID int64)
 	// If latest match is pending/open without both teams:
 	if latest.State == models.BracketOpen || latest.State == models.BracketPending {
 		if latest.Team1ID == nil || latest.Team2ID == nil {
-			schedTime := application.FormatScheduledTime(tTime, latest.Round, loc)
+			schedTime := application.FormatScheduledTime(tTime, latest.Round)
 			return &TeamTournamentStatus{
 				Status:             "advanced",
 				NextRound:          latest.Round,
@@ -514,7 +519,7 @@ func (s *AdminServer) getTeamTournamentStatus(ctx context.Context, userID int64)
 
 			nextRound := latest.Round + 1
 			nextRoundName := application.FormatRoundTitle(nextRound, totalRounds)
-			schedTime := application.FormatScheduledTime(tTime, nextRound, loc)
+			schedTime := application.FormatScheduledTime(tTime, nextRound)
 
 			// Look for parallel match that feeds into the same next round match
 			var waitingOpponents string

@@ -136,6 +136,10 @@ func (m *mockTelegramSvc) SeriesScores(ctx context.Context, ms []models.BracketM
 	return m.seriesScores
 }
 
+func (m *mockTelegramSvc) TeamQualifiedElsewhere(ctx context.Context, tgID int64, tournamentID int) bool {
+	return false
+}
+
 func (m *mockTelegramSvc) SeriesFor(ctx context.Context, matchID int) (*application.SeriesState, error) {
 	return nil, nil
 }

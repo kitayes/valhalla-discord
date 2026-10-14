@@ -507,3 +507,64 @@ func (s *TelegramServiceImpl) entryRefusal(ctx context.Context, t *models.Telegr
 	}
 	return nil
 }
+
+// TeamQualifiedElsewhere reports whether the captain's team already advanced
+// out of a qualifier other than tournamentID, and so takes no part in it.
+func (s *TelegramServiceImpl) TeamQualifiedElsewhere(ctx context.Context, tgID int64, tournamentID int) bool {
+	p, err := s.repo.GetPlayerByTelegramID(ctx, tgID)
+	if err != nil || p == nil || p.TeamID == nil {
+		return false
+	}
+	has, _ := s.repo.HasQualifiedEntry(ctx, *p.TeamID, tournamentID)
+	return has
+}
+
+// RegistrationInvite is one captain to tell that a tournament's registration
+// is open.
+type RegistrationInvite struct {
+	ChatID   int64
+	TeamName string
+	// Qualified teams already advanced from another qualifier: they are told
+	// they need not enter.
+	Qualified bool
+}
+
+// RegistrationInvites lists every team captain for a tournament's
+// registration announcement. A main stage takes no registrations.
+func (s *TelegramServiceImpl) RegistrationInvites(ctx context.Context, tournamentID int) (*models.TelegramTournament, []RegistrationInvite, error) {
+	t, err := s.repo.GetTournamentByID(ctx, tournamentID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if t == nil {
+		return nil, nil, errors.New("турнир не найден")
+	}
+	if !tournamentAcceptsEntries(t) {
+		return nil, nil, errors.New("регистрация на этот турнир закрыта")
+	}
+	if t.Stage == models.StageMain {
+		return nil, nil, errMainStageClosed
+	}
+	captains, err := s.repo.GetAllCaptains(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	var out []RegistrationInvite
+	seen := map[int64]bool{}
+	for _, c := range captains {
+		if c.TelegramID == nil || *c.TelegramID <= 0 || c.TeamID == nil || seen[*c.TelegramID] {
+			continue
+		}
+		seen[*c.TelegramID] = true
+		team, _ := s.repo.GetTeamByID(ctx, *c.TeamID)
+		if team == nil {
+			continue
+		}
+		inv := RegistrationInvite{ChatID: *c.TelegramID, TeamName: team.Name}
+		if t.Stage == models.StageQualifier {
+			inv.Qualified, _ = s.repo.HasQualifiedEntry(ctx, team.ID, t.ID)
+		}
+		out = append(out, inv)
+	}
+	return t, out, nil
+}

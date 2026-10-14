@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"blackwatch/internal/application"
 
@@ -152,4 +153,42 @@ func qualifiedText(res *application.FinishResult) string {
 	}
 	sb.WriteString("\nДальнейшие матчи этой квалификации не играются.")
 	return sb.String()
+}
+
+// AnnounceRegistration tells every captain that a tournament's registration is
+// open: teams from the last qualifier enter again, teams that already
+// advanced are told they sit this one out. It returns how many captains are
+// messaged; the messages go out in the background.
+func (b *Bot) AnnounceRegistration(ctx context.Context, tournamentID int) (int, error) {
+	t, invites, err := b.service.RegistrationInvites(ctx, tournamentID)
+	if err != nil {
+		return 0, err
+	}
+	start := "время старта объявим отдельно"
+	if t.TournamentTime != nil {
+		start = "старт " + t.TournamentTime.In(application.DisplayZone).Format("02.01 в 15:04") + " (КЗ)"
+	}
+	var qualified []string
+	for _, inv := range invites {
+		if inv.Qualified {
+			qualified = append(qualified, inv.TeamName)
+		}
+	}
+	sort.Strings(qualified)
+	go func() {
+		for _, inv := range invites {
+			text := fmt.Sprintf("Открыта регистрация на «%s», %s.\n\nКоманды из прошлой квалификации заявляются заново: нажмите «Заявиться» в приложении. В день турнира капитан проходит check-in — без него команда не попадёт в сетку.", t.Name, start)
+			if inv.Qualified {
+				text = fmt.Sprintf("Открыта регистрация на «%s». Команда '%s' уже прошла в основной этап и в этой квалификации не участвует — заявляться не нужно.", t.Name, inv.TeamName)
+			}
+			b.SendMatchNotification(inv.ChatID, text, !inv.Qualified)
+			time.Sleep(broadcastInterval)
+		}
+	}()
+	chat := fmt.Sprintf("РЕГИСТРАЦИЯ ОТКРЫТА\n\n«%s», %s.\nКапитаны заявляют команды в приложении, в том числе команды из прошлой квалификации.", t.Name, start)
+	if len(qualified) > 0 {
+		chat += "\n\nУже в основном этапе и в этой квалификации не участвуют: " + strings.Join(qualified, ", ") + "."
+	}
+	b.notifyTournamentChat(chat)
+	return len(invites), nil
 }

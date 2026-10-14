@@ -44,9 +44,12 @@ type AdminServer struct {
 	// qualifierAnnouncer tells the Telegram chat and the qualified teams that
 	// a qualifier closed from the Mini App is over.
 	qualifierAnnouncer func(ctx context.Context, res *application.FinishResult)
-	sseBroker          *SSEBroker
-	srv                *http.Server
-	startedAt          time.Time
+	// registrationAnnouncer tells the captains a tournament's registration is
+	// open and returns how many it messages.
+	registrationAnnouncer func(ctx context.Context, tournamentID int) (int, error)
+	sseBroker             *SSEBroker
+	srv                   *http.Server
+	startedAt             time.Time
 	// botUsername is the bot the mini app is served from; it turns an invite
 	// token into a t.me deep link. Empty means the app hands out bare tokens.
 	botUsername string
@@ -139,6 +142,7 @@ func NewAdminServer(services *application.Service, logger application.Logger, po
 	mux.HandleFunc("/api/admin/tournament/update", tmaAuth(s.handleAdminTournamentUpdate))
 	mux.HandleFunc("/api/admin/tournament/import-qualified", tmaAuth(s.handleAdminTournamentImportQualified))
 	mux.HandleFunc("/api/admin/tournament/invite", tmaAuth(s.handleAdminTournamentInvite))
+	mux.HandleFunc("/api/admin/tournament/announce-registration", tmaAuth(s.handleAdminTournamentAnnounceRegistration))
 
 	s.srv = &http.Server{
 		Addr:    ":" + port,
@@ -205,6 +209,12 @@ func (s *AdminServer) WithPhotoUploader(fn func(ctx context.Context, data []byte
 // service uses it so that changes made in the bot reach the app too.
 func (s *AdminServer) Broadcast(event string, payload map[string]any) {
 	s.sseBroker.Broadcast(event, payload)
+}
+
+// WithRegistrationAnnouncer installs the Telegram registration announcement.
+func (s *AdminServer) WithRegistrationAnnouncer(fn func(ctx context.Context, tournamentID int) (int, error)) *AdminServer {
+	s.registrationAnnouncer = fn
+	return s
 }
 
 // WithQualifierAnnouncer installs the Telegram announcement for a qualifier

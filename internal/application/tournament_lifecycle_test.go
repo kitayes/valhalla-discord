@@ -680,3 +680,37 @@ func TestThirdPlaceRoundZero(t *testing.T) {
 		t.Error("third-place match sorted before the semifinals")
 	}
 }
+
+// The second qualifier's announcement reaches every captain; teams that
+// advanced from the first are marked so they are told to sit it out.
+func TestRegistrationInvitesForSecondQualifier(t *testing.T) {
+	svc, _ := qualifierFixture(t, true)
+	ctx := context.Background()
+	if _, err := svc.FinishTournament(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	q2, err := svc.CreateTournament(ctx, TournamentSettings{Name: "Квалификация 2", Stage: models.StageQualifier, AdvanceCount: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, invites, err := svc.RegistrationInvites(ctx, q2.ID)
+	if err != nil || len(invites) != 16 {
+		t.Fatalf("invites = %d, %v; want all 16 captains", len(invites), err)
+	}
+	qualified := 0
+	for _, inv := range invites {
+		if inv.Qualified {
+			qualified++
+		}
+	}
+	if qualified != 8 {
+		t.Errorf("%d invites marked qualified, want 8", qualified)
+	}
+	if !svc.TeamQualifiedElsewhere(ctx, captainOf(1), q2.ID) || svc.TeamQualifiedElsewhere(ctx, captainOf(2), q2.ID) {
+		t.Error("TeamQualifiedElsewhere: team 1 advanced, team 2 did not")
+	}
+	main, _ := svc.CreateTournament(ctx, TournamentSettings{Name: "Основа", Stage: models.StageMain})
+	if _, _, err := svc.RegistrationInvites(ctx, main.ID); err == nil {
+		t.Error("a main stage announced open registration")
+	}
+}

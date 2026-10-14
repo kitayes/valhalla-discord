@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"blackwatch/internal/models"
 )
@@ -334,5 +335,18 @@ func TestPointsForPlace(t *testing.T) {
 		if got := PointsForPlace(place); got != want {
 			t.Errorf("place %d = %d, want %d", place, got, want)
 		}
+	}
+}
+
+// The schedule is shown in Kazakhstan time: a 15:00 UTC start is 20:00.
+func TestFormatScheduledTimeKazakhstan(t *testing.T) {
+	start := time.Date(2026, 10, 13, 15, 0, 0, 0, time.UTC)
+	for round, want := range map[int]string{1: "20:00 (КЗ)", 2: "20:35 (КЗ)", -1: "20:35 (КЗ)"} {
+		if got := FormatScheduledTime(start, round); got != want {
+			t.Errorf("round %d = %q, want %q", round, got, want)
+		}
+	}
+	if got := FormatScheduledTime(time.Time{}, 1); got != "По готовности" {
+		t.Errorf("no start time = %q", got)
 	}
 }
