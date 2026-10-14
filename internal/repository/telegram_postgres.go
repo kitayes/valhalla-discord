@@ -714,7 +714,7 @@ func (r *TelegramPostgres) GetUnsyncedReports(ctx context.Context) ([]models.Tel
 }
 
 // tournamentColumns is the select list scanTournament reads, in order.
-const tournamentColumns = `id, name, slug, status, tournament_time, challonge_id, challonge_url, challonge_for,
+const tournamentColumns = `id, name, COALESCE(slug, ''), status, tournament_time, challonge_id, challonge_url, challonge_for,
 	winner_team_id, winner_team_name, is_active, created_at, updated_at,
 	COALESCE(tournament_type, 'single elimination'), COALESCE(hold_third_place, FALSE), COALESCE(seeding_type, 'stars'),
 	stage, advance_count, format_rounds, format_semifinal, format_final, bracket_size`

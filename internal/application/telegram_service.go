@@ -1975,8 +1975,8 @@ func (s *TelegramServiceImpl) GetBracketMatchDetails(ctx context.Context, matchI
 		return nil, fmt.Errorf("match not found")
 	}
 
-	totalRounds := TotalRounds(matches)
-	rName := FormatRoundTitle(found.Round, totalRounds)
+	active, _ := s.repo.GetActiveTournament(ctx)
+	rName := RoundTitle(active, matches, found.Round)
 	sTime := ""
 	s.mu.RLock()
 	tTime := s.tournamentTime
@@ -1984,10 +1984,7 @@ func (s *TelegramServiceImpl) GetBracketMatchDetails(ctx context.Context, matchI
 	if !tTime.IsZero() {
 		sTime = FormatScheduledTime(tTime, found.Round, time.FixedZone("MSK", 3*3600))
 	}
-	mFormat := "BO1"
-	if found.Round >= totalRounds-1 && totalRounds > 1 {
-		mFormat = "BO3"
-	}
+	mFormat := FormatLabel(MatchFormat(active, matches, found.Round))
 
 	details := &BracketMatchDetails{
 		Match:         *found,

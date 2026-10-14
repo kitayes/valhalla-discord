@@ -19,6 +19,16 @@ func (r *TelegramPostgres) UpdateMatchDesk(ctx context.Context, change func(*mod
 		return err
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after commit
+	// The desk serves the active tournament only. It used to read every
+	// tournament's bracket rows, so a finished qualifier's unplayed rounds
+	// stayed on the desk next to the next tournament's matches.
+	active, err := scanTournament(tx.QueryRowContext(ctx, `SELECT `+tournamentColumns+` FROM telegram_tournaments WHERE is_active = TRUE LIMIT 1`))
+	if errors.Is(err, sql.ErrNoRows) {
+		return errors.New("сетка ещё не построена")
+	}
+	if err != nil {
+		return err
+	}
 	var tournament, starts string
 	err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT value FROM telegram_settings WHERE key='challonge_tournament_id'),''), COALESCE((SELECT value FROM telegram_settings WHERE key='challonge_tournament_for'),'')`).Scan(&tournament, &starts)
 	if err != nil {
@@ -54,10 +64,10 @@ func (r *TelegramPostgres) UpdateMatchDesk(ctx context.Context, change func(*mod
 		return err
 	}
 	d.Tournament = tournament
-	snapshot := models.DeskContext{StartsAt: startsAt, Captains: map[int]models.TelegramPlayer{}, Revisions: map[int]int64{}}
+	snapshot := models.DeskContext{Tournament: active, StartsAt: startsAt, Captains: map[int]models.TelegramPlayer{}, Revisions: map[int]int64{}}
 	err = func() error {
 		rows, err := tx.QueryContext(ctx, `SELECT m.id,m.challonge_match_id,m.round,m.play_order,m.team1_id,m.team2_id,m.winner_id,m.state,m.scores_csv,COALESCE(a.name,''),COALESCE(b.name,''),m.desk_revision
- FROM telegram_bracket_matches m LEFT JOIN telegram_teams a ON a.id=m.team1_id LEFT JOIN telegram_teams b ON b.id=m.team2_id ORDER BY m.id FOR SHARE OF m`)
+ FROM telegram_bracket_matches m LEFT JOIN telegram_teams a ON a.id=m.team1_id LEFT JOIN telegram_teams b ON b.id=m.team2_id WHERE m.tournament_id=$1 ORDER BY m.id FOR SHARE OF m`, active.ID)
 		if err != nil {
 			return err
 		}

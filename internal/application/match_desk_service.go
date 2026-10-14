@@ -430,19 +430,15 @@ func (s *MatchDeskService) GetMatchDeskDetail(ctx context.Context, actor int64) 
 						mySide = "Red"
 					}
 					firstPick := m.Names[0]
-					format := "BO1"
-					totalRounds := TotalRounds(c.Matches)
 					round := 1
 					for _, bm := range c.Matches {
 						if bm.ID == m.ID {
 							round = bm.Round
-							if bm.Round >= totalRounds-1 && totalRounds > 1 {
-								format = "BO3"
-							}
 							break
 						}
 					}
-					rName := FormatRoundTitle(round, totalRounds)
+					format := FormatLabel(MatchFormat(c.Tournament, c.Matches, round))
+					rName := RoundTitle(c.Tournament, c.Matches, round)
 					schedTime := FormatScheduledTime(c.StartsAt, round, s.location)
 					roomRules := "Режим: Custom -> Draft Pick 5v5 | Наблюдатели: Выкл"
 
@@ -565,7 +561,6 @@ func (s *MatchDeskService) GetAdminMatches(ctx context.Context, actor int64) (bo
 	now := s.now()
 	err := s.update(ctx, func(d *models.MatchDesk, c models.DeskContext) error {
 		globalPaused = d.GlobalPaused
-		totalRounds := TotalRounds(c.Matches)
 		for _, m := range sortedDeskMatches(d) {
 			if !m.Active {
 				continue
@@ -586,7 +581,7 @@ func (s *MatchDeskService) GetAdminMatches(ctx context.Context, actor int64) (bo
 					break
 				}
 			}
-			rName := FormatRoundTitle(round, totalRounds)
+			rName := RoundTitle(c.Tournament, c.Matches, round)
 			schedTime := FormatScheduledTime(c.StartsAt, round, s.location)
 			matches = append(matches, AdminMatchItem{
 				MatchID:           m.ID,
@@ -639,7 +634,7 @@ func (s *MatchDeskService) GetAdminMatches(ctx context.Context, actor int64) (bo
 					MatchID:       b.ID,
 					Number:        b.PlayOrder,
 					Round:         b.Round,
-					RoundName:     FormatRoundTitle(b.Round, totalRounds),
+					RoundName:     RoundTitle(c.Tournament, c.Matches, b.Round),
 					Team1ID:       t1ID,
 					Team1Name:     b.Team1Name,
 					Team2ID:       t2ID,

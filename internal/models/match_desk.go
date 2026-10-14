@@ -71,8 +71,11 @@ type DeskNotice struct {
 
 // DeskContext is a consistent snapshot read in the store transaction.
 type DeskContext struct {
-	Revisions map[int]int64
-	Matches   []BracketMatch
-	Captains  map[int]TelegramPlayer
-	StartsAt  time.Time
+	// Tournament is the active tournament the matches belong to; nil in
+	// tests that do not care about formats and round names.
+	Tournament *TelegramTournament
+	Revisions  map[int]int64
+	Matches    []BracketMatch
+	Captains   map[int]TelegramPlayer
+	StartsAt   time.Time
 }
