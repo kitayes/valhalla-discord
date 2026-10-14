@@ -139,6 +139,11 @@ func (s *TelegramServiceImpl) applyReport(ctx context.Context, rep *models.Teleg
 	return nil
 }
 
+// CloseOpenReport is closeOpenReport for a referee's decision made in the bot.
+func (s *TelegramServiceImpl) CloseOpenReport(ctx context.Context, matchID int) {
+	s.closeOpenReport(ctx, matchID)
+}
+
 // closeOpenReport marks whatever report is open on a match as overridden; a
 // referee's decision supersedes the captains' exchange. matchID may be the
 // bracket id or the play order, as elsewhere in the admin commands.

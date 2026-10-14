@@ -140,6 +140,9 @@ type TelegramService interface {
 	AutoConfirmExpiredGames(ctx context.Context) ([]GameEvent, error)
 	SeriesFor(ctx context.Context, matchID int) (*SeriesState, error)
 	SeriesScores(ctx context.Context, ms []models.BracketMatch) map[int]string
+	// CloseOpenReport closes the captains' open report on a match the referee
+	// decided; matchID is the bracket id or the play order.
+	CloseOpenReport(ctx context.Context, matchID int)
 	RegisterTeamForTournament(ctx context.Context, captainTgID int64, tournamentID int) error
 	UnregisterTeamFromTournament(ctx context.Context, captainTgID int64, tournamentID int) error
 	GetBracketForTournament(ctx context.Context, tournamentID int) ([]models.BracketMatch, error)

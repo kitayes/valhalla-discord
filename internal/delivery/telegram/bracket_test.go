@@ -101,3 +101,16 @@ func TestQualifiedText(t *testing.T) {
 		t.Errorf("qualifiedText =\n%s\nwant\n%s", got, want)
 	}
 }
+
+func TestHasExplicitScore(t *testing.T) {
+	for args, want := range map[string]bool{
+		" 17 Vampires of Mars 2:0": true,
+		" 17 Vampires of Mars":     false,
+		" 17 Team 1-0":             true,
+		" 17 2:0":                  false, // a team named "2:0", no score
+	} {
+		if got := hasExplicitScore(args); got != want {
+			t.Errorf("hasExplicitScore(%q) = %v, want %v", args, got, want)
+		}
+	}
+}

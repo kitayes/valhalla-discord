@@ -106,6 +106,38 @@ func parseSetWinner(args string, defWin, defLose int) (playOrder int, team strin
 	return playOrder, strings.Join(rest, " "), win, lose, nil
 }
 
+// hasExplicitScore reports whether /set_winner arguments end with a score
+// ("<№> <team> 2:1") rather than leaving it to the walkover default.
+func hasExplicitScore(args string) bool {
+	fields := strings.Fields(args)
+	if len(fields) < 3 {
+		return false
+	}
+	_, _, ok := parseScorePair(fields[len(fields)-1])
+	return ok
+}
+
+// scoreMismatch explains why a referee's score does not fit the match's
+// best-of, or returns "".
+func (b *Bot) scoreMismatch(ctx context.Context, playOrder, win, lose int) string {
+	ms, err := b.bracket.Matches(ctx)
+	if err != nil {
+		return ""
+	}
+	t, _ := b.service.GetActiveTournament(ctx)
+	for _, m := range ms {
+		if m.PlayOrder != playOrder {
+			continue
+		}
+		bo := application.MatchFormat(t, ms, m.Round)
+		if err := application.ValidateScore(bo, win, lose); err != nil {
+			return fmt.Sprintf("Матч #%d: %s. Для технического поражения не указывайте счёт.", playOrder, err.Error())
+		}
+		return ""
+	}
+	return ""
+}
+
 func parseScorePair(s string) (int, int, bool) {
 	sep := ":"
 	if !strings.Contains(s, sep) {
@@ -403,10 +435,19 @@ func (b *Bot) handleBracketCommand(ctx context.Context, chatID int64, text strin
 		return true
 	case strings.HasPrefix(text, "/set_winner") && b.isAdmin(chatID):
 		defWin, defLose := b.bracket.Walkover()
-		po, team, win, lose, err := parseSetWinner(strings.TrimPrefix(text, "/set_winner"), defWin, defLose)
+		args := strings.TrimPrefix(text, "/set_winner")
+		po, team, win, lose, err := parseSetWinner(args, defWin, defLose)
 		if err != nil {
 			b.sendMessage(chatID, err.Error(), "main_menu")
 			return true
+		}
+		// A score typed by the referee must fit the round's best-of; without
+		// one it is a technical defeat with the configured walkover score.
+		if hasExplicitScore(args) {
+			if msg := b.scoreMismatch(ctx, po, win, lose); msg != "" {
+				b.sendMessage(chatID, msg, "main_menu")
+				return true
+			}
 		}
 		change, err := b.bracket.SetWinner(ctx, po, team, win, lose)
 		if err != nil {
@@ -414,6 +455,8 @@ func (b *Bot) handleBracketCommand(ctx context.Context, chatID int64, text strin
 			b.sendMessage(chatID, "Не удалось: "+err.Error(), "main_menu")
 			return true
 		}
+		// The referee's decision closes the captains' report or dispute.
+		b.service.CloseOpenReport(ctx, po)
 		b.applyBracketChange(ctx, change)
 		b.sendMessage(chatID, fmt.Sprintf("Матч #%d: победа '%s' %d:%d. Сброшено матчей дальше по сетке: %d.", po, team, win, lose, len(change.Reset)), "main_menu")
 		b.notifyTournamentChat(fmt.Sprintf("РЕШЕНИЕ АДМИНА\n\nМатч #%d: победа '%s' %d:%d.", po, team, win, lose))
