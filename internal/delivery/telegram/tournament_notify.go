@@ -121,6 +121,12 @@ func (b *Bot) notifyTechnicalDefeats(report string) {
 	b.notifyTournamentChat(report)
 }
 
+// AnnounceQualified is announceQualified for a qualifier finished from the
+// Mini App.
+func (b *Bot) AnnounceQualified(ctx context.Context, res *application.FinishResult) {
+	b.announceQualified(ctx, res)
+}
+
 // announceQualified posts a finished qualifier's results to the tournament
 // chat and tells each advancing team.
 func (b *Bot) announceQualified(ctx context.Context, res *application.FinishResult) {
@@ -129,7 +135,7 @@ func (b *Bot) announceQualified(ctx context.Context, res *application.FinishResu
 	}
 	b.notifyTournamentChat(qualifiedText(res))
 	for _, team := range res.Qualified {
-		b.notifyTeam(ctx, team.ID, fmt.Sprintf("Команда '%s' прошла квалификацию «%s» и выходит в основной этап.", team.Name, res.Tournament.Name), "main_menu")
+		b.notifyTeam(ctx, team.ID, fmt.Sprintf("Поздравляем! Команда '%s' прошла квалификацию «%s» и выходит в основной этап.\n\nМатчей в этой квалификации у вас больше нет — дальше ничего играть не нужно. О времени основного этапа сообщим отдельно.", team.Name, res.Tournament.Name), "main_menu")
 	}
 }
 
@@ -144,5 +150,6 @@ func qualifiedText(res *application.FinishResult) string {
 	for i, name := range names {
 		sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, name))
 	}
-	return strings.TrimRight(sb.String(), "\n")
+	sb.WriteString("\nДальнейшие матчи этой квалификации не играются.")
+	return sb.String()
 }

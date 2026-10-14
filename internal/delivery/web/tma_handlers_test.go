@@ -54,6 +54,8 @@ type mockTelegramSvc struct {
 	invited     []int // team ids passed to InviteTeam
 	// checkInWants records the state each check-in request asked for.
 	checkInWants []bool
+	// finishResult, when set, is what FinishTournament returns.
+	finishResult *application.FinishResult
 }
 
 func (m *mockTelegramSvc) GetActiveTournament(ctx context.Context) (*models.TelegramTournament, error) {
@@ -137,6 +139,9 @@ func (m *mockTelegramSvc) SetActiveTournament(ctx context.Context, id int) error
 }
 
 func (m *mockTelegramSvc) FinishTournament(ctx context.Context, id int) (*application.FinishResult, error) {
+	if m.finishResult != nil {
+		return m.finishResult, nil
+	}
 	return &application.FinishResult{Tournament: &models.TelegramTournament{ID: id}}, nil
 }
 
@@ -390,6 +395,26 @@ func TestTMAHandlers(t *testing.T) {
 		if rec := post(server.handleAdminTournamentInvite, `{"tournament_id":2,"team_id":7}`, admin); rec.Code != http.StatusOK || fmt.Sprint(tgSvc.invited) != "[7]" {
 			t.Errorf("invite: %d %s, invited %v", rec.Code, rec.Body.String(), tgSvc.invited)
 		}
+		// Finishing a qualifier from the Mini App announces it in Telegram.
+		announced := make(chan *application.FinishResult, 1)
+		server.WithQualifierAnnouncer(func(_ context.Context, res *application.FinishResult) { announced <- res })
+		tgSvc.finishResult = &application.FinishResult{
+			Tournament: &models.TelegramTournament{ID: 1, Name: "Квала"},
+			Qualified:  []models.TelegramTeam{{ID: 3, Name: "Alpha"}},
+		}
+		if rec := post(server.handleAdminTournamentFinish, `{"tournament_id":1}`, admin); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Alpha") {
+			t.Fatalf("finish: %d %s", rec.Code, rec.Body.String())
+		}
+		select {
+		case res := <-announced:
+			if len(res.Qualified) != 1 {
+				t.Errorf("announced %+v", res)
+			}
+		case <-time.After(2 * time.Second):
+			t.Error("finishing a qualifier from the Mini App announced nothing")
+		}
+		tgSvc.finishResult = nil
+
 		captain := context.WithValue(context.Background(), userCtxKey, &TelegramUser{ID: 12345})
 		if rec := post(server.handleAdminTournamentInvite, `{"tournament_id":2,"team_id":8}`, captain); rec.Code != http.StatusForbidden {
 			t.Errorf("non-admin invite: %d, want 403", rec.Code)

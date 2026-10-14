@@ -96,7 +96,7 @@ func TestQualifiedText(t *testing.T) {
 		Qualified:  []models.TelegramTeam{{ID: 3, Name: "Beta"}, {ID: 1, Name: "Alpha"}},
 	}
 	got := qualifiedText(res)
-	want := "КВАЛИФИКАЦИЯ ЗАВЕРШЕНА\n\n«Квалификация 1»: в основной этап прошли:\n1. Alpha\n2. Beta"
+	want := "КВАЛИФИКАЦИЯ ЗАВЕРШЕНА\n\n«Квалификация 1»: в основной этап прошли:\n1. Alpha\n2. Beta\n\nДальнейшие матчи этой квалификации не играются."
 	if got != want {
 		t.Errorf("qualifiedText =\n%s\nwant\n%s", got, want)
 	}

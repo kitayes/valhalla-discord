@@ -1778,6 +1778,11 @@ func (s *AdminServer) handleAdminTournamentFinish(w http.ResponseWriter, r *http
 		return
 	}
 	s.sseBroker.Broadcast("tournaments_update", map[string]interface{}{"action": "finished", "id": req.TournamentID})
+	if len(res.Qualified) > 0 && s.qualifierAnnouncer != nil {
+		// Detached from the request: messaging every team member takes longer
+		// than the admin should wait, and must not stop when the page closes.
+		go s.qualifierAnnouncer(context.WithoutCancel(r.Context()), res)
+	}
 	qualified := []string{}
 	for _, t := range res.Qualified {
 		qualified = append(qualified, t.Name)

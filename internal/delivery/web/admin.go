@@ -39,11 +39,14 @@ type AdminServer struct {
 	// answers with. The mini app can only send raw bytes, while everything
 	// downstream addresses photos by file ID, so this is the bridge between
 	// the two.
-	photoUploader func(ctx context.Context, data []byte, filename string) (string, error)
+	photoUploader  func(ctx context.Context, data []byte, filename string) (string, error)
 	bracketBuilder func(ctx context.Context, adminChatID int64) error
-	sseBroker     *SSEBroker
-	srv           *http.Server
-	startedAt     time.Time
+	// qualifierAnnouncer tells the Telegram chat and the qualified teams that
+	// a qualifier closed from the Mini App is over.
+	qualifierAnnouncer func(ctx context.Context, res *application.FinishResult)
+	sseBroker          *SSEBroker
+	srv                *http.Server
+	startedAt          time.Time
 	// botUsername is the bot the mini app is served from; it turns an invite
 	// token into a t.me deep link. Empty means the app hands out bare tokens.
 	botUsername string
@@ -202,6 +205,13 @@ func (s *AdminServer) WithPhotoUploader(fn func(ctx context.Context, data []byte
 // service uses it so that changes made in the bot reach the app too.
 func (s *AdminServer) Broadcast(event string, payload map[string]any) {
 	s.sseBroker.Broadcast(event, payload)
+}
+
+// WithQualifierAnnouncer installs the Telegram announcement for a qualifier
+// finished from the Mini App.
+func (s *AdminServer) WithQualifierAnnouncer(fn func(ctx context.Context, res *application.FinishResult)) *AdminServer {
+	s.qualifierAnnouncer = fn
+	return s
 }
 
 func (s *AdminServer) WithBracketBuilder(fn func(ctx context.Context, adminChatID int64) error) *AdminServer {
