@@ -345,7 +345,7 @@ func (s *TelegramServiceImpl) ToggleCheckIn(ctx context.Context, tgID int64) str
 			return fmt.Sprintf("Check-in невозможен: в команде %d из %d обязательных игроков. Доукомплектуйте состав (минимум %d игроков).", len(members), mainRosterSlots, mainRosterSlots)
 		}
 	}
-	if err := s.recordCheckIn(ctx, st, t.ID, checkedIn); err != nil {
+	if err := s.recordCheckIn(ctx, st, t.ID, checkedIn, tgID); err != nil {
 		if errors.Is(err, errNotEntered) {
 			return notEnteredMessage(t.Name, st.tournament)
 		}
@@ -398,7 +398,7 @@ func (s *TelegramServiceImpl) checkInState(ctx context.Context, team *models.Tel
 // the team row. A team checking in without an entry is entered while
 // registration is still open: a captain who confirms participation means to
 // play, and without the entry the bracket silently left the team out.
-func (s *TelegramServiceImpl) recordCheckIn(ctx context.Context, st teamCheckIn, teamID int, checkedIn bool) error {
+func (s *TelegramServiceImpl) recordCheckIn(ctx context.Context, st teamCheckIn, teamID int, checkedIn bool, by int64) error {
 	if st.tournament != nil {
 		if st.entry == nil {
 			if !checkedIn {
@@ -411,7 +411,7 @@ func (s *TelegramServiceImpl) recordCheckIn(ctx context.Context, st teamCheckIn,
 				return err
 			}
 		}
-		if err := s.repo.SetTournamentCheckIn(ctx, st.tournament.ID, teamID, checkedIn); err != nil {
+		if err := s.repo.SetTournamentCheckIn(ctx, st.tournament.ID, teamID, checkedIn, by); err != nil {
 			return err
 		}
 	}
@@ -1093,7 +1093,7 @@ func (s *TelegramServiceImpl) reinstateTeam(ctx context.Context, t *models.Teleg
 	// The tournament entry is what the bracket and the sweeps read; setting its
 	// check-in also moves its status off "disqualified".
 	if active, _ := s.repo.GetActiveTournament(ctx); active != nil {
-		s.logWrite("SetTournamentCheckIn", s.repo.SetTournamentCheckIn(ctx, active.ID, t.ID, true))
+		s.logWrite("SetTournamentCheckIn", s.repo.SetTournamentCheckIn(ctx, active.ID, t.ID, true, 0))
 	}
 	return fmt.Sprintf("Команда '%s' возвращена в турнир и отмечена как прошедшая check-in.", t.Name)
 }

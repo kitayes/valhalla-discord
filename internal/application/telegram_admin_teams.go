@@ -169,7 +169,7 @@ func (s *TelegramServiceImpl) AdminTeamAction(ctx context.Context, teamID int, a
 			return "", fmt.Errorf("команда '%s' снята с турнира: сначала верните её", team.Name)
 		}
 		checkedIn := action == TeamActionCheckIn
-		if err := s.recordCheckIn(ctx, st, team.ID, checkedIn); err != nil {
+		if err := s.recordCheckIn(ctx, st, team.ID, checkedIn, 0); err != nil {
 			if errors.Is(err, errNotEntered) && st.tournament != nil {
 				return "", errors.New(notEnteredMessage(team.Name, st.tournament))
 			}

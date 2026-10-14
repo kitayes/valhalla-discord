@@ -127,7 +127,12 @@ type Telegram interface {
 	UnregisterTeamFromTournament(ctx context.Context, tournamentID, teamID int) error
 	GetTournamentTeams(ctx context.Context, tournamentID int) ([]models.TelegramTeam, error)
 	GetTournamentTeam(ctx context.Context, tournamentID, teamID int) (*models.TournamentTeam, error)
-	SetTournamentCheckIn(ctx context.Context, tournamentID, teamID int, status bool) error
+	// SetTournamentCheckIn records who changed the check-in: a telegram id, 0
+	// for an admin.
+	SetTournamentCheckIn(ctx context.Context, tournamentID, teamID int, status bool, by int64) error
+	GetTournamentEntries(ctx context.Context, tournamentID int) ([]models.TournamentTeam, error)
+	EnterTeam(ctx context.Context, tournamentID, teamID int, source string, qualifiedFrom *int) error
+	HasQualifiedEntry(ctx context.Context, teamID, exceptTournamentID int) (bool, error)
 	SetTournamentTeamStatus(ctx context.Context, tournamentID, teamID int, status string) error
 	SetTournamentTeamParticipantID(ctx context.Context, tournamentID, teamID int, participantID int64) error
 	ClearTournamentTeamParticipantIDs(ctx context.Context, tournamentID int) error

@@ -14,16 +14,17 @@ import (
 // fakeTelegramRepo is an in-memory stand-in for repository.Telegram, just
 // enough to drive the registration state machine.
 type fakeTelegramRepo struct {
-	players      map[int64]*models.TelegramPlayer // by telegram id
-	teams        map[int]*models.TelegramTeam
-	members      []*models.TelegramPlayer // teammates created via CreateTeammate
-	settings     map[string]string
-	reports      []models.TelegramMatchReport
-	nextID       int
+	players         map[int64]*models.TelegramPlayer // by telegram id
+	teams           map[int]*models.TelegramTeam
+	members         []*models.TelegramPlayer // teammates created via CreateTeammate
+	settings        map[string]string
+	reports         []models.TelegramMatchReport
+	nextID          int
 	bracket         []models.BracketMatch
 	participants    map[int]int64 // teamID -> challonge participant id
 	tournaments     []*models.TelegramTournament
 	tournamentTeams map[string]*models.TournamentTeam
+	checkInWrites   int // SetTournamentCheckIn calls that hit an entry
 	// failSetting, when set for a key, makes SetSetting return that error
 	// instead of writing, so tests can exercise write-failure paths.
 	failSetting map[string]error
@@ -529,19 +530,63 @@ func (r *fakeTelegramRepo) GetTournamentTeam(ctx context.Context, tournamentID, 
 	return r.tournamentTeams[key], nil
 }
 
-func (r *fakeTelegramRepo) SetTournamentCheckIn(ctx context.Context, tournamentID, teamID int, status bool) error {
+func (r *fakeTelegramRepo) SetTournamentCheckIn(ctx context.Context, tournamentID, teamID int, status bool, by int64) error {
 	key := fmt.Sprintf("%d:%d", tournamentID, teamID)
 	if tt, ok := r.tournamentTeams[key]; ok {
 		tt.IsCheckedIn = status
-		tt.Status = "registered"
-		if status {
-			tt.Status = "checked_in"
+		if tt.Status != models.EntryQualified {
+			tt.Status = models.EntryRegistered
+			if status {
+				tt.Status = models.EntryCheckedIn
+			}
 		}
+		now := time.Now()
+		actor := by
+		tt.CheckedInAt, tt.CheckedInBy = &now, &actor
+		r.checkInWrites++
 	}
 	if t, ok := r.teams[teamID]; ok && r.isActiveTournament(tournamentID) {
 		t.IsCheckedIn = status
 	}
 	return nil
+}
+
+func (r *fakeTelegramRepo) GetTournamentEntries(ctx context.Context, tournamentID int) ([]models.TournamentTeam, error) {
+	var out []models.TournamentTeam
+	for _, tt := range r.tournamentTeams {
+		if tt.TournamentID == tournamentID {
+			e := *tt
+			if team := r.teams[tt.TeamID]; team != nil {
+				e.TeamName = team.Name
+			}
+			out = append(out, e)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].TeamID < out[j].TeamID })
+	return out, nil
+}
+
+func (r *fakeTelegramRepo) EnterTeam(ctx context.Context, tournamentID, teamID int, source string, qualifiedFrom *int) error {
+	key := fmt.Sprintf("%d:%d", tournamentID, teamID)
+	tt, ok := r.tournamentTeams[key]
+	if !ok {
+		tt = &models.TournamentTeam{TournamentID: tournamentID, TeamID: teamID, Status: models.EntryRegistered}
+		r.tournamentTeams[key] = tt
+	}
+	tt.Source, tt.QualifiedFrom = source, qualifiedFrom
+	return nil
+}
+
+func (r *fakeTelegramRepo) HasQualifiedEntry(ctx context.Context, teamID, exceptTournamentID int) (bool, error) {
+	for _, tt := range r.tournamentTeams {
+		if tt.TeamID != teamID || tt.TournamentID == exceptTournamentID || tt.Status != models.EntryQualified {
+			continue
+		}
+		if t, _ := r.GetTournamentByID(ctx, tt.TournamentID); t != nil && t.Stage == models.StageQualifier {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (r *fakeTelegramRepo) SetTournamentTeamStatus(ctx context.Context, tournamentID, teamID int, status string) error {
@@ -1023,5 +1068,3 @@ func TestLeaveTeam(t *testing.T) {
 		t.Fatalf("expected member team_id nil")
 	}
 }
-
-

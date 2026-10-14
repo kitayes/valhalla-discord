@@ -51,14 +51,51 @@ const (
 	SeedingTypeRandom = "random"
 )
 
+// Tournament stages. A qualifier stops once AdvanceCount teams are left and
+// they move on to the main stage, which only qualified and invited teams
+// enter. Standalone is a plain tournament played to the final.
+const (
+	StageStandalone = "standalone"
+	StageQualifier  = "qualifier"
+	StageMain       = "main"
+)
+
+// Tournament entry statuses and sources.
+const (
+	EntryRegistered = "registered"
+	EntryCheckedIn  = "checked_in"
+	EntryQualified  = "qualified" // advanced out of a qualifier
+	EntryNoShow     = "no_show"   // missed check-in, left out of the bracket
+
+	SourceRegistered = "registered" // the captain entered the team
+	SourceQualified  = "qualified"  // carried over from a qualifier
+	SourceInvited    = "invited"    // added by an admin
+)
+
+// Default best-of formats for a tournament's rounds.
+const (
+	DefaultFormatRounds    = 1
+	DefaultFormatSemifinal = 3
+	DefaultFormatFinal     = 3
+)
+
 type TelegramTournament struct {
-	ID             int        `json:"id"`
-	Name           string     `json:"name"`
-	Slug           string     `json:"slug"`
-	Status         string     `json:"status"`
-	TournamentType string     `json:"tournament_type"`
-	HoldThirdPlace bool       `json:"hold_third_place"`
-	SeedingType    string     `json:"seeding_type"`
+	ID             int    `json:"id"`
+	Name           string `json:"name"`
+	Slug           string `json:"slug"`
+	Status         string `json:"status"`
+	TournamentType string `json:"tournament_type"`
+	HoldThirdPlace bool   `json:"hold_third_place"`
+	SeedingType    string `json:"seeding_type"`
+	Stage          string `json:"stage"`
+	AdvanceCount   int    `json:"advance_count"`
+	// Best-of per round kind: 1, 3 or 5. In a qualifier FormatFinal applies
+	// to the deciding round, the one that sends teams to the main stage.
+	FormatRounds    int `json:"format_rounds"`
+	FormatSemifinal int `json:"format_semifinal"`
+	FormatFinal     int `json:"format_final"`
+	// BracketSize is the Challonge bracket size, a power of two, set at build.
+	BracketSize    int        `json:"bracket_size"`
 	TournamentTime *time.Time `json:"tournament_time,omitempty"`
 	ChallongeID    *int64     `json:"challonge_id,omitempty"`
 	ChallongeURL   string     `json:"challonge_url"`
@@ -70,18 +107,51 @@ type TelegramTournament struct {
 	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
+// Qualifier reports whether the tournament stops at AdvanceCount teams.
+func (t *TelegramTournament) Qualifier() bool {
+	return t != nil && t.Stage == StageQualifier && t.AdvanceCount > 0
+}
+
+// ApplyDefaults fills zero-valued settings of a tournament row.
+func (t *TelegramTournament) ApplyDefaults() {
+	if t.TournamentType == "" {
+		t.TournamentType = TournamentTypeSingleElimination
+	}
+	if t.SeedingType == "" {
+		t.SeedingType = SeedingTypeStars
+	}
+	if t.Stage == "" {
+		t.Stage = StageStandalone
+	}
+	if t.FormatRounds == 0 {
+		t.FormatRounds = DefaultFormatRounds
+	}
+	if t.FormatSemifinal == 0 {
+		t.FormatSemifinal = DefaultFormatSemifinal
+	}
+	if t.FormatFinal == 0 {
+		t.FormatFinal = DefaultFormatFinal
+	}
+}
+
 type TournamentTeam struct {
-	ID                     int       `json:"id"`
-	TournamentID           int       `json:"tournament_id"`
-	TeamID                 int       `json:"team_id"`
-	TeamName               string    `json:"team_name,omitempty"`
-	IsCheckedIn            bool      `json:"is_checked_in"`
-	Status                 string    `json:"status"`
-	ChallongeParticipantID *int64    `json:"challonge_participant_id,omitempty"`
-	Seed                   *int      `json:"seed,omitempty"`
-	Placement              *int      `json:"placement,omitempty"`
-	Points                 int       `json:"points"`
-	CreatedAt              time.Time `json:"created_at"`
+	ID                     int    `json:"id"`
+	TournamentID           int    `json:"tournament_id"`
+	TeamID                 int    `json:"team_id"`
+	TeamName               string `json:"team_name,omitempty"`
+	IsCheckedIn            bool   `json:"is_checked_in"`
+	Status                 string `json:"status"`
+	ChallongeParticipantID *int64 `json:"challonge_participant_id,omitempty"`
+	Seed                   *int   `json:"seed,omitempty"`
+	Placement              *int   `json:"placement,omitempty"`
+	Points                 int    `json:"points"`
+	Source                 string `json:"source"`
+	QualifiedFrom          *int   `json:"qualified_from,omitempty"`
+	// CheckedInAt/By record the last check-in change: when, and the telegram
+	// id of whoever made it (0 for an admin).
+	CheckedInAt *time.Time `json:"checked_in_at,omitempty"`
+	CheckedInBy *int64     `json:"checked_in_by,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
 }
 
 type TelegramTeam struct {

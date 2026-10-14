@@ -816,7 +816,7 @@ func (s *TelegramServiceImpl) confirmCheckIn(ctx context.Context, p *models.Tele
 		// This used to write only the team row, which the technical-defeat
 		// sweep does not read: a captain who pressed the reminder's button
 		// was still disqualified ten minutes after the start.
-		if err := s.recordCheckIn(ctx, st, team.ID, true); err != nil {
+		if err := s.recordCheckIn(ctx, st, team.ID, true, *p.TelegramID); err != nil {
 			if errors.Is(err, errNotEntered) {
 				return notEnteredMessage(team.Name, st.tournament), KbNone
 			}
