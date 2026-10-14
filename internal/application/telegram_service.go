@@ -139,6 +139,7 @@ type TelegramService interface {
 	JudgeGame(ctx context.Context, gameID, winnerTeamID int) (*GameEvent, error)
 	AutoConfirmExpiredGames(ctx context.Context) ([]GameEvent, error)
 	SeriesFor(ctx context.Context, matchID int) (*SeriesState, error)
+	SeriesScores(ctx context.Context, ms []models.BracketMatch) map[int]string
 	RegisterTeamForTournament(ctx context.Context, captainTgID int64, tournamentID int) error
 	UnregisterTeamFromTournament(ctx context.Context, captainTgID int64, tournamentID int) error
 	GetBracketForTournament(ctx context.Context, tournamentID int) ([]models.BracketMatch, error)

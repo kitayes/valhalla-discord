@@ -559,6 +559,55 @@
         .player-info { display: flex; flex-direction: column; gap: 2px; }
         .player-nick { font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 6px; }
         .player-meta { font-size: 11px; color: var(--text-muted); font-family: monospace; }
+        .series-box {
+            margin-top: 10px;
+            padding: 10px 12px;
+            border: 1px solid var(--card-border);
+            border-radius: 10px;
+            background: #11131c;
+        }
+        .series-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            color: var(--text-muted);
+        }
+        .series-format {
+            color: var(--accent-gold);
+            text-transform: none;
+        }
+        .series-score {
+            font-size: 22px;
+            font-weight: 800;
+            text-align: center;
+            margin: 6px 0;
+            font-variant-numeric: tabular-nums;
+        }
+        .series-games {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            justify-content: center;
+        }
+        .series-game {
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 6px;
+            border: 1px solid var(--card-border);
+        }
+        .series-game.won { color: var(--accent-green); border-color: rgba(46, 204, 113, 0.35); }
+        .series-game.lost { color: var(--accent-red); border-color: rgba(231, 76, 60, 0.35); }
+        .series-game.waiting { color: var(--accent-gold); border-color: rgba(243, 156, 18, 0.35); }
+        .series-hint {
+            margin-top: 8px;
+            font-size: 12px;
+            color: var(--text-muted);
+            text-align: center;
+        }
+
         /* Best-of label on every bracket match: BO1 / BO3 / BO5. */
         .badge-role.bo-badge {
             font-size: 10px;
@@ -1358,6 +1407,15 @@
                         <span class="status-pill" id="matchHostPill" style="background: rgba(243, 156, 18, 0.15); color: #f39c12; border: 1px solid rgba(243, 156, 18, 0.3);">
                             <span id="matchHostText">Вы создаёте лобби</span>
                         </span>
+                    </div>
+                    <div id="matchSeriesBox" class="series-box" style="display: none;">
+                        <div class="series-head">
+                            <span>Серия</span>
+                            <span id="matchSeriesFormat" class="series-format"></span>
+                        </div>
+                        <div class="series-score" id="matchSeriesScore">0 : 0</div>
+                        <div class="series-games" id="matchSeriesGames"></div>
+                        <div class="series-hint" id="matchSeriesHint"></div>
                     </div>
                     <button class="rules-toggle" id="rulesToggle" onclick="toggleRoomRules()">
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
@@ -3562,6 +3620,36 @@
             return 'lobby';
         }
 
+        // The game-by-game series of the viewer's match: score, games, and
+        // what to do next. Games are reported in the bot with screenshots.
+        function renderSeries(sr) {
+            const box = document.getElementById('matchSeriesBox');
+            if (!box) return;
+            if (!sr) {
+                box.style.display = 'none';
+                return;
+            }
+            box.style.display = 'block';
+            document.getElementById('matchSeriesFormat').textContent = sr.format || '';
+            document.getElementById('matchSeriesScore').textContent = `${sr.my_wins} : ${sr.opponent_wins}`;
+            const games = document.getElementById('matchSeriesGames');
+            games.innerHTML = (sr.games || []).map(g => {
+                let label = g.i_won ? 'победа' : 'поражение';
+                let cls = g.i_won ? 'won' : 'lost';
+                if (g.status === 'pending') { label = 'ждёт подтверждения'; cls = 'waiting'; }
+                if (g.status === 'disputed') { label = 'спор, решает судья'; cls = 'waiting'; }
+                return `<span class="series-game ${cls}">Катка ${g.game_no}: ${label}</span>`;
+            }).join('');
+            const hint = document.getElementById('matchSeriesHint');
+            if (sr.waiting_game_no) {
+                hint.textContent = `Катка ${sr.waiting_game_no} ждёт подтверждения в боте.`;
+            } else if (sr.next_game_no <= sr.bo) {
+                hint.textContent = `Дальше катка ${sr.next_game_no} из максимум ${sr.bo}. После неё капитан присылает скрин результата боту в личные сообщения.`;
+            } else {
+                hint.textContent = '';
+            }
+        }
+
         function renderPendingResult(pr) {
             const box = document.getElementById('pendingResultBox');
             if (!box) return;
@@ -4047,6 +4135,7 @@
             const m = data.match;
             currentActiveMatchData = m;
             currentPendingResult = data.pending_result || null;
+            renderSeries(data.series || null);
             currentActiveMatchID = m.match_id;
             currentMatchGeneration = m.generation;
             currentMyTeamName = m.my_team_name;
@@ -4652,6 +4741,9 @@
                 }
 
                 const isMyMatch = currentMyTeamName && (m.team1_name === currentMyTeamName || m.team2_name === currentMyTeamName);
+                // A finished match shows its result; an open one the live
+                // score of its game-by-game series.
+                const scoreParts = m.scores_csv ? m.scores_csv.split('-') : (m.series_score ? m.series_score.split(':') : null);
                 const card = document.createElement('div');
                 let borderClass = '';
                 let statusBadge = `<span class="bracket-status status-pending">ОЖИДАНИЕ</span>`;
@@ -4678,11 +4770,11 @@
                     </div>
                     <div class="match-row ${m.winner_id != null && m.winner_id === m.team1_id ? 'winner' : ''}">
                         <span style="${isMyMatch && m.team1_name === currentMyTeamName ? 'font-weight:700; color:#3498db;' : ''}">${escapeHtml(m.team1_name || 'Ожидание')}</span>
-                        <span class="match-score">${escapeHtml(m.scores_csv ? m.scores_csv.split('-')[0] : '—')}</span>
+                        <span class="match-score">${escapeHtml(scoreParts ? scoreParts[0].trim() : '—')}</span>
                     </div>
                     <div class="match-row ${m.winner_id != null && m.winner_id === m.team2_id ? 'winner' : ''}">
                         <span style="${isMyMatch && m.team2_name === currentMyTeamName ? 'font-weight:700; color:#3498db;' : ''}">${escapeHtml(m.team2_name || 'Ожидание')}</span>
-                        <span class="match-score">${escapeHtml(m.scores_csv ? m.scores_csv.split('-')[1] || '' : '—')}</span>
+                        <span class="match-score">${escapeHtml(scoreParts ? (scoreParts[1] || '').trim() : '—')}</span>
                     </div>
                 `;
                 fragment.appendChild(card);

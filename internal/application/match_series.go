@@ -437,3 +437,39 @@ func (s *TelegramServiceImpl) recordSeries(ctx context.Context, m models.Bracket
 	}
 	return rep, nil
 }
+
+// SeriesScores is the live score of each open match's series, team 1 first
+// ("1:0"), keyed by bracket match id; matches without counted games are absent.
+func (s *TelegramServiceImpl) SeriesScores(ctx context.Context, ms []models.BracketMatch) map[int]string {
+	out := map[int]string{}
+	var ids []int
+	byID := map[int]models.BracketMatch{}
+	for _, m := range ms {
+		if m.State == models.BracketOpen && m.Team1ID != nil && m.Team2ID != nil {
+			ids = append(ids, m.ID)
+			byID[m.ID] = m
+		}
+	}
+	games, err := s.repo.ListGamesForMatches(ctx, ids)
+	if err != nil {
+		return out
+	}
+	wins := map[int][2]int{}
+	for _, g := range games {
+		m, ok := byID[g.BracketMatchID]
+		if !ok || g.MatchRevision != m.Revision || g.Status != models.GameConfirmed {
+			continue
+		}
+		w := wins[m.ID]
+		if g.WinnerTeamID == *m.Team1ID {
+			w[0]++
+		} else {
+			w[1]++
+		}
+		wins[m.ID] = w
+	}
+	for id, w := range wins {
+		out[id] = fmt.Sprintf("%d:%d", w[0], w[1])
+	}
+	return out
+}

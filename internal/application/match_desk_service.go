@@ -240,7 +240,11 @@ func (s *MatchDeskService) card(m *models.DeskMatch, side int, c models.DeskCont
 	if gameID == "" {
 		gameID = "Не указан"
 	}
-	text := fmt.Sprintf("Матч #%d: %s vs %s\nКапитан соперника: %s\nGame ID капитана соперника: %s\nСтатус: %s", m.Number, m.Names[0], m.Names[1], deskCaptainLabel(opponent), gameID, deskStatus(m))
+	text := fmt.Sprintf("Матч #%d: %s vs %s\nФормат: %s\nКапитан соперника: %s\nGame ID капитана соперника: %s\nСтатус: %s",
+		m.Number, m.Names[0], m.Names[1], FormatLong(MatchFormat(c.Tournament, c.Matches, deskRound(m, c))), deskCaptainLabel(opponent), gameID, deskStatus(m))
+	if m.Ready[0] && m.Ready[1] {
+		text += "\nПосле каждой катки капитан присылает сюда скрин результата — бот спросит, кто победил, и попросит соперника подтвердить."
+	}
 	if !m.Ready[0] || !m.Ready[1] {
 		if m.PausedAt.IsZero() {
 			text += "\nГотовность до: " + m.Deadline.In(s.location).Format("02.01 15:04 MST")

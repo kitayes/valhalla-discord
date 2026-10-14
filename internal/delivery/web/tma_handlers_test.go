@@ -56,6 +56,7 @@ type mockTelegramSvc struct {
 	checkInWants []bool
 	// finishResult, when set, is what FinishTournament returns.
 	finishResult *application.FinishResult
+	seriesScores map[int]string
 }
 
 func (m *mockTelegramSvc) GetActiveTournament(ctx context.Context) (*models.TelegramTournament, error) {
@@ -130,6 +131,14 @@ func (m *mockTelegramSvc) InviteTeam(ctx context.Context, mainID, teamID int) er
 }
 
 func (m *mockTelegramSvc) SetEventHook(fn func(event string, payload map[string]any)) {}
+
+func (m *mockTelegramSvc) SeriesScores(ctx context.Context, ms []models.BracketMatch) map[int]string {
+	return m.seriesScores
+}
+
+func (m *mockTelegramSvc) SeriesFor(ctx context.Context, matchID int) (*application.SeriesState, error) {
+	return nil, nil
+}
 
 func (m *mockTelegramSvc) SetActiveTournament(ctx context.Context, id int) error {
 	for i := range m.tournaments {

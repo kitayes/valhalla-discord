@@ -57,6 +57,8 @@ type BracketMatchView struct {
 	models.BracketMatch
 	RoundName   string `json:"round_name"`
 	MatchFormat string `json:"match_format"`
+	// SeriesScore is the live score of an open match's series, team 1 first.
+	SeriesScore string `json:"series_score,omitempty"`
 }
 
 type BracketResponse struct {
@@ -88,6 +90,51 @@ type ActiveMatchResponse struct {
 	TournamentStatus *TeamTournamentStatus `json:"tournament_status,omitempty"`
 	// PendingResult is set while a reported score awaits the other captain.
 	PendingResult *PendingResult `json:"pending_result,omitempty"`
+	// Series is the match's game-by-game series, seen from the viewer's team.
+	Series *SeriesView `json:"series,omitempty"`
+}
+
+// SeriesView is a series for the Mini App.
+type SeriesView struct {
+	Format        string           `json:"format"` // "BO3 — до 2 побед"
+	BO            int              `json:"bo"`
+	MyWins        int              `json:"my_wins"`
+	OpponentWins  int              `json:"opponent_wins"`
+	NextGameNo    int              `json:"next_game_no"`
+	Games         []SeriesGameView `json:"games"`
+	WaitingGameNo int              `json:"waiting_game_no,omitempty"` // a game awaiting confirmation
+}
+
+type SeriesGameView struct {
+	GameNo int    `json:"game_no"`
+	IWon   bool   `json:"i_won"`
+	Status string `json:"status"`
+}
+
+// seriesFor builds the viewer's series view, nil when unavailable.
+func (s *AdminServer) seriesFor(ctx context.Context, matchID, myTeamID int) *SeriesView {
+	if s.services.TelegramService == nil || matchID <= 0 {
+		return nil
+	}
+	st, err := s.services.TelegramService.SeriesFor(ctx, matchID)
+	if err != nil || st == nil {
+		return nil
+	}
+	v := &SeriesView{Format: application.FormatLong(st.BO), BO: st.BO, NextGameNo: st.NextGameNo, Games: []SeriesGameView{}}
+	for team, wins := range st.Wins {
+		if team == myTeamID {
+			v.MyWins = wins
+		} else {
+			v.OpponentWins = wins
+		}
+	}
+	for _, g := range st.Games {
+		v.Games = append(v.Games, SeriesGameView{GameNo: g.GameNo, IWon: g.WinnerTeamID == myTeamID, Status: g.Status})
+	}
+	if st.Open != nil {
+		v.WaitingGameNo = st.Open.GameNo
+	}
+	return v
 }
 
 // PendingResult is the open report on the viewer's match, from their side.
@@ -256,12 +303,17 @@ func (s *AdminServer) handleBracket(w http.ResponseWriter, r *http.Request) {
 		challongeURL = "https://challonge.com/" + challongeURL
 	}
 
+	var scores map[int]string
+	if s.services.TelegramService != nil {
+		scores = s.services.TelegramService.SeriesScores(ctx, matches)
+	}
 	views := make([]BracketMatchView, 0, len(matches))
 	for _, m := range matches {
 		views = append(views, BracketMatchView{
 			BracketMatch: m,
 			RoundName:    application.RoundTitle(tourney, matches, m.Round),
 			MatchFormat:  application.FormatLabel(application.MatchFormat(tourney, matches, m.Round)),
+			SeriesScore:  scores[m.ID],
 		})
 	}
 
@@ -359,6 +411,7 @@ func (s *AdminServer) handleActiveMatch(w http.ResponseWriter, r *http.Request) 
 			LastRoundName: detail.RoundName,
 		},
 		PendingResult: s.pendingResultFor(r.Context(), detail.MatchID, detail.MyTeamID),
+		Series:        s.seriesFor(r.Context(), detail.MatchID, detail.MyTeamID),
 		Match: &MatchDeskDetail{
 			MatchID:                 detail.MatchID,
 			Number:                  detail.Number,

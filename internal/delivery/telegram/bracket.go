@@ -200,7 +200,7 @@ func (b *Bot) notifyMatchesReady(ctx context.Context, ms []models.BracketMatch) 
 			continue
 		}
 		head := fmt.Sprintf("Матч #%d — %s, %s: %s vs %s", m.PlayOrder, application.RoundTitle(t, all, m.Round),
-			application.FormatLabel(application.MatchFormat(t, all, m.Round)), m.Team1Name, m.Team2Name)
+			application.FormatLong(application.MatchFormat(t, all, m.Round)), m.Team1Name, m.Team2Name)
 		text1 := fmt.Sprintf("%s\n\nВаш соперник — команда «%s»!\nЗайдите в приложение для подтверждения готовности к игре.", head, m.Team2Name)
 		text2 := fmt.Sprintf("%s\n\nВаш соперник — команда «%s»!\nЗайдите в приложение для подтверждения готовности к игре.", head, m.Team1Name)
 		b.notifyTeam(ctx, *m.Team1ID, text1, "main_menu")
@@ -253,7 +253,7 @@ func (b *Bot) announceBracket(ctx context.Context, built *application.BracketBui
 			continue
 		}
 		text := fmt.Sprintf("Сетка готова! %s, %s, матч #%d: %s vs %s.\nСетка: %s\n\nЗайдите в приложение для подтверждения готовности к игре.",
-			application.RoundTitle(t, ms, m.Round), application.FormatLabel(application.MatchFormat(t, ms, m.Round)), m.PlayOrder, m.Team1Name, m.Team2Name, built.URL)
+			application.RoundTitle(t, ms, m.Round), application.FormatLong(application.MatchFormat(t, ms, m.Round)), m.PlayOrder, m.Team1Name, m.Team2Name, built.URL)
 		b.notifyTeam(ctx, *m.Team1ID, text, "main_menu")
 		b.notifyTeam(ctx, *m.Team2ID, text, "main_menu")
 	}
