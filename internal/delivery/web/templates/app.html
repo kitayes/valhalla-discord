@@ -559,6 +559,16 @@
         .player-info { display: flex; flex-direction: column; gap: 2px; }
         .player-nick { font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 6px; }
         .player-meta { font-size: 11px; color: var(--text-muted); font-family: monospace; }
+        /* Best-of label on every bracket match: BO1 / BO3 / BO5. */
+        .badge-role.bo-badge {
+            font-size: 10px;
+            font-weight: 800;
+            padding: 1px 6px;
+            letter-spacing: 0.3px;
+            color: var(--accent-gold);
+            border-color: rgba(243, 156, 18, 0.4);
+        }
+
         .badge-role {
             font-size: 11px;
             padding: 2px 8px;
@@ -1081,6 +1091,7 @@
             font-size: 11px;
             font-weight: 700;
             margin-left: 6px;
+            white-space: nowrap;
             animation: fadeInOut 2s infinite;
         }
         @keyframes fadeInOut {
@@ -1410,6 +1421,7 @@
         <div class="card-header" style="margin-bottom: 10px;">
             <span class="card-title">
                 Турнирная сетка
+                <span class="status-pill status-waiting" id="bracketStageBadge" style="display:none; font-size: 10px; padding: 2px 8px;"></span>
                 <span class="bracket-live-count" id="bracketLiveCount" style="display:none;"></span>
             </span>
             <div style="display: flex; gap: 6px; align-items: center;">
@@ -1775,6 +1787,27 @@
                     <button class="btn-copy" onclick="activateSelectedTourney()" style="flex: 1; justify-content: center;">
                         <span>Переключить</span>
                     </button>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                    <button class="btn-copy" onclick="openSelectedTourneySettings()" style="flex: 1; justify-content: center;">
+                        <span>Настройки выбранного</span>
+                    </button>
+                    <button class="btn-copy" id="btnFinishQualifierSelected" onclick="finishSelectedQualifier()" style="flex: 1; justify-content: center; display: none;">
+                        <span>Подвести итоги квалы</span>
+                    </button>
+                </div>
+                <div id="mainStageTools" style="display: none; border: 1px solid var(--card-border); border-radius: 10px; padding: 10px; flex-direction: column; gap: 8px;">
+                    <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 700;">Участники основного этапа</div>
+                    <div id="mainStageQualifierList" style="display: flex; flex-direction: column; gap: 6px; font-size: 13px;"></div>
+                    <button class="btn-copy" onclick="importQualifiedToSelected()" style="justify-content: center;">
+                        <span>Добавить прошедших из отмеченных квалификаций</span>
+                    </button>
+                    <div style="display: flex; gap: 8px;">
+                        <select id="mainStageInviteSelect" class="form-input" style="flex: 2; font-size: 13px; margin-bottom: 0;"></select>
+                        <button class="btn-copy" onclick="inviteToSelected()" style="flex: 1; justify-content: center;">
+                            <span>Пригласить</span>
+                        </button>
+                    </div>
                 </div>
                 <button class="btn btn-green" id="btnFinishTourneyAdmin" onclick="finishCurrentTourneyAdmin()" style="width: 100%; justify-content: center;">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
@@ -2195,19 +2228,35 @@
         </div>
     </div>
 
-    <!-- Create Tournament Modal -->
+    <!-- Create / Edit Tournament Modal -->
     <div class="modal" id="createTourneyModal">
         <div class="modal-content">
-            <div class="modal-title">Начать новый турнир</div>
+            <div class="modal-title" id="tourneyModalTitle">Начать новый турнир</div>
             <div class="form-group" style="margin-bottom: 12px;">
                 <label class="form-label">Название турнира</label>
                 <input type="text" id="newTourneyName" class="form-input" placeholder="например: Valhalla Cup #2">
             </div>
             <div class="form-group" style="margin-bottom: 12px;">
-                <label class="form-label">Формат турнира</label>
+                <label class="form-label">Этап</label>
+                <select id="newTourneyStage" class="form-input" onchange="onTourneyStageChange()">
+                    <option value="standalone">Обычный турнир (до финала)</option>
+                    <option value="qualifier">Квалификация (до выхода N команд)</option>
+                    <option value="main">Основной этап (прошедшие и приглашённые)</option>
+                </select>
+            </div>
+            <div class="form-group" id="advanceGroup" style="margin-bottom: 12px; display: none;">
+                <label class="form-label">Сколько команд выходит в основной этап</label>
+                <select id="newTourneyAdvance" class="form-input">
+                    <option value="4">4</option>
+                    <option value="8" selected>8</option>
+                    <option value="16">16</option>
+                </select>
+            </div>
+            <div class="form-group" style="margin-bottom: 12px;">
+                <label class="form-label">Формат сетки</label>
                 <select id="newTourneyType" class="form-input" onchange="onTourneyTypeChange()">
                     <option value="single elimination">Single Elimination (на вылет)</option>
-                    <option value="double elimination">Double Elimination (до 2 поражений)</option>
+                    <option value="double elimination">Double Elimination (с нижней сеткой)</option>
                     <option value="round robin">Round Robin (круговой турнир)</option>
                     <option value="swiss">Swiss (швейцарская система)</option>
                 </select>
@@ -2217,13 +2266,30 @@
                 <label for="newTourneyHoldThirdPlace" class="form-label" style="margin-bottom: 0; cursor: pointer;">Матч за 3-е место</label>
             </div>
             <div class="form-group" style="margin-bottom: 12px;">
+                <label class="form-label">Формат матчей</label>
+                <div style="display: flex; gap: 8px;">
+                    <div style="flex: 1; min-width: 0;">
+                        <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">Раунды</div>
+                        <select id="newTourneyFormatRounds" class="form-input"><option value="1" selected>BO1</option><option value="3">BO3</option><option value="5">BO5</option></select>
+                    </div>
+                    <div style="flex: 1; min-width: 0;" id="formatSemiGroup">
+                        <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">Полуфинал</div>
+                        <select id="newTourneyFormatSemi" class="form-input"><option value="1">BO1</option><option value="3" selected>BO3</option><option value="5">BO5</option></select>
+                    </div>
+                    <div style="flex: 1; min-width: 0;">
+                        <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;" id="formatFinalLabel">Финал</div>
+                        <select id="newTourneyFormatFinal" class="form-input"><option value="1">BO1</option><option value="3" selected>BO3</option><option value="5">BO5</option></select>
+                    </div>
+                </div>
+            </div>
+            <div class="form-group" style="margin-bottom: 12px;">
                 <label class="form-label">Метод посева команд</label>
                 <select id="newTourneySeeding" class="form-input">
                     <option value="stars">По звёздам состава (сильные выше)</option>
                     <option value="random">Случайный посев (рандом)</option>
                 </select>
             </div>
-            <div class="form-group" style="margin-bottom: 12px;">
+            <div class="form-group" id="newTourneyTimeGroup" style="margin-bottom: 12px;">
                 <label class="form-label">Дата и время начала (необязательно)</label>
                 <input type="datetime-local" id="newTourneyTime" class="form-input">
             </div>
@@ -2232,7 +2298,7 @@
                 <input type="text" id="newTourneyChallongeUrl" class="form-input" placeholder="например: valhalla_cup_2">
             </div>
             <div style="display: flex; gap: 8px;">
-                <button class="btn btn-blue" style="flex: 1; justify-content: center;" onclick="confirmCreateTourneySubmit()">Запустить турнир</button>
+                <button class="btn btn-blue" style="flex: 1; justify-content: center;" id="tourneyModalSubmit" onclick="confirmCreateTourneySubmit()">Запустить турнир</button>
                 <button class="btn btn-red-outline" style="flex: 1; justify-content: center;" onclick="closeCreateTourneyModal()">Отмена</button>
             </div>
         </div>
@@ -2243,7 +2309,7 @@
         <div class="modal-content">
             <div class="modal-title">Время старта турнира</div>
             <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
-                Укажите дату и время начала турнира. За 1 час до этого времени бот автоматически закроет регистрацию и сформирует турнирную сетку.
+                Укажите дату и время начала турнира. За 1 час до старта закроется регистрация, в момент старта закроется Check-in и бот сформирует сетку из подтвердивших участие команд.
             </p>
             <div class="form-group" style="margin-bottom: 16px;">
                 <label class="form-label">Дата и время начала</label>
@@ -2565,7 +2631,10 @@
                     const isCaptain = data.player ? data.player.is_captain : false;
                     currentUserIsCaptain = isCaptain;
                     const regOpen = data.registration_open !== false;
-                    updateCheckInStatus(data.team.is_checked_in, isCaptain, regOpen);
+                    // The tournament entry is what the bracket reads; the team
+                    // row only mirrors it.
+                    const checkedIn = data.tournament_team ? !!data.tournament_team.is_checked_in : !!data.team.is_checked_in;
+                    updateCheckInStatus(checkedIn, isCaptain, regOpen, checkInOpenFor(data.active_tournament));
                     const canEdit = !data.team.is_checked_in && regOpen;
                     renderRoster(cachedTeammates, canEdit, isCaptain, data.player ? data.player.id : null);
 
@@ -2590,23 +2659,37 @@
                             const btnUnreg = document.getElementById('btnUnregisterStage');
 
                             if (data.tournament_team) {
-                                if (data.tournament_team.is_checked_in) {
+                                const entry = data.tournament_team;
+                                if (entry.status === 'no_show') {
+                                    stageBadge.textContent = 'НЕ ПРОШЛИ CHECK-IN';
+                                    stageBadge.className = 'status-pill status-eliminated';
+                                } else if (entry.status === 'qualified') {
+                                    stageBadge.textContent = 'ПРОШЛИ В ОСНОВУ';
+                                    stageBadge.className = 'status-pill status-ready';
+                                } else if (entry.is_checked_in) {
                                     stageBadge.textContent = 'CHECK-IN ПРОЙДЕН';
+                                    stageBadge.className = 'status-pill status-ready';
+                                } else if (entry.source === 'invited') {
+                                    stageBadge.textContent = 'ПРИГЛАШЕНЫ';
+                                    stageBadge.className = 'status-pill status-ready';
+                                } else if (entry.source === 'qualified') {
+                                    stageBadge.textContent = 'ИЗ КВАЛИФИКАЦИИ';
                                     stageBadge.className = 'status-pill status-ready';
                                 } else {
                                     stageBadge.textContent = 'ЗАЯВЛЕНЫ';
                                     stageBadge.className = 'status-pill status-ready';
                                 }
-                                if (isCaptain && !data.tournament_team.is_checked_in && data.active_tournament.status === 'registration') {
+                                if (isCaptain && !data.tournament_team.is_checked_in && data.active_tournament.status === 'registration' && data.active_tournament.stage !== 'main') {
                                     btnUnreg.style.display = 'flex';
                                 } else {
                                     btnUnreg.style.display = 'none';
                                 }
                                 btnReg.style.display = 'none';
                             } else {
-                                stageBadge.textContent = 'НЕ ЗАЯВЛЕНЫ';
+                                // The main stage takes only qualified and invited teams.
+                                stageBadge.textContent = data.active_tournament.stage === 'main' ? 'НЕ В ОСНОВНОМ ЭТАПЕ' : 'НЕ ЗАЯВЛЕНЫ';
                                 stageBadge.className = 'status-pill status-eliminated';
-                                if (isCaptain && data.active_tournament.status === 'registration') {
+                                if (isCaptain && data.active_tournament.status === 'registration' && data.active_tournament.stage !== 'main') {
                                     btnReg.style.display = 'flex';
                                 } else {
                                     btnReg.style.display = 'none';
@@ -2754,7 +2837,19 @@
         }
 
         let demoCheckedIn = false;
-        function updateCheckInStatus(isChecked, isCaptain = true, regOpen = true) {
+        let currentCheckInOpen = true;
+
+        // Check-in closes at the start time or when the bracket is built,
+        // whichever comes first; the server enforces the same rule.
+        function checkInOpenFor(t) {
+            if (!t) return true;
+            if (t.status !== 'registration' && t.status !== 'draft') return false;
+            if (t.tournament_time && new Date(t.tournament_time).getTime() <= Date.now()) return false;
+            return true;
+        }
+
+        function updateCheckInStatus(isChecked, isCaptain = true, regOpen = true, checkInOpen = true) {
+            currentCheckInOpen = checkInOpen;
             demoCheckedIn = isChecked;
             currentTeamCheckedIn = isChecked;
             currentUserIsCaptain = isCaptain;
@@ -2790,11 +2885,14 @@
                 lockedNotice.style.display = 'none';
             }
 
-            if (!isCaptain) {
+            if (!checkInOpen) {
+                btnText.textContent = isChecked ? 'Check-in пройден' : 'Check-in закрыт';
+            }
+            if (!isCaptain || !checkInOpen) {
                 btn.disabled = true;
                 btn.style.opacity = '0.5';
                 btn.style.cursor = 'not-allowed';
-                notice.style.display = 'block';
+                notice.style.display = isCaptain ? 'none' : 'block';
                 if (inviteSection) inviteSection.style.display = 'none';
             } else {
                 btn.disabled = false;
@@ -2832,16 +2930,36 @@
                 showToast(demoCheckedIn ? 'Check-in подтверждён' : 'Check-in отменён', true);
                 return;
             }
-            const res = await apiFetch('/api/team/checkin', { method: 'POST' });
+            // Ask for the state the button shows, never "toggle": a page that
+            // missed a check-in made in the bot must not undo it.
+            const want = !currentTeamCheckedIn;
+            if (!want) {
+                const confirmed = await appConfirm('Снять Check-in? Без него команда не попадёт в сетку, если не подтвердит участие снова до старта.');
+                if (!confirmed) return;
+            }
+            const res = await apiFetch('/api/team/checkin', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ checked_in: want })
+            });
             if (res && res.ok) {
                 showToast(res.message || (res.is_checked_in ? 'Check-in подтверждён' : 'Check-in отменён'), true);
                 loadProfile();
             } else if (res && (res.error || res.message)) {
                 showToast(res.error || res.message, false);
+                loadProfile();
             } else {
                 showToast('Ошибка при выполнении чек-ина', false);
             }
         }
+
+        // A Mini App left open in the background misses changes made in the
+        // bot; re-read the team when the user comes back to it.
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible' && initData) {
+                loadProfile();
+            }
+        });
 
         // ── Пачка 4: In-app registration & roster management ──────────────────
 
@@ -4478,8 +4596,11 @@
                 return;
             }
 
-            // Live count badge
-            const liveCount = data.matches.filter(m => m.state === 'open').length;
+            // Only a running tournament has live matches. A finished one —
+            // a qualifier cut at its advance line included — keeps none.
+            const tournamentRunning = data.tournament_status === 'active';
+            currentBracketRunning = tournamentRunning;
+            const liveCount = tournamentRunning ? data.matches.filter(m => m.state === 'open').length : 0;
             const liveCountEl = document.getElementById('bracketLiveCount');
             if (liveCountEl) {
                 if (liveCount > 0) {
@@ -4489,18 +4610,31 @@
                     liveCountEl.style.display = 'none';
                 }
             }
+            const stageBadge = document.getElementById('bracketStageBadge');
+            if (stageBadge) {
+                const stageText = data.stage === 'qualifier' ? 'Квалификация' : (data.stage === 'main' ? 'Основной этап' : '');
+                stageBadge.textContent = stageText;
+                stageBadge.style.display = stageText ? 'inline-flex' : 'none';
+            }
 
             const roundMap = {};
+            const roundOrder = {};
             if (data.schedule) {
-                data.schedule.forEach(s => { roundMap[s.round] = s; });
+                data.schedule.forEach((s, i) => { roundMap[s.round] = s; roundOrder[s.round] = i; });
             }
+            // The cache lists lower-bracket (negative) rounds first; show the
+            // rounds in play order: upper bracket, lower bracket, grand final.
+            const ordered = data.matches.slice().sort((a, b) => {
+                const ra = roundOrder[a.round] ?? a.round, rb = roundOrder[b.round] ?? b.round;
+                return ra !== rb ? ra - rb : a.play_order - b.play_order;
+            });
 
             const fragment = document.createDocumentFragment();
             let lastRound = null;
-            data.matches.forEach(m => {
+            ordered.forEach(m => {
                 if (m.round !== lastRound) {
                     lastRound = m.round;
-                    const rInfo = roundMap[lastRound];
+                    const rInfo = roundMap[lastRound] || { round_name: m.round_name, match_format: m.match_format };
                     const roundHeader = document.createElement('div');
                     roundHeader.className = 'admin-section-header';
                     roundHeader.style.marginTop = '14px';
@@ -4524,9 +4658,11 @@
                 if (m.state === 'complete') {
                     borderClass = 'match-ready';
                     statusBadge = `<span class="bracket-status status-complete">ЗАВЕРШЁН</span>`;
-                } else if (m.state === 'open') {
+                } else if (m.state === 'open' && tournamentRunning) {
                     borderClass = 'match-live';
                     statusBadge = `<span class="bracket-status status-live"><span class="status-dot live-pulse"></span> LIVE</span>`;
+                } else if (m.state === 'open' || data.tournament_status === 'completed') {
+                    statusBadge = `<span class="bracket-status status-pending">НЕ СЫГРАН</span>`;
                 }
                 card.className = 'bracket-match ' + borderClass + (isMyMatch ? ' my-bracket-match' : '');
                 card.onclick = () => openBracketMatchModal(m.id || m.play_order);
@@ -4534,16 +4670,17 @@
                     <div class="bracket-match-header">
                         <span style="display:flex; align-items:center; gap:6px;">
                             <span>Матч #${m.play_order}</span>
+                            ${m.match_format ? `<span class="badge-role bo-badge">${escapeHtml(m.match_format)}</span>` : ''}
                             ${isMyMatch ? `<span class="badge-role" style="background:rgba(52,152,219,0.25); color:#3498db; font-size:9px; padding:1px 6px;">ВАШ МАТЧ</span>` : ''}
                             <span style="font-size: 10px; color: var(--text-muted); display: inline-flex; align-items: center; gap: 2px;">• составы</span>
                         </span>
                         <span>${statusBadge}</span>
                     </div>
-                    <div class="match-row ${m.winner_id === m.team1_id ? 'winner' : ''}">
+                    <div class="match-row ${m.winner_id != null && m.winner_id === m.team1_id ? 'winner' : ''}">
                         <span style="${isMyMatch && m.team1_name === currentMyTeamName ? 'font-weight:700; color:#3498db;' : ''}">${escapeHtml(m.team1_name || 'Ожидание')}</span>
                         <span class="match-score">${escapeHtml(m.scores_csv ? m.scores_csv.split('-')[0] : '—')}</span>
                     </div>
-                    <div class="match-row ${m.winner_id === m.team2_id ? 'winner' : ''}">
+                    <div class="match-row ${m.winner_id != null && m.winner_id === m.team2_id ? 'winner' : ''}">
                         <span style="${isMyMatch && m.team2_name === currentMyTeamName ? 'font-weight:700; color:#3498db;' : ''}">${escapeHtml(m.team2_name || 'Ожидание')}</span>
                         <span class="match-score">${escapeHtml(m.scores_csv ? m.scores_csv.split('-')[1] || '' : '—')}</span>
                     </div>
@@ -4631,6 +4768,8 @@
 
         function adminTeamStatus(t) {
             if (t.status === 'disqualified') return { text: 'ТП', cls: 'status-waiting' };
+            if (t.status === 'no_show') return { text: 'НЕ В СЕТКЕ', cls: 'status-eliminated' };
+            if (t.status === 'qualified') return { text: 'ПРОШЛА', cls: 'status-ready' };
             if (t.is_checked_in) return { text: 'CHECK-IN', cls: 'status-ready' };
             return { text: 'НЕ ГОТОВА', cls: 'status-waiting' };
         }
@@ -4803,6 +4942,9 @@
 
         // Bracket Match Details & Rosters Modal Functions
         let currentBMData = null;
+        // Whether the bracket on screen belongs to a running tournament: open
+        // matches of a finished one are not live.
+        let currentBracketRunning = false;
         let selectedBMTeamSide = 1;
 
         async function openBracketMatchModal(matchID) {
@@ -4833,13 +4975,15 @@
             const team2Name = currentBMData.team2 ? currentBMData.team2.name : (m.team2_name || 'Ожидание');
 
             document.getElementById('bmModalTitle').textContent = `Матч #${m.play_order}`;
-            document.getElementById('bmModalSubtitle').textContent = `${currentBMData.round_name || 'Раунд ' + m.round} • ${currentBMData.scheduled_time || ''} • ${currentBMData.match_format || 'BO1'}`;
+            document.getElementById('bmModalSubtitle').textContent = [currentBMData.round_name || ('Раунд ' + m.round), currentBMData.scheduled_time, currentBMData.match_format].filter(Boolean).join(' • ');
 
             let statusBadge = `<span class="status-pill status-waiting" style="font-size: 10px;">ОЖИДАНИЕ</span>`;
             if (m.state === 'complete') {
                 statusBadge = `<span class="status-pill status-ready" style="font-size: 10px;">ЗАВЕРШЁН</span>`;
-            } else if (m.state === 'open') {
+            } else if (m.state === 'open' && currentBracketRunning) {
                 statusBadge = `<span class="status-pill status-ready" style="font-size: 10px;"><span class="status-dot"></span>LIVE</span>`;
+            } else if (m.state === 'open') {
+                statusBadge = `<span class="status-pill status-waiting" style="font-size: 10px;">НЕ СЫГРАН</span>`;
             }
             document.getElementById('bmModalStatus').innerHTML = statusBadge;
 
@@ -5563,8 +5707,11 @@
                         activeTourney = t;
                         if (activeLabelEl) activeLabelEl.textContent = t.name;
                     }
-                    return `<option value="${t.id}" ${t.is_active ? 'selected' : ''}>${escapeHtml(t.name)} [${t.status}]</option>`;
+                    return `<option value="${t.id}" ${t.is_active ? 'selected' : ''}>${escapeHtml(t.name)} [${stageLabel(t.stage)}, ${t.status}]</option>`;
                 }).join('');
+                adminTournamentsCache = res.tournaments;
+                selectEl.onchange = renderSelectedTourneyTools;
+                renderSelectedTourneyTools();
                 if (activeTourney) {
                     currentActiveTourneyTime = activeTourney.tournament_time || null;
                     const timeRow = document.getElementById('adminTourneyTimeRow');
@@ -5589,7 +5736,12 @@
                             fName += ' (за 3-е место)';
                         }
                         let sName = activeTourney.seeding_type === 'random' ? 'Случайный' : 'По звёздам';
-                        formatText.textContent = `${fName} • Посев: ${sName}`;
+                        let stageText = stageLabel(activeTourney.stage);
+                        if (activeTourney.stage === 'qualifier') stageText += ` (выходят ${activeTourney.advance_count})`;
+                        const bo = activeTourney.stage === 'qualifier'
+                            ? `BO${activeTourney.format_rounds || 1}, решающий BO${activeTourney.format_final || 3}`
+                            : `BO${activeTourney.format_rounds || 1} / полуфинал BO${activeTourney.format_semifinal || 3} / финал BO${activeTourney.format_final || 3}`;
+                        formatText.textContent = `${stageText} • ${fName} • ${bo} • Посев: ${sName}`;
                     }
                     if (statusBadge) {
                         statusBadge.style.display = 'inline-flex';
@@ -5612,6 +5764,10 @@
                     }
                     if (btnFinish) {
                         btnFinish.style.display = (activeTourney.status === 'active') ? 'flex' : 'none';
+                        const finishLabel = btnFinish.querySelector('span');
+                        if (finishLabel) {
+                            finishLabel.textContent = activeTourney.stage === 'qualifier' ? 'Подвести итоги квалификации' : 'Завершить текущий турнир';
+                        }
                     }
                 } else {
                     currentActiveTourneyTime = null;
@@ -5647,20 +5803,46 @@
             }
         }
 
+        // The tournament modal creates a tournament or, with an id, edits one.
+        let tourneyModalEditID = 0;
+
+        function setTourneyModalFields(t) {
+            document.getElementById('newTourneyName').value = t.name || '';
+            document.getElementById('newTourneyStage').value = t.stage || 'standalone';
+            document.getElementById('newTourneyAdvance').value = String(t.advance_count || 8);
+            document.getElementById('newTourneyType').value = t.tournament_type || 'single elimination';
+            document.getElementById('newTourneyHoldThirdPlace').checked = !!t.hold_third_place;
+            document.getElementById('newTourneyFormatRounds').value = String(t.format_rounds || 1);
+            document.getElementById('newTourneyFormatSemi').value = String(t.format_semifinal || 3);
+            document.getElementById('newTourneyFormatFinal').value = String(t.format_final || 3);
+            document.getElementById('newTourneySeeding').value = t.seeding_type || 'stars';
+            document.getElementById('newTourneyTime').value = '';
+            document.getElementById('newTourneyChallongeUrl').value = t.slug || '';
+            onTourneyTypeChange();
+            onTourneyStageChange();
+        }
+
         function openCreateTourneyModal() {
             haptic('light');
-            document.getElementById('newTourneyName').value = '';
-            const typeEl = document.getElementById('newTourneyType');
-            if (typeEl) typeEl.value = 'single elimination';
-            const thirdEl = document.getElementById('newTourneyHoldThirdPlace');
-            if (thirdEl) thirdEl.checked = false;
-            const seedEl = document.getElementById('newTourneySeeding');
-            if (seedEl) seedEl.value = 'stars';
-            const thirdGroup = document.getElementById('thirdPlaceGroup');
-            if (thirdGroup) thirdGroup.style.display = 'flex';
-            const timeEl = document.getElementById('newTourneyTime');
-            if (timeEl) timeEl.value = '';
+            tourneyModalEditID = 0;
+            setTourneyModalFields({});
             document.getElementById('newTourneyChallongeUrl').value = '';
+            document.getElementById('tourneyModalTitle').textContent = 'Начать новый турнир';
+            document.getElementById('tourneyModalSubmit').textContent = 'Запустить турнир';
+            document.getElementById('newTourneyTimeGroup').style.display = 'block';
+            document.getElementById('createTourneyModal').classList.add('active');
+            updateBackButton();
+        }
+
+        function openTourneySettingsModal(t) {
+            if (!t) return;
+            haptic('light');
+            tourneyModalEditID = t.id;
+            setTourneyModalFields(t);
+            document.getElementById('tourneyModalTitle').textContent = 'Настройки: ' + t.name;
+            document.getElementById('tourneyModalSubmit').textContent = 'Сохранить';
+            // The start time has its own editor: moving it also moves a built bracket.
+            document.getElementById('newTourneyTimeGroup').style.display = 'none';
             document.getElementById('createTourneyModal').classList.add('active');
             updateBackButton();
         }
@@ -5673,6 +5855,15 @@
             }
         }
 
+        function onTourneyStageChange() {
+            const qualifier = document.getElementById('newTourneyStage')?.value === 'qualifier';
+            document.getElementById('advanceGroup').style.display = qualifier ? 'block' : 'none';
+            // A qualifier has no semifinal or final: its last round is the one
+            // that sends teams to the main stage.
+            document.getElementById('formatSemiGroup').style.display = qualifier ? 'none' : 'block';
+            document.getElementById('formatFinalLabel').textContent = qualifier ? 'Решающий раунд' : 'Финал';
+        }
+
         function closeCreateTourneyModal() {
             document.getElementById('createTourneyModal').classList.remove('active');
             updateBackButton();
@@ -5680,44 +5871,48 @@
 
         async function confirmCreateTourneySubmit() {
             const name = document.getElementById('newTourneyName').value.trim();
-            const tourneyType = document.getElementById('newTourneyType')?.value || 'single elimination';
-            const holdThirdPlace = !!document.getElementById('newTourneyHoldThirdPlace')?.checked;
-            const seedingType = document.getElementById('newTourneySeeding')?.value || 'stars';
-            const timeVal = document.getElementById('newTourneyTime')?.value;
-            const challongeUrl = document.getElementById('newTourneyChallongeUrl').value.trim();
             if (!name) {
                 showToast('Введите название турнира', false);
                 return;
             }
-            let isoTime = null;
-            if (timeVal) {
-                isoTime = new Date(timeVal).toISOString();
-            }
-            haptic('success');
+            const stage = document.getElementById('newTourneyStage').value;
             const payload = {
                 name: name,
-                slug: challongeUrl,
-                tournament_type: tourneyType,
-                hold_third_place: holdThirdPlace,
-                seeding_type: seedingType
+                slug: document.getElementById('newTourneyChallongeUrl').value.trim(),
+                tournament_type: document.getElementById('newTourneyType')?.value || 'single elimination',
+                hold_third_place: !!document.getElementById('newTourneyHoldThirdPlace')?.checked,
+                seeding_type: document.getElementById('newTourneySeeding')?.value || 'stars',
+                stage: stage,
+                advance_count: stage === 'qualifier' ? parseInt(document.getElementById('newTourneyAdvance').value, 10) : 0,
+                format_rounds: parseInt(document.getElementById('newTourneyFormatRounds').value, 10),
+                format_semifinal: parseInt(document.getElementById('newTourneyFormatSemi').value, 10),
+                format_final: parseInt(document.getElementById('newTourneyFormatFinal').value, 10)
             };
-            if (isoTime) {
-                payload.tournament_time = isoTime;
+            const editing = tourneyModalEditID > 0;
+            let url = '/api/admin/tournament/create';
+            if (editing) {
+                url = '/api/admin/tournament/update';
+                payload.tournament_id = tourneyModalEditID;
+            } else {
+                const timeVal = document.getElementById('newTourneyTime')?.value;
+                if (timeVal) payload.tournament_time = new Date(timeVal).toISOString();
             }
-            const res = await apiFetch('/api/admin/tournament/create', {
+            haptic('success');
+            const res = await apiFetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
-            closeCreateTourneyModal();
             if (res && res.ok) {
-                showToast(res.message || 'Новый турнир успешно запущен!', true);
+                closeCreateTourneyModal();
+                showToast(editing ? 'Настройки турнира сохранены' : (res.message || 'Новый турнир успешно запущен!'), true);
                 loadAdminTournaments();
                 loadTournamentsForBracketSelect();
                 loadBracket();
                 loadProfile();
             } else {
-                showToast(res?.error || 'Ошибка создания турнира', false);
+                // Keep the form open so a validation error can be fixed.
+                showToast(res?.error || (editing ? 'Ошибка сохранения настроек' : 'Ошибка создания турнира'), false);
             }
         }
 
@@ -5752,13 +5947,138 @@
                 body: JSON.stringify({})
             });
             if (res && res.ok) {
-                showToast(res.message || 'Турнир успешно завершён!', true);
+                showToast(finishMessage(res), true);
                 loadAdminDesk();
                 loadAdminTournaments();
                 loadTournamentsForBracketSelect();
                 loadBracket();
             } else {
                 showToast(res?.error || 'Ошибка завершения турнира', false);
+            }
+        }
+
+        function finishMessage(res) {
+            if (res.qualified && res.qualified.length) {
+                return `Квалификация завершена. Прошли (${res.qualified.length}): ${res.qualified.join(', ')}`;
+            }
+            return res.message || 'Турнир успешно завершён!';
+        }
+
+        function stageLabel(stage) {
+            if (stage === 'qualifier') return 'квалификация';
+            if (stage === 'main') return 'основной этап';
+            return 'обычный';
+        }
+
+        let adminTournamentsCache = [];
+        let adminAllTeamsCache = null;
+
+        function selectedAdminTourney() {
+            const selectEl = document.getElementById('adminSelectTourney');
+            const id = selectEl ? parseInt(selectEl.value, 10) : 0;
+            return adminTournamentsCache.find(t => t.id === id) || null;
+        }
+
+        // Tools for the tournament picked in the selector, which need not be
+        // the active one: the first qualifier is closed after the fact.
+        async function renderSelectedTourneyTools() {
+            const t = selectedAdminTourney();
+            const finishBtn = document.getElementById('btnFinishQualifierSelected');
+            if (finishBtn) {
+                finishBtn.style.display = (t && t.stage === 'qualifier' && t.status !== 'registration' && t.status !== 'draft') ? 'flex' : 'none';
+            }
+            const tools = document.getElementById('mainStageTools');
+            if (!tools) return;
+            const open = t && t.stage === 'main' && (t.status === 'registration' || t.status === 'draft');
+            tools.style.display = open ? 'flex' : 'none';
+            if (!open) return;
+
+            const qualifiers = adminTournamentsCache.filter(q => q.stage === 'qualifier' && q.status === 'completed');
+            const list = document.getElementById('mainStageQualifierList');
+            list.innerHTML = qualifiers.length
+                ? qualifiers.map(q => `<label style="display: flex; align-items: center; gap: 8px; cursor: pointer;"><input type="checkbox" class="main-stage-qualifier" value="${q.id}" checked style="width: 16px; height: 16px; accent-color: var(--accent-blue);"> ${escapeHtml(q.name)}</label>`).join('')
+                : '<div style="color: var(--text-muted); font-size: 12px;">Завершённых квалификаций пока нет</div>';
+
+            if (adminAllTeamsCache === null) {
+                const data = await apiFetch('/api/admin/teams?scope=all');
+                adminAllTeamsCache = (data && data.teams) || [];
+            }
+            const inviteEl = document.getElementById('mainStageInviteSelect');
+            inviteEl.innerHTML = '<option value="">Команда для приглашения…</option>' + adminAllTeamsCache
+                .slice().sort((a, b) => a.name.localeCompare(b.name))
+                .map(team => `<option value="${team.id}">${escapeHtml(team.name)}</option>`).join('');
+        }
+
+        function openSelectedTourneySettings() {
+            const t = selectedAdminTourney();
+            if (!t) {
+                showToast('Выберите турнир', false);
+                return;
+            }
+            openTourneySettingsModal(t);
+        }
+
+        async function finishSelectedQualifier() {
+            const t = selectedAdminTourney();
+            if (!t) return;
+            const confirmed = await appConfirm(`Подвести итоги квалификации «${t.name}»? Прошедшие команды будут отмечены, матчи после линии выхода уберутся из сетки.`);
+            if (!confirmed) return;
+            const res = await apiFetch('/api/admin/tournament/finish', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tournament_id: t.id })
+            });
+            if (res && res.ok) {
+                showToast(finishMessage(res), true);
+                loadAdminDesk();
+                loadAdminTournaments();
+                loadTournamentsForBracketSelect();
+                loadBracket();
+            } else {
+                showToast(res?.error || 'Не удалось подвести итоги квалификации', false);
+            }
+        }
+
+        async function importQualifiedToSelected() {
+            const t = selectedAdminTourney();
+            if (!t) return;
+            const fromIDs = Array.from(document.querySelectorAll('.main-stage-qualifier:checked')).map(el => parseInt(el.value, 10));
+            if (!fromIDs.length) {
+                showToast('Отметьте хотя бы одну квалификацию', false);
+                return;
+            }
+            const res = await apiFetch('/api/admin/tournament/import-qualified', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tournament_id: t.id, from_ids: fromIDs })
+            });
+            if (res && res.ok) {
+                showToast(res.message || 'Прошедшие команды добавлены', true);
+                loadAdminTeams();
+                loadAdminDesk(true);
+            } else {
+                showToast(res?.error || 'Не удалось добавить прошедших', false);
+            }
+        }
+
+        async function inviteToSelected() {
+            const t = selectedAdminTourney();
+            const teamID = parseInt(document.getElementById('mainStageInviteSelect')?.value || '0', 10);
+            if (!t || !teamID) {
+                showToast('Выберите команду', false);
+                return;
+            }
+            const res = await apiFetch('/api/admin/tournament/invite', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tournament_id: t.id, team_id: teamID })
+            });
+            if (res && res.ok) {
+                showToast(res.message || 'Команда приглашена', true);
+                loadAdminTeams();
+                loadAdminDesk(true);
+            } else {
+                showToast(res?.error || 'Не удалось пригласить команду', false);
             }
         }
 
