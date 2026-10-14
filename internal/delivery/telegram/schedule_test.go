@@ -10,65 +10,51 @@ import (
 // time, which fired every day at that time of day, duplicated whenever two ticks
 // shared a minute, and skipped the event when a tick ran late.
 
-func TestShouldFireOnlyOncePerTournament(t *testing.T) {
+func TestCheckInWavesFireOnceEach(t *testing.T) {
 	b := &Bot{}
 	tournament := time.Date(2026, 8, 16, 18, 0, 0, 0, time.UTC)
-	deadline := tournament.Add(-checkInReminderLead)
-
-	if !b.shouldFire(tournament, deadline, deadline.Add(time.Second), &b.remindedFor) {
-		t.Fatal("reminder did not fire when its deadline passed")
+	if _, ok := b.dueCheckInWave(tournament, tournament.Add(-61*time.Minute)); ok {
+		t.Fatal("a wave fired more than an hour before the start")
 	}
-	if b.shouldFire(tournament, deadline, deadline.Add(2*time.Second), &b.remindedFor) {
-		t.Error("reminder fired twice for the same tournament")
+	for _, want := range []time.Duration{60 * time.Minute, 30 * time.Minute, 10 * time.Minute} {
+		at := tournament.Add(-want).Add(time.Second)
+		lead, ok := b.dueCheckInWave(tournament, at)
+		if !ok || lead != want {
+			t.Fatalf("at T-%v: wave %v, %v", want, lead, ok)
+		}
+		if _, again := b.dueCheckInWave(tournament, at.Add(time.Second)); again {
+			t.Fatalf("wave T-%v fired twice", want)
+		}
+	}
+	if _, ok := b.dueCheckInWave(tournament, tournament.Add(time.Minute)); ok {
+		t.Error("a wave fired after the start")
 	}
 }
 
-func TestShouldNotFireBeforeDeadline(t *testing.T) {
+// A bot that comes up 20 minutes before the start sends one reminder, not the
+// missed hour-before one followed by the half-hour one.
+func TestCheckInWaveLateStartSendsOne(t *testing.T) {
 	b := &Bot{}
 	tournament := time.Date(2026, 8, 16, 18, 0, 0, 0, time.UTC)
-	deadline := tournament.Add(-checkInReminderLead)
-
-	if b.shouldFire(tournament, deadline, deadline.Add(-time.Minute), &b.remindedFor) {
-		t.Error("reminder fired before its deadline")
+	lead, ok := b.dueCheckInWave(tournament, tournament.Add(-20*time.Minute))
+	if !ok || lead != 30*time.Minute {
+		t.Fatalf("late start: %v, %v; want the T-30 wave", lead, ok)
+	}
+	if _, ok := b.dueCheckInWave(tournament, tournament.Add(-19*time.Minute)); ok {
+		t.Error("the missed T-60 wave went out after the T-30 one")
 	}
 }
 
-// A tick that lands a few minutes late must still fire — the old minute-equality
-// check silently dropped the event.
-func TestShouldFireOnLateTick(t *testing.T) {
-	b := &Bot{}
-	tournament := time.Date(2026, 8, 16, 18, 0, 0, 0, time.UTC)
-	deadline := tournament.Add(-checkInReminderLead)
-
-	if !b.shouldFire(tournament, deadline, deadline.Add(5*time.Minute), &b.remindedFor) {
-		t.Error("reminder was skipped because the tick arrived late")
-	}
-}
-
-// Restarting long after a tournament must not replay its notifications.
-func TestShouldNotFireForStaleTournament(t *testing.T) {
-	b := &Bot{}
-	tournament := time.Date(2026, 8, 10, 18, 0, 0, 0, time.UTC)
-	deadline := tournament.Add(-checkInReminderLead)
-
-	if b.shouldFire(tournament, deadline, deadline.Add(scheduleCatchUpWindow+time.Minute), &b.remindedFor) {
-		t.Error("a long-past tournament fired its reminder")
-	}
-}
-
-// Rescheduling the tournament re-arms a stage that already ran.
-func TestRescheduledTournamentFiresAgain(t *testing.T) {
+// Rescheduling the tournament re-arms the waves.
+func TestRescheduledTournamentRemindsAgain(t *testing.T) {
 	b := &Bot{}
 	first := time.Date(2026, 8, 16, 18, 0, 0, 0, time.UTC)
-	firstDeadline := first.Add(-checkInReminderLead)
-	if !b.shouldFire(first, firstDeadline, firstDeadline, &b.remindedFor) {
-		t.Fatal("first reminder did not fire")
+	if _, ok := b.dueCheckInWave(first, first.Add(-5*time.Minute)); !ok {
+		t.Fatal("first tournament's reminder did not fire")
 	}
-
 	second := first.Add(24 * time.Hour)
-	secondDeadline := second.Add(-checkInReminderLead)
-	if !b.shouldFire(second, secondDeadline, secondDeadline, &b.remindedFor) {
-		t.Error("reminder did not re-arm after the tournament was rescheduled")
+	if _, ok := b.dueCheckInWave(second, second.Add(-5*time.Minute)); !ok {
+		t.Error("reminders did not re-arm after the tournament was rescheduled")
 	}
 }
 
@@ -88,7 +74,7 @@ func TestParseTournamentTimeUsesConfiguredZone(t *testing.T) {
 	if got.Location() != almaty || got.Hour() != 18 {
 		t.Errorf("parsed %v, want 18:00 in Asia/Almaty", got)
 	}
-	for _, want := range []string{"20.05.2026 18:00", "Asia/Almaty", "17:00", "17:30", "сетка построится: 18:00"} {
+	for _, want := range []string{"20.05.2026 18:00", "Asia/Almaty", "17:00, 17:30, 17:50", "сетка построится: 18:00"} {
 		if !strings.Contains(summary, want) {
 			t.Errorf("summary %q lacks %q", summary, want)
 		}

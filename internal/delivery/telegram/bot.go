@@ -17,8 +17,6 @@ import (
 )
 
 const (
-	// checkInReminderLead is how long before the tournament captains are nudged.
-	checkInReminderLead = 30 * time.Minute
 	// scheduleCatchUpWindow bounds how late a missed deadline may still fire, so
 	// a restart does not replay an old tournament's notifications.
 	scheduleCatchUpWindow = time.Hour
@@ -50,7 +48,9 @@ type Bot struct {
 
 	// Tournament time each scheduled stage last fired for. Only touched by the
 	// single background worker goroutine.
-	remindedFor time.Time
+	// checkInFired holds, per check-in wave, the tournament time it last went
+	// out for; rescheduling the tournament re-arms the waves.
+	checkInFired [len(checkInWaves)]time.Time
 	// qualifierAlert is the last qualifier-closing error sent to admins, so a
 	// stuck qualifier is reported once rather than every minute.
 	qualifierAlert string
@@ -342,10 +342,14 @@ func (b *Bot) parseTournamentTime(dateStr string) (time.Time, string, error) {
 	if err != nil {
 		return time.Time{}, "", err
 	}
-	summary := fmt.Sprintf("Время турнира: %s (%s)\nРегистрация закроется: %s\nНапоминание капитанам: %s\nCheck-in закроется и сетка построится: %s",
+	waves := make([]string, 0, len(checkInWaves))
+	for _, lead := range checkInWaves {
+		waves = append(waves, t.Add(-lead).Format("15:04"))
+	}
+	summary := fmt.Sprintf("Время турнира: %s (%s)\nРегистрация закроется: %s\nНапоминания о check-in: %s\nCheck-in закроется и сетка построится: %s",
 		t.Format(tournamentLayout), b.location,
 		t.Add(-application.RegistrationCloseLead).Format("15:04"),
-		t.Add(-checkInReminderLead).Format("15:04"),
+		strings.Join(waves, ", "),
 		t.Format("15:04"))
 	return t, summary, nil
 }
@@ -394,8 +398,8 @@ func (b *Bot) runScheduledChecks(ctx context.Context) {
 
 	now := time.Now()
 
-	if b.shouldFire(tTime, tTime.Add(-checkInReminderLead), now, &b.remindedFor) {
-		b.broadcastCheckInReminder(ctx)
+	if lead, ok := b.dueCheckInWave(tTime, now); ok {
+		b.broadcastCheckInReminder(ctx, lead)
 	}
 
 	b.runBracketChecks(ctx, tTime, now)
@@ -420,39 +424,49 @@ func (b *Bot) autoConfirmReports(ctx context.Context) {
 	}
 }
 
-// shouldFire reports whether a deadline has passed and has not been handled yet
-// for this tournament. lastFired holds the tournament time the stage last ran
-// for, so rescheduling the tournament re-arms it.
-func (b *Bot) shouldFire(tournament, deadline, now time.Time, lastFired *time.Time) bool {
-	if now.Before(deadline) {
-		return false
+// checkInWaves are how long before the start the check-in reminders go out.
+var checkInWaves = [...]time.Duration{60 * time.Minute, 30 * time.Minute, 10 * time.Minute}
+
+// dueCheckInWave picks the check-in reminder to send now: the latest wave whose
+// time has come and that has not gone out for this tournament. Waves missed
+// while the bot was down are marked sent with it, so a late start sends one
+// reminder, not three at once; nothing goes out once the tournament started.
+func (b *Bot) dueCheckInWave(tournament, now time.Time) (time.Duration, bool) {
+	if tournament.IsZero() || !now.Before(tournament) {
+		return 0, false
 	}
-	// Do not fire for a deadline that passed long before the bot came up — a
-	// restart days later must not blast out a stale tournament's notices.
-	if now.Sub(deadline) > scheduleCatchUpWindow {
-		return false
+	for i := len(checkInWaves) - 1; i >= 0; i-- {
+		if now.Before(tournament.Add(-checkInWaves[i])) {
+			continue
+		}
+		if b.checkInFired[i].Equal(tournament) {
+			return 0, false
+		}
+		for j := 0; j <= i; j++ {
+			b.checkInFired[j] = tournament
+		}
+		return checkInWaves[i], true
 	}
-	if lastFired.Equal(tournament) {
-		return false
-	}
-	*lastFired = tournament
-	return true
+	return 0, false
 }
 
-func (b *Bot) broadcastCheckInReminder(ctx context.Context) {
+// broadcastCheckInReminder reaches every player of every entered team that has
+// not checked in; lead is how long is left before the start.
+func (b *Bot) broadcastCheckInReminder(ctx context.Context, lead time.Duration) {
 	teams, _ := b.service.GetUncheckedTeams(ctx)
 	tTime := b.service.GetTournamentTime(ctx)
+	left := fmt.Sprintf("До старта %d минут. ", int(lead.Minutes()))
 
 	for _, team := range teams {
 		for _, p := range team.Players {
 			if p.TelegramID != nil && *p.TelegramID > 0 {
 				if p.IsCaptain {
 					if application.MainRosterSize(team) < application.MainRosterSlots {
-						msg := fmt.Sprintf("ВНИМАНИЕ, Капитан!\nВ вашей команде '%s' не хватает игроков (%d из %d).\n\nСрочно доберите основной состав (минимум %d игроков) и подтвердите участие до %s, иначе команда не попадёт в сетку.",
+						msg := left + fmt.Sprintf("ВНИМАНИЕ, Капитан!\nВ вашей команде '%s' не хватает игроков (%d из %d).\n\nСрочно доберите основной состав (минимум %d игроков) и подтвердите участие до %s, иначе команда не попадёт в сетку.",
 							team.Name, application.MainRosterSize(team), application.MainRosterSlots, application.MainRosterSlots, tTime.In(b.location).Format("15:04"))
 						b.sendMessage(*p.TelegramID, msg, "empty")
 					} else {
-						msg := fmt.Sprintf("ВНИМАНИЕ, Капитан!\nВаша команда '%s' не прошла Check-in.\n\nПодтвердите участие в приложении до %s, иначе команда не попадёт в сетку.",
+						msg := left + fmt.Sprintf("ВНИМАНИЕ, Капитан!\nВаша команда '%s' не прошла Check-in.\n\nПодтвердите участие в приложении до %s, иначе команда не попадёт в сетку.",
 							team.Name, tTime.In(b.location).Format("15:04"))
 						if b.webAppURL != "" {
 							b.SendMatchNotification(*p.TelegramID, msg, true)
@@ -461,7 +475,7 @@ func (b *Bot) broadcastCheckInReminder(ctx context.Context) {
 						}
 					}
 				} else {
-					msg := fmt.Sprintf("ВНИМАНИЕ!\nВаша команда '%s' ещё не прошла Check-in.\nНапомните капитану подтвердить участие в приложении до %s, иначе команда не попадёт в сетку.",
+					msg := left + fmt.Sprintf("ВНИМАНИЕ!\nВаша команда '%s' ещё не прошла Check-in.\nНапомните капитану подтвердить участие в приложении до %s, иначе команда не попадёт в сетку.",
 						team.Name, tTime.In(b.location).Format("15:04"))
 					if b.webAppURL != "" {
 						b.SendMatchNotification(*p.TelegramID, msg, true)
