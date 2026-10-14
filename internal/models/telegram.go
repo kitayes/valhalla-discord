@@ -218,6 +218,30 @@ func (r TelegramMatchReport) Open() bool {
 	return r.Status == ReportPending || r.Status == ReportDisputed
 }
 
+// Game statuses within a series.
+const (
+	GamePending   = "pending"   // waiting for the other captain
+	GameConfirmed = "confirmed" // counts toward the series
+	GameDisputed  = "disputed"  // the other captain objected; a referee decides
+	GameAnnulled  = "annulled"  // struck out by a referee
+)
+
+// TelegramMatchGame is one game of a best-of series, reported in the bot with
+// screenshots.
+type TelegramMatchGame struct {
+	ID                 int        `json:"id"`
+	BracketMatchID     int        `json:"bracket_match_id"`
+	MatchRevision      int64      `json:"match_revision"`
+	GameNo             int        `json:"game_no"`
+	WinnerTeamID       int        `json:"winner_team_id"`
+	ReporterTelegramID int64      `json:"-"`
+	PhotoFileIDs       []string   `json:"-"`
+	Status             string     `json:"status"`
+	ExpiresAt          *time.Time `json:"expires_at,omitempty"`
+	CreatedAt          time.Time  `json:"created_at"`
+	ResolvedAt         *time.Time `json:"resolved_at,omitempty"`
+}
+
 // Bracket match states, as Challonge reports them.
 const (
 	BracketPending  = "pending" // waiting for an earlier match
@@ -241,6 +265,9 @@ type BracketMatch struct {
 	State            string `json:"state"`
 	ScoresCSV        string `json:"scores_csv"`
 	BothNotified     bool   `json:"both_notified"`
+	// Revision is the row's desk_revision: it moves whenever the pair or the
+	// state changes, so a reopened match starts a fresh series.
+	Revision int64 `json:"revision"`
 }
 
 // Has reports whether the team plays in this match.

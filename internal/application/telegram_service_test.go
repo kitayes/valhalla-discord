@@ -25,6 +25,7 @@ type fakeTelegramRepo struct {
 	tournaments     []*models.TelegramTournament
 	tournamentTeams map[string]*models.TournamentTeam
 	checkInWrites   int // SetTournamentCheckIn calls that hit an entry
+	games           []models.TelegramMatchGame
 	// failSetting, when set for a key, makes SetSetting return that error
 	// instead of writing, so tests can exercise write-failure paths.
 	failSetting map[string]error
@@ -636,6 +637,72 @@ func (r *fakeTelegramRepo) UpdateTournamentPlacements(ctx context.Context, tourn
 		}
 	}
 	return nil
+}
+
+func (r *fakeTelegramRepo) CreateMatchGame(_ context.Context, g *models.TelegramMatchGame) error {
+	// Mirrors the partial unique index on (match, revision, game number).
+	for _, x := range r.games {
+		if x.BracketMatchID == g.BracketMatchID && x.MatchRevision == g.MatchRevision && x.GameNo == g.GameNo && x.Status != models.GameAnnulled {
+			return errors.New("duplicate key value violates unique constraint \"idx_match_games_slot\"")
+		}
+	}
+	g.ID = len(r.games) + 1
+	g.CreatedAt = time.Now()
+	r.games = append(r.games, *g)
+	return nil
+}
+
+func (r *fakeTelegramRepo) GetMatchGame(_ context.Context, id int) (*models.TelegramMatchGame, error) {
+	for i := range r.games {
+		if r.games[i].ID == id {
+			g := r.games[i]
+			return &g, nil
+		}
+	}
+	return nil, nil
+}
+
+func (r *fakeTelegramRepo) ListMatchGames(_ context.Context, matchID int, revision int64) ([]models.TelegramMatchGame, error) {
+	var out []models.TelegramMatchGame
+	for _, g := range r.games {
+		if g.BracketMatchID == matchID && g.MatchRevision == revision {
+			out = append(out, g)
+		}
+	}
+	return out, nil
+}
+
+func (r *fakeTelegramRepo) ListGamesForMatches(_ context.Context, ids []int) ([]models.TelegramMatchGame, error) {
+	want := map[int]bool{}
+	for _, id := range ids {
+		want[id] = true
+	}
+	var out []models.TelegramMatchGame
+	for _, g := range r.games {
+		if want[g.BracketMatchID] && g.Status != models.GameAnnulled {
+			out = append(out, g)
+		}
+	}
+	return out, nil
+}
+
+func (r *fakeTelegramRepo) SetMatchGameStatus(_ context.Context, id int, status string) error {
+	for i := range r.games {
+		if r.games[i].ID == id {
+			r.games[i].Status = status
+		}
+	}
+	return nil
+}
+
+func (r *fakeTelegramRepo) GetExpiredPendingGames(_ context.Context, now time.Time) ([]models.TelegramMatchGame, error) {
+	var out []models.TelegramMatchGame
+	for _, g := range r.games {
+		if g.Status == models.GamePending && g.ExpiresAt != nil && !g.ExpiresAt.After(now) {
+			out = append(out, g)
+		}
+	}
+	return out, nil
 }
 
 func (r *fakeTelegramRepo) ClearTournamentPlacements(ctx context.Context, tournamentID int) error {

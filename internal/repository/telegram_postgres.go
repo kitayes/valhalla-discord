@@ -644,7 +644,7 @@ func (r *TelegramPostgres) getBracketMatchesInternal(ctx context.Context, tourna
 		SELECT m.id, m.tournament_id, m.challonge_match_id, m.round, m.play_order,
 		       m.team1_id, m.team2_id, m.winner_id,
 		       COALESCE(t1.name, ''), COALESCE(t2.name, ''),
-		       m.state, m.scores_csv, m.both_notified
+		       m.state, m.scores_csv, m.both_notified, m.desk_revision
 		FROM telegram_bracket_matches m
 		LEFT JOIN telegram_teams t1 ON t1.id = m.team1_id
 		LEFT JOIN telegram_teams t2 ON t2.id = m.team2_id
@@ -667,7 +667,7 @@ func (r *TelegramPostgres) getBracketMatchesInternal(ctx context.Context, tourna
 		var m models.BracketMatch
 		if err := rows.Scan(&m.ID, &m.TournamentID, &m.ChallongeMatchID, &m.Round, &m.PlayOrder,
 			&m.Team1ID, &m.Team2ID, &m.WinnerID, &m.Team1Name, &m.Team2Name,
-			&m.State, &m.ScoresCSV, &m.BothNotified); err != nil {
+			&m.State, &m.ScoresCSV, &m.BothNotified, &m.Revision); err != nil {
 			return nil, fmt.Errorf("scan bracket match: %w", err)
 		}
 		out = append(out, m)
@@ -1099,4 +1099,83 @@ func (r *TelegramPostgres) UpdateTournamentPlacements(ctx context.Context, tourn
 		}
 	}
 	return tx.Commit()
+}
+
+const matchGameColumns = `id, bracket_match_id, match_revision, game_no, winner_team_id, reporter_telegram_id,
+	photo_file_ids, status, expires_at, created_at, resolved_at`
+
+func scanMatchGame(row interface{ Scan(dest ...any) error }) (*models.TelegramMatchGame, error) {
+	var g models.TelegramMatchGame
+	if err := row.Scan(&g.ID, &g.BracketMatchID, &g.MatchRevision, &g.GameNo, &g.WinnerTeamID, &g.ReporterTelegramID,
+		pq.Array(&g.PhotoFileIDs), &g.Status, &g.ExpiresAt, &g.CreatedAt, &g.ResolvedAt); err != nil {
+		return nil, err
+	}
+	return &g, nil
+}
+
+func (r *TelegramPostgres) queryMatchGames(ctx context.Context, where string, args ...any) ([]models.TelegramMatchGame, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT `+matchGameColumns+` FROM telegram_match_games WHERE `+where+` ORDER BY bracket_match_id, game_no, id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var out []models.TelegramMatchGame
+	for rows.Next() {
+		g, err := scanMatchGame(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan match game: %w", err)
+		}
+		out = append(out, *g)
+	}
+	return out, rows.Err()
+}
+
+// CreateMatchGame stores a reported game. The partial unique index refuses a
+// second live game with the same number, which is how two captains claiming
+// the same game at once are told apart.
+func (r *TelegramPostgres) CreateMatchGame(ctx context.Context, g *models.TelegramMatchGame) error {
+	if g.PhotoFileIDs == nil {
+		g.PhotoFileIDs = []string{}
+	}
+	return r.db.QueryRowContext(ctx, `
+		INSERT INTO telegram_match_games (bracket_match_id, match_revision, game_no, winner_team_id, reporter_telegram_id, photo_file_ids, status, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		RETURNING id, created_at
+	`, g.BracketMatchID, g.MatchRevision, g.GameNo, g.WinnerTeamID, g.ReporterTelegramID, pq.Array(g.PhotoFileIDs), g.Status, g.ExpiresAt).Scan(&g.ID, &g.CreatedAt)
+}
+
+func (r *TelegramPostgres) GetMatchGame(ctx context.Context, id int) (*models.TelegramMatchGame, error) {
+	g, err := scanMatchGame(r.db.QueryRowContext(ctx, `SELECT `+matchGameColumns+` FROM telegram_match_games WHERE id = $1`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return g, err
+}
+
+// ListMatchGames is a match's series at one revision, annulled games included.
+func (r *TelegramPostgres) ListMatchGames(ctx context.Context, bracketMatchID int, revision int64) ([]models.TelegramMatchGame, error) {
+	return r.queryMatchGames(ctx, `bracket_match_id = $1 AND match_revision = $2`, bracketMatchID, revision)
+}
+
+// ListGamesForMatches returns the non-annulled games of the given matches, all
+// revisions; callers keep the ones matching the match's current revision.
+func (r *TelegramPostgres) ListGamesForMatches(ctx context.Context, bracketMatchIDs []int) ([]models.TelegramMatchGame, error) {
+	if len(bracketMatchIDs) == 0 {
+		return nil, nil
+	}
+	return r.queryMatchGames(ctx, `bracket_match_id = ANY($1) AND status <> 'annulled'`, pq.Array(bracketMatchIDs))
+}
+
+// SetMatchGameStatus moves a game on; leaving pending stamps resolved_at.
+func (r *TelegramPostgres) SetMatchGameStatus(ctx context.Context, id int, status string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE telegram_match_games
+		SET status = $2::varchar, resolved_at = CASE WHEN $2::varchar = 'pending' THEN NULL ELSE NOW() END
+		WHERE id = $1
+	`, id, status)
+	return err
+}
+
+func (r *TelegramPostgres) GetExpiredPendingGames(ctx context.Context, now time.Time) ([]models.TelegramMatchGame, error) {
+	return r.queryMatchGames(ctx, `status = 'pending' AND expires_at IS NOT NULL AND expires_at <= $1`, now)
 }

@@ -5,6 +5,7 @@ package repository
 import (
 	"context"
 	"testing"
+	"time"
 
 	"blackwatch/internal/models"
 )
@@ -194,5 +195,62 @@ func TestIntegrationTournamentStagesAndEntries(t *testing.T) {
 	}
 	if main.FormatRounds != models.DefaultFormatRounds || main.FormatFinal != models.DefaultFormatFinal {
 		t.Fatalf("defaults not applied: %+v", main)
+	}
+}
+
+// A series game round-trips; a second live game with the same number is
+// refused, an annulled one frees the number.
+func TestIntegrationMatchGames(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	repo := NewTelegramPostgres(db)
+
+	team, err := repo.CreateTeam(ctx, uniqueName(t, "games"))
+	if err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM telegram_teams WHERE id = $1`, team.ID) })
+	var matchID int
+	if err := db.QueryRow(`INSERT INTO telegram_bracket_matches (challonge_match_id, round, play_order, team1_id, state)
+		VALUES ($1, 1, 1, $2, 'open') RETURNING id`, time.Now().UnixNano()%1e12, team.ID).Scan(&matchID); err != nil {
+		t.Fatalf("insert match: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM telegram_bracket_matches WHERE id = $1`, matchID) })
+
+	exp := time.Now().Add(-time.Minute)
+	g := &models.TelegramMatchGame{BracketMatchID: matchID, MatchRevision: 3, GameNo: 1, WinnerTeamID: team.ID,
+		ReporterTelegramID: 42, PhotoFileIDs: []string{"a", "b"}, Status: models.GamePending, ExpiresAt: &exp}
+	if err := repo.CreateMatchGame(ctx, g); err != nil || g.ID == 0 {
+		t.Fatalf("CreateMatchGame: %v (id %d)", err, g.ID)
+	}
+	dup := *g
+	if err := repo.CreateMatchGame(ctx, &dup); err == nil {
+		t.Fatal("a second live game 1 was accepted")
+	}
+	got, err := repo.GetMatchGame(ctx, g.ID)
+	if err != nil || got == nil || len(got.PhotoFileIDs) != 2 || got.MatchRevision != 3 {
+		t.Fatalf("GetMatchGame = %+v, %v", got, err)
+	}
+	expired, err := repo.GetExpiredPendingGames(ctx, time.Now())
+	if err != nil || len(expired) == 0 {
+		t.Fatalf("GetExpiredPendingGames = %+v, %v", expired, err)
+	}
+	if err := repo.SetMatchGameStatus(ctx, g.ID, models.GameAnnulled); err != nil {
+		t.Fatalf("SetMatchGameStatus: %v", err)
+	}
+	if got, _ := repo.GetMatchGame(ctx, g.ID); got.ResolvedAt == nil {
+		t.Error("resolved_at not stamped")
+	}
+	if err := repo.CreateMatchGame(ctx, &dup); err != nil {
+		t.Fatalf("game 1 after annulment: %v", err)
+	}
+	list, _ := repo.ListMatchGames(ctx, matchID, 3)
+	live, _ := repo.ListGamesForMatches(ctx, []int{matchID})
+	if len(list) != 2 || len(live) != 1 {
+		t.Errorf("ListMatchGames = %d, ListGamesForMatches = %d; want 2 and 1", len(list), len(live))
+	}
+	// The bracket cache now reads desk_revision too.
+	if _, err := repo.GetBracketMatchesForTournament(ctx, 0); err != nil {
+		t.Fatalf("GetBracketMatches: %v", err)
 	}
 }

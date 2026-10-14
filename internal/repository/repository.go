@@ -138,6 +138,14 @@ type Telegram interface {
 	ClearTournamentTeamParticipantIDs(ctx context.Context, tournamentID int) error
 	UpdateTournamentPlacements(ctx context.Context, tournamentID int, placements map[int]int, points map[int]int) error
 	ClearTournamentPlacements(ctx context.Context, tournamentID int) error
+
+	// Series games (telegram_match_games).
+	CreateMatchGame(ctx context.Context, g *models.TelegramMatchGame) error
+	GetMatchGame(ctx context.Context, id int) (*models.TelegramMatchGame, error)
+	ListMatchGames(ctx context.Context, bracketMatchID int, revision int64) ([]models.TelegramMatchGame, error)
+	ListGamesForMatches(ctx context.Context, bracketMatchIDs []int) ([]models.TelegramMatchGame, error)
+	SetMatchGameStatus(ctx context.Context, id int, status string) error
+	GetExpiredPendingGames(ctx context.Context, now time.Time) ([]models.TelegramMatchGame, error)
 	FinishTournamentRecord(ctx context.Context, tournamentID int, winnerTeamID *int, winnerTeamName string) error
 }
 
