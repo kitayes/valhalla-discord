@@ -130,6 +130,15 @@ type TelegramService interface {
 	ImportQualified(ctx context.Context, mainID int, fromIDs []int) (int, error)
 	InviteTeam(ctx context.Context, mainID, teamID int) error
 	SetEventHook(fn func(event string, payload map[string]any))
+
+	// Series played game by game in the bot (match_series.go).
+	AddGamePhoto(ctx context.Context, tgID int64, fileID string) (*SeriesPrompt, error)
+	ClaimGame(ctx context.Context, tgID int64, matchID int, weWon bool) (*GameEvent, error)
+	ConfirmGame(ctx context.Context, tgID int64, gameID int) (*GameEvent, error)
+	DisputeGame(ctx context.Context, tgID int64, gameID int) (*GameEvent, error)
+	JudgeGame(ctx context.Context, gameID, winnerTeamID int) (*GameEvent, error)
+	AutoConfirmExpiredGames(ctx context.Context) ([]GameEvent, error)
+	SeriesFor(ctx context.Context, matchID int) (*SeriesState, error)
 	RegisterTeamForTournament(ctx context.Context, captainTgID int64, tournamentID int) error
 	UnregisterTeamFromTournament(ctx context.Context, captainTgID int64, tournamentID int) error
 	GetBracketForTournament(ctx context.Context, tournamentID int) ([]models.BracketMatch, error)
@@ -178,6 +187,11 @@ type TelegramServiceImpl struct {
 
 	// finishMu serialises FinishTournament.
 	finishMu sync.Mutex
+
+	// seriesMu serialises series actions: one game open at a time per match,
+	// and a decided series is written once.
+	seriesMu     sync.Mutex
+	seriesDrafts map[int64]*seriesDraft
 }
 
 // ProfileLookup is the slice of the profile-link repository registration
@@ -205,6 +219,7 @@ func NewTelegramServiceImpl(repo repository.Telegram, logger Logger) *TelegramSe
 		logger:       logger,
 		now:          time.Now,
 		reportDrafts: make(map[int64]*MatchReportDraft),
+		seriesDrafts: make(map[int64]*seriesDraft),
 	}
 }
 
