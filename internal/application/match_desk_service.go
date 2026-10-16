@@ -27,6 +27,9 @@ type MatchDeskStore interface {
 	// A failed callback must roll back all state changes. Implementations lock
 	// the desk and pairings for the whole callback; no network I/O belongs here.
 	UpdateMatchDesk(context.Context, func(*models.MatchDesk, models.DeskContext) error) error
+	// ViewMatchDesk reads the desk and its context from one snapshot, without
+	// locks; whatever the callback changes is discarded.
+	ViewMatchDesk(context.Context, func(*models.MatchDesk, models.DeskContext) error) error
 }
 
 type MatchDeskService struct {
@@ -53,18 +56,33 @@ func (s *MatchDeskService) WithWebAppURL(url string) *MatchDeskService {
 	return s
 }
 
+// followBracket brings the desk in line with the bracket it was read with.
+func followBracket(d *models.MatchDesk, c models.DeskContext, now time.Time) {
+	for _, b := range c.Matches {
+		if m := d.Matches[b.ID]; m != nil && b.Ready() && m.BracketRevision != c.Revisions[b.ID] {
+			m.Active = false
+		}
+	}
+	syncDesk(d, c.Matches, c.StartsAt, now)
+	for id, m := range d.Matches {
+		m.BracketRevision = c.Revisions[id]
+	}
+}
+
+// view reads the desk as the next update would see it, without locking or
+// saving it. The Mini App polls through here: each poll used to be a locked
+// write, and every open app refreshing at once queued behind the desk row.
+func (s *MatchDeskService) view(ctx context.Context, read func(*models.MatchDesk, models.DeskContext) error) error {
+	return s.store.ViewMatchDesk(ctx, func(d *models.MatchDesk, c models.DeskContext) error {
+		followBracket(d, c, s.now())
+		return read(d, c)
+	})
+}
+
 func (s *MatchDeskService) update(ctx context.Context, action func(*models.MatchDesk, models.DeskContext) error) error {
 	return s.store.UpdateMatchDesk(ctx, func(d *models.MatchDesk, c models.DeskContext) error {
 		now := s.now()
-		for _, b := range c.Matches {
-			if m := d.Matches[b.ID]; m != nil && b.Ready() && m.BracketRevision != c.Revisions[b.ID] {
-				m.Active = false
-			}
-		}
-		syncDesk(d, c.Matches, c.StartsAt, now)
-		for id, m := range d.Matches {
-			m.BracketRevision = c.Revisions[id]
-		}
+		followBracket(d, c, now)
 		if action != nil {
 			if err := action(d, c); err != nil {
 				return err
@@ -513,10 +531,11 @@ type MatchDeskDetail struct {
 	RoomRules               string    `json:"room_rules"`
 }
 
-// GetMatchDeskDetail finds the active desk match for a captain.
+// GetMatchDeskDetail finds the active desk match of a player's team. It only
+// reads: any change goes through an update.
 func (s *MatchDeskService) GetMatchDeskDetail(ctx context.Context, actor int64) (*MatchDeskDetail, error) {
 	var detail *MatchDeskDetail
-	err := s.update(ctx, func(d *models.MatchDesk, c models.DeskContext) error {
+	err := s.view(ctx, func(d *models.MatchDesk, c models.DeskContext) error {
 		now := s.now()
 		for _, m := range sortedDeskMatches(d) {
 			if !m.Active {
@@ -598,27 +617,15 @@ func (s *MatchDeskService) GetMatchDeskDetail(ctx context.Context, actor int64) 
 	return detail, err
 }
 
-// ReadyCaptain marks the captain's active match as ready.
+// ReadyCaptain marks the active match of the player's team as ready. Finding
+// the match and pressing ready is one update: a match looked up in a
+// separate read could have a generation the update no longer agrees with.
 func (s *MatchDeskService) ReadyCaptain(ctx context.Context, actor int64) error {
-	detail, err := s.GetMatchDeskDetail(ctx, actor)
-	if err != nil {
-		return err
-	}
-	if detail == nil {
-		return errors.New("активный матч не найден")
-	}
-	return s.CaptainAction(ctx, actor, detail.MatchID, detail.Generation, "ready")
+	return s.actOnOwnMatch(ctx, actor, "ready")
 }
 
 // CallJudgeCaptain signals referee attention for the captain's active match.
 func (s *MatchDeskService) CallJudgeCaptain(ctx context.Context, actor int64, reason string) error {
-	detail, err := s.GetMatchDeskDetail(ctx, actor)
-	if err != nil {
-		return err
-	}
-	if detail == nil {
-		return errors.New("активный матч не найден")
-	}
 	action := "judge_lobby"
 	switch reason {
 	case "noanswer":
@@ -626,7 +633,32 @@ func (s *MatchDeskService) CallJudgeCaptain(ctx context.Context, actor int64, re
 	case "score":
 		action = "judge_score"
 	}
-	return s.CaptainAction(ctx, actor, detail.MatchID, detail.Generation, action)
+	return s.actOnOwnMatch(ctx, actor, action)
+}
+
+// actOnOwnMatch applies a team action to the active match of the actor's
+// team, with the same rights as CaptainAction.
+func (s *MatchDeskService) actOnOwnMatch(ctx context.Context, actor int64, action string) error {
+	return s.update(ctx, func(d *models.MatchDesk, c models.DeskContext) error {
+		for _, m := range sortedDeskMatches(d) {
+			if !m.Active {
+				continue
+			}
+			for _, team := range m.Teams {
+				p := c.Captains[team]
+				if p.TelegramID != nil && *p.TelegramID == actor {
+					return deskCaptainAction(m, team, action, s.now())
+				}
+				if deskIsMember(c, team, actor) {
+					if action != "ready" {
+						return errors.New("действие доступно только капитану команды")
+					}
+					return deskCaptainAction(m, team, action, s.now())
+				}
+			}
+		}
+		return errors.New("активный матч не найден")
+	})
 }
 
 type AdminArchivedMatchItem struct {
@@ -683,7 +715,8 @@ func (s *MatchDeskService) GetAdminMatches(ctx context.Context, actor int64) (bo
 	var archived []AdminArchivedMatchItem
 	var globalPaused bool
 	now := s.now()
-	err := s.update(ctx, func(d *models.MatchDesk, c models.DeskContext) error {
+	// The admin panel polls too; reading is enough here.
+	err := s.view(ctx, func(d *models.MatchDesk, c models.DeskContext) error {
 		globalPaused = d.GlobalPaused
 		for _, m := range sortedDeskMatches(d) {
 			if !m.Active {

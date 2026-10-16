@@ -1,4 +1,4 @@
-.PHONY: help build test test-race test-integration db-test-up db-test-down vet lint fmt tidy check run docker-up docker-down clean
+.PHONY: help build test test-race test-integration load-test db-test-up db-test-down vet lint fmt tidy check run docker-up docker-down clean
 
 BINARY := blackwatch
 BIN_DIR := bin
@@ -24,6 +24,10 @@ test-race: ## Run unit tests under the race detector (needs cgo + a C compiler)
 test-integration: ## Run repository and synthetic bot tests against a real Postgres (needs BW_TEST_DSN)
 	@test -n "$(BW_TEST_DSN)" || { echo "set BW_TEST_DSN first — see 'make db-test-up'"; exit 1; }
 	go test -p 1 -tags integration ./internal/... -count=1
+
+load-test: ## Load-test the match desk as a tournament drives it (needs BW_LOAD_DSN to a throwaway database: it is wiped)
+	@test -n "$(BW_LOAD_DSN)" || { echo "set BW_LOAD_DSN to a throwaway database, e.g. dbname=bwload on 'make db-test-up'"; exit 1; }
+	go test -tags loadtest -run TestDeskLoad -v -count=1 -timeout 10m ./internal/application/
 
 db-test-up: ## Start a throwaway Postgres with pgvector for test-integration
 	docker rm -f bw_testdb 2>/dev/null || true

@@ -105,6 +105,26 @@ func TestMatchDeskPostgresPersistenceRollbackAndReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A view reads the same desk and context and saves nothing.
+	err = repo.ViewMatchDesk(ctx, func(d *models.MatchDesk, c models.DeskContext) error {
+		if d.NextGeneration != 42 || len(c.Matches) != 1 || c.Series[1].DisputedGame != 2 {
+			t.Fatalf("view: desk %+v, context %+v", d, c)
+		}
+		d.NextGeneration = 7
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = repo.UpdateMatchDesk(ctx, func(d *models.MatchDesk, _ models.DeskContext) error {
+		if d.NextGeneration != 42 {
+			t.Fatalf("a view saved its change: %d", d.NextGeneration)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	down, err := os.ReadFile("../../migrations/000028_match_desk.down.sql")
 	if err != nil {
 		t.Fatal(err)

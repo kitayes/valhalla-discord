@@ -25,6 +25,13 @@ func (s *memoryDeskStore) UpdateMatchDesk(_ context.Context, f func(*models.Matc
 	return nil
 }
 
+func (s *memoryDeskStore) ViewMatchDesk(_ context.Context, f func(*models.MatchDesk, models.DeskContext) error) error {
+	data, _ := json.Marshal(s.state)
+	var copied models.MatchDesk
+	_ = json.Unmarshal(data, &copied)
+	return f(&copied, s.snapshot)
+}
+
 func deskServiceFixture(t *testing.T) (*MatchDeskService, *memoryDeskStore, time.Time) {
 	t.Helper()
 	_, now := deskFixture(t)

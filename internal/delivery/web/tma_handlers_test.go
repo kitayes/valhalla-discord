@@ -32,6 +32,13 @@ func (s *mockDeskStore) UpdateMatchDesk(_ context.Context, f func(*models.MatchD
 	return nil
 }
 
+func (s *mockDeskStore) ViewMatchDesk(_ context.Context, f func(*models.MatchDesk, models.DeskContext) error) error {
+	data, _ := json.Marshal(s.state)
+	var copied models.MatchDesk
+	_ = json.Unmarshal(data, &copied)
+	return f(&copied, s.ctx)
+}
+
 type mockTelegramSvc struct {
 	application.TelegramService
 	bracket       []models.BracketMatch

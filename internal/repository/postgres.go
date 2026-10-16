@@ -16,6 +16,10 @@ type Config struct {
 	Password string `env:"DB_PASSWORD"`
 	DBName   string `env:"DB_NAME"`
 	SSLMode  string `env:"DB_SSLMODE"`
+	// MaxOpenConns caps the pool. Unbounded, a Mini App refresh reaching
+	// every open app at once opened a connection per request and Postgres
+	// refused the rest ("too many clients already", default limit 100).
+	MaxOpenConns int `env:"DB_MAX_OPEN_CONNS" envDefault:"20"`
 }
 
 // pingTimeout bounds the startup connectivity check. Without a deadline a
@@ -30,6 +34,11 @@ func NewPostgresDB(ctx context.Context, cfg *Config) (*sql.DB, error) {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, err
+	}
+	if cfg.MaxOpenConns > 0 {
+		db.SetMaxOpenConns(cfg.MaxOpenConns)
+		db.SetMaxIdleConns(cfg.MaxOpenConns)
+		db.SetConnMaxIdleTime(5 * time.Minute)
 	}
 
 	pingCtx, cancel := context.WithTimeout(ctx, pingTimeout)

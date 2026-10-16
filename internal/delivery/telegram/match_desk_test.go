@@ -31,6 +31,13 @@ func (s *deliveryDeskStore) UpdateMatchDesk(_ context.Context, f func(*models.Ma
 	return nil
 }
 
+func (s *deliveryDeskStore) ViewMatchDesk(_ context.Context, f func(*models.MatchDesk, models.DeskContext) error) error {
+	data, _ := json.Marshal(s.state)
+	var copied models.MatchDesk
+	_ = json.Unmarshal(data, &copied)
+	return f(&copied, s.snapshot)
+}
+
 func TestMatchDeskDeliveryRetriesOnlyFailedRecipientAndUsesNativeCopyButton(t *testing.T) {
 	counts := map[string]int{}
 	sawCopy := false
