@@ -125,6 +125,7 @@ type TelegramService interface {
 	GetTournamentByID(ctx context.Context, id int) (*models.TelegramTournament, error)
 	GetAllTournaments(ctx context.Context) ([]models.TelegramTournament, error)
 	SetActiveTournament(ctx context.Context, id int) error
+	CreateNextQualifier(ctx context.Context, finishedID int) (*models.TelegramTournament, error)
 	FinishTournament(ctx context.Context, id int) (*FinishResult, error)
 	// TryFinishQualifier closes the active qualifier once its advance line is
 	// reached; nil when there is nothing to close.

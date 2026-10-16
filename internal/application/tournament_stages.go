@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -168,6 +169,57 @@ func (s *TelegramServiceImpl) CreateTournament(ctx context.Context, set Tourname
 	_ = s.repo.SetSetting(ctx, settingChallongeURL, "")
 	_ = s.repo.SetSetting(ctx, settingChallongeFor, "")
 	return created, nil
+}
+
+// CreateNextQualifier opens the qualifier after a finished one, with its
+// settings and the next number in the name, as a draft taking registrations
+// without a start time. It refuses once any tournament was created after the
+// finished one, so a second tap or another admin's does not open two.
+func (s *TelegramServiceImpl) CreateNextQualifier(ctx context.Context, finishedID int) (*models.TelegramTournament, error) {
+	prev, err := s.repo.GetTournamentByID(ctx, finishedID)
+	if err != nil {
+		return nil, err
+	}
+	if prev == nil || !prev.Qualifier() {
+		return nil, errors.New("это не квалификация")
+	}
+	if prev.Status != models.TournamentStatusCompleted {
+		return nil, fmt.Errorf("квалификация «%s» ещё не завершена", prev.Name)
+	}
+	all, err := s.repo.GetAllTournaments(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range all {
+		if t.ID > prev.ID {
+			return nil, fmt.Errorf("после «%s» уже создан турнир «%s»", prev.Name, t.Name)
+		}
+	}
+	return s.CreateTournament(ctx, TournamentSettings{
+		Name:            NextQualifierName(prev.Name),
+		TournamentType:  prev.TournamentType,
+		SeedingType:     prev.SeedingType,
+		Stage:           models.StageQualifier,
+		HoldThirdPlace:  prev.HoldThirdPlace,
+		AdvanceCount:    prev.AdvanceCount,
+		FormatRounds:    prev.FormatRounds,
+		FormatSemifinal: prev.FormatSemifinal,
+		FormatFinal:     prev.FormatFinal,
+	})
+}
+
+// NextQualifierName counts the trailing number up: "Квалификация 1" is
+// followed by "Квалификация 2", a name without a number by "<name> 2".
+func NextQualifierName(name string) string {
+	name = strings.TrimSpace(name)
+	i := len(name)
+	for i > 0 && name[i-1] >= '0' && name[i-1] <= '9' {
+		i--
+	}
+	if n, err := strconv.Atoi(name[i:]); err == nil && i > 0 && name[i-1] == ' ' {
+		return name[:i] + strconv.Itoa(n+1)
+	}
+	return name + " 2"
 }
 
 // activeUnderWay refuses to replace the active tournament while its bracket

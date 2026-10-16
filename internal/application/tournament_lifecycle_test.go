@@ -758,3 +758,44 @@ func TestNewTournamentDuringRegistration(t *testing.T) {
 		t.Fatalf("create while the active one takes registrations: %v", err)
 	}
 }
+
+func TestNextQualifierName(t *testing.T) {
+	for in, want := range map[string]string{
+		"Квалификация 1":  "Квалификация 2",
+		"Квалификация 9":  "Квалификация 10",
+		"Квала":           "Квала 2",
+		"  Qualifier 3  ": "Qualifier 4",
+	} {
+		if got := NextQualifierName(in); got != want {
+			t.Errorf("NextQualifierName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// After a qualifier closes the admins create the next one with one button:
+// same stage, advance count, bracket and formats, the next number in the name.
+func TestCreateNextQualifier(t *testing.T) {
+	svc, repo := qualifierFixture(t, true)
+	ctx := context.Background()
+	q1 := repo.tournaments[0]
+	q1.Name, q1.FormatRounds, q1.FormatFinal, q1.SeedingType = "Квалификация 1", 3, 5, models.SeedingTypeRandom
+	if _, err := svc.CreateNextQualifier(ctx, 1); err == nil {
+		t.Fatal("next qualifier created before the first one finished")
+	}
+	if _, err := svc.FinishTournament(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	q2, err := svc.CreateNextQualifier(ctx, 1)
+	if err != nil {
+		t.Fatalf("create next: %v", err)
+	}
+	if q2.Name != "Квалификация 2" || q2.Stage != models.StageQualifier || q2.AdvanceCount != 8 ||
+		q2.FormatRounds != 3 || q2.FormatFinal != 5 || q2.SeedingType != models.SeedingTypeRandom ||
+		!q2.IsActive || q2.Status != models.TournamentStatusRegistration || q2.TournamentTime != nil {
+		t.Fatalf("next qualifier = %+v", q2)
+	}
+	// A second tap, or another admin's, does not make a second one.
+	if _, err := svc.CreateNextQualifier(ctx, 1); err == nil || !strings.Contains(err.Error(), "Квалификация 2") {
+		t.Fatalf("second create = %v, want a refusal naming the one already made", err)
+	}
+}

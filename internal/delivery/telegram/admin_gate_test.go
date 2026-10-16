@@ -20,3 +20,14 @@ func TestAdminGateRejectsUserCommands(t *testing.T) {
 		}
 	}
 }
+
+// Every admin command handleAdminCommand serves must pass the gate. The
+// tournament commands were missing: /new_tourney, /select_tourney,
+// /finish_tourney and /tournaments answered as unknown.
+func TestAdminGateCoversTournamentCommands(t *testing.T) {
+	for _, cmd := range []string{"/tournaments", "/new_tourney Квалификация 2", "/select_tourney 2", "/finish_tourney", "/next_qual"} {
+		if !isAdminCommand(cmd) {
+			t.Errorf("%s is not gated as an admin command", cmd)
+		}
+	}
+}

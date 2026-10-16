@@ -138,6 +138,7 @@ func (b *Bot) announceQualified(ctx context.Context, res *application.FinishResu
 	for _, team := range res.Qualified {
 		b.notifyTeam(ctx, team.ID, fmt.Sprintf("Поздравляем! Команда '%s' прошла квалификацию «%s» и выходит в основной этап.\n\nМатчей в этой квалификации у вас больше нет — дальше ничего играть не нужно. О времени основного этапа сообщим отдельно.", team.Name, res.Tournament.Name), "main_menu")
 	}
+	b.offerNextQualifier(res)
 }
 
 func qualifiedText(res *application.FinishResult) string {

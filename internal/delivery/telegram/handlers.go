@@ -31,6 +31,7 @@ func (b *Bot) handleAdminCommand(ctx context.Context, chatID int64, text string)
 			"/export_solo - CSV соло-игроков\n\n" +
 			"/tournaments - Список всех турниров\n" +
 			"/new_tourney <название> - Создать и запустить новый турнир\n" +
+			"/next_qual - Открыть следующую квалификацию с настройками прошлой\n" +
 			"/select_tourney <ID> - Выбрать активный турнир\n" +
 			"/finish_tourney - Завершить текущий турнир\n\n" +
 			"/broadcast [текст] - Рассылка\n" +
@@ -284,6 +285,11 @@ func (b *Bot) handleAdminCommand(ctx context.Context, chatID int64, text string)
 			return
 		}
 		b.sendMessage(chatID, fmt.Sprintf("Турнир ID %d теперь активен.", id), "main_menu")
+		return
+	}
+
+	if text == "/next_qual" {
+		b.offerLastQualifier(ctx, chatID)
 		return
 	}
 

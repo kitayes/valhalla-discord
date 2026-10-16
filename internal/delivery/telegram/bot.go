@@ -204,6 +204,10 @@ func (b *Bot) handleCallbackQuery(parent context.Context, callback *tgbotapi.Cal
 		b.handleGameCallback(ctx, callback)
 		return
 	}
+	if strings.HasPrefix(callback.Data, tourneyCallbackPrefix) {
+		b.handleTourneyCallback(ctx, callback)
+		return
+	}
 
 	if callback.Data == "admin_ping_debtors" {
 		if !b.isAdmin(callback.From.ID) {
@@ -294,7 +298,8 @@ func isAdminCommand(text string) bool {
 	case "/admin", "/list_teams", "/checkin_status", "/checkins",
 		"/export", "/export_solo", "/export_sheet", "/list_solo",
 		"/close_reg", "/open_reg", "/reports",
-		"/ping_debtors", "/ping", "/remind_debtors", "/remind_checkin":
+		"/ping_debtors", "/ping", "/remind_debtors", "/remind_checkin",
+		"/tournaments", "/finish_tourney", "/next_qual":
 		return true
 	}
 	// These take an argument. The prefixes are bare, as they have always
@@ -302,7 +307,7 @@ func isAdminCommand(text string) bool {
 	// expected form instead of being answered as an unknown command.
 	for _, prefix := range []string{
 		"/check_team", "/broadcast", "/set_tourney", "/del_team",
-		"/reinstate", "/reset_user",
+		"/reinstate", "/reset_user", "/new_tourney", "/select_tourney",
 		"/ping_debtors ", "/ping ", "/remind_debtors ", "/remind_checkin ",
 	} {
 		if strings.HasPrefix(text, prefix) {
