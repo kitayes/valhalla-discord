@@ -205,3 +205,45 @@ func TestSeriesDecidedWhileChallongeIsDownIsQueued(t *testing.T) {
 		t.Error("series result reported as written while Challonge refused it")
 	}
 }
+
+// The Mini App score form and the series in the bot are two ways to the same
+// result: once one is under way, the other waits.
+func TestScoreFormRefusedOnceTheSeriesStarted(t *testing.T) {
+	svc, repo, _, _ := resultFixture(t, models.StageStandalone, 0)
+	ctx := context.Background()
+	m := openMatchOf(t, repo, 1)
+	claim(t, svc, *m.Team1ID, true)
+	if _, err := svc.ReportMatchDirect(ctx, captainOf(*m.Team2ID), m.ID, 2, 0, nil); err == nil || !strings.Contains(err.Error(), "скрины") {
+		t.Fatalf("score form during a series = %v, want a refusal pointing to the bot", err)
+	}
+}
+
+func TestSeriesRefusedWhileAScoreFormWaits(t *testing.T) {
+	svc, repo, _, _ := resultFixture(t, models.StageStandalone, 0)
+	ctx := context.Background()
+	m := openMatchOf(t, repo, 1)
+	if _, err := svc.ReportMatchDirect(ctx, captainOf(*m.Team1ID), m.ID, 2, 0, nil); err != nil {
+		t.Fatalf("score form: %v", err)
+	}
+	if _, err := svc.AddGamePhoto(ctx, playerOf(*m.Team2ID), "x"); err == nil || !strings.Contains(err.Error(), "приложени") {
+		t.Fatalf("screenshot while the form waits = %v, want a refusal", err)
+	}
+}
+
+// A score for a match already played went to Challonge as a conflict and
+// alerted the admins every time.
+func TestScoreFormRefusedOnAPlayedMatch(t *testing.T) {
+	svc, repo, _, _ := resultFixture(t, models.StageStandalone, 0)
+	ctx := context.Background()
+	m := openMatchOf(t, repo, 1)
+	rep, err := svc.ReportMatchDirect(ctx, captainOf(*m.Team1ID), m.ID, 2, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.ConfirmReport(ctx, captainOf(*m.Team2ID), rep.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ReportMatchDirect(ctx, captainOf(*m.Team2ID), m.ID, 2, 1, nil); err == nil {
+		t.Fatal("a score for a played match was accepted")
+	}
+}

@@ -1546,6 +1546,11 @@ func (s *TelegramServiceImpl) ReportMatchDirect(ctx context.Context, reporterTgI
 		if bracketMatch == nil {
 			return nil, errors.New("открытый матч для вашей команды не найден в сетке")
 		}
+		// A score for a played match reached Challonge as a conflict and
+		// alerted the admins; corrections are the referees' job.
+		if !bracketMatch.Ready() {
+			return nil, errors.New("этот матч уже сыгран или ещё не открыт — внести счёт нельзя")
+		}
 		oppID := bracketMatch.Opponent(myTeam.ID)
 		if oppID == nil {
 			return nil, errors.New("соперник в сетке ещё не определён")
@@ -1569,6 +1574,13 @@ func (s *TelegramServiceImpl) ReportMatchDirect(ctx context.Context, reporterTgI
 		oppTeam = &opponents[0]
 	}
 	if bracketMatch != nil {
+		// The series in the bot and this form are two ways to the same
+		// result; held under seriesMu so a game cannot slip in between.
+		s.seriesMu.Lock()
+		defer s.seriesMu.Unlock()
+		if err := s.seriesUnderWay(ctx, bracketMatch.ID); err != nil {
+			return nil, err
+		}
 		active, _ := s.repo.GetActiveTournament(ctx)
 		hi, lo := myScore, oppScore
 		if lo > hi {

@@ -169,6 +169,9 @@ func (s *TelegramServiceImpl) AddGamePhoto(ctx context.Context, tgID int64, file
 	}
 	s.seriesMu.Lock()
 	defer s.seriesMu.Unlock()
+	if err := s.scoreFormWaits(ctx, m.ID); err != nil {
+		return nil, err
+	}
 	_, st, err := s.seriesContext(ctx, m.ID)
 	if err != nil {
 		return nil, err
@@ -206,6 +209,9 @@ func (s *TelegramServiceImpl) ClaimGame(ctx context.Context, tgID int64, matchID
 	if !m.Ready() || !m.Has(teamID) {
 		return nil, errNoOpenMatch
 	}
+	if err := s.scoreFormWaits(ctx, m.ID); err != nil {
+		return nil, err
+	}
 	if st.Decided() {
 		return nil, errSeriesDecided
 	}
@@ -236,6 +242,41 @@ func (s *TelegramServiceImpl) ClaimGame(ctx context.Context, tgID int64, matchID
 	delete(s.seriesDrafts, tgID)
 	_, st, _ = s.seriesContext(ctx, m.ID)
 	return &GameEvent{Game: *g, Match: m, Series: st}, nil
+}
+
+// scoreFormWaits refuses a game while a score filed through the Mini App
+// form waits for the other team or a referee: two results for one match
+// would race to the bracket. The caller holds seriesMu.
+func (s *TelegramServiceImpl) scoreFormWaits(ctx context.Context, matchID int) error {
+	rep, err := s.repo.GetOpenReportForMatch(ctx, matchID)
+	if err != nil {
+		return err
+	}
+	switch {
+	case rep == nil:
+		return nil
+	case rep.Status == models.ReportDisputed:
+		return fmt.Errorf("счёт матча %s %s %s, внесённый через приложение, оспорен — решение примет судья, скрины каток не нужны",
+			rep.WinnerTeamName, rep.Score, rep.LoserTeamName)
+	default:
+		return fmt.Errorf("счёт матча %s %s %s уже внесён через приложение и ждёт подтверждения соперника — скрины каток не нужны",
+			rep.WinnerTeamName, rep.Score, rep.LoserTeamName)
+	}
+}
+
+// seriesUnderWay refuses the Mini App score form once a game of the match was
+// reported in the bot: the series decides the result. The caller holds
+// seriesMu.
+func (s *TelegramServiceImpl) seriesUnderWay(ctx context.Context, matchID int) error {
+	m, st, err := s.seriesContext(ctx, matchID)
+	if err != nil {
+		return err
+	}
+	if len(st.Games) == 0 {
+		return nil
+	}
+	return fmt.Errorf("в боте уже идёт серия по каткам (%s) — присылайте скрины следующих каток боту, счёт через приложение не нужен",
+		SeriesLine(m, st))
 }
 
 // openGame loads a game still open on the current revision of its match.

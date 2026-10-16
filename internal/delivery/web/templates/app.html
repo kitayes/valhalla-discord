@@ -2536,7 +2536,7 @@
                 tg.MainButton.textColor = '#0b1e12';
                 tg.MainButton.enable();
                 tg.MainButton.show();
-            } else if (m.my_ready && m.opponent_ready && currentUserIsCaptain) {
+            } else if (m.my_ready && m.opponent_ready && currentUserIsCaptain && !seriesStarted()) {
                 mainButtonAction = openReportModal;
                 tg.MainButton.setText('ВНЕСТИ РЕЗУЛЬТАТ МАТЧА');
                 tg.MainButton.color = '#3498db';
@@ -3647,6 +3647,12 @@
 
         // The open report on the current match, from /api/match/active.
         let currentPendingResult = null;
+        // The series of the current match. Once a game was sent to the bot
+        // the series decides the result and the score form is closed.
+        let currentSeries = null;
+        function seriesStarted() {
+            return !!(currentSeries && currentSeries.games && currentSeries.games.length > 0);
+        }
 
         function matchPhase(m) {
             if (!m) return null;
@@ -3805,7 +3811,7 @@
             renderPendingResult(currentPendingResult);
 
             const canReadyNow = phase === 'ready' && m.can_ready;
-            const captainCanReport = currentUserIsCaptain && phase === 'lobby';
+            const captainCanReport = currentUserIsCaptain && phase === 'lobby' && !seriesStarted();
             if (btnReady) btnReady.style.display = (!native && canReadyNow) ? 'flex' : 'none';
             if (btnReport) btnReport.style.display = (!native && captainCanReport) ? 'flex' : 'none';
 
@@ -3825,6 +3831,9 @@
                 statusText = 'Готовность подтверждена. Ждём ' + (m.opponent_team_name || 'соперника') + '.';
             } else if (phase === 'ready' && !m.can_ready) {
                 statusText = 'Матч ещё не открыт для подтверждения.';
+            } else if (phase === 'lobby' && seriesStarted()) {
+                statusText = 'Серия идёт в боте — после каждой катки присылайте скрин результата боту.';
+                ok = true;
             } else if (phase === 'lobby' && native) {
                 statusText = 'Обе команды готовы. После игры внесите результат кнопкой ниже.';
                 ok = true;
@@ -4171,7 +4180,8 @@
             const m = data.match;
             currentActiveMatchData = m;
             currentPendingResult = data.pending_result || null;
-            renderSeries(data.series || null);
+            currentSeries = data.series || null;
+            renderSeries(currentSeries);
             currentActiveMatchID = m.match_id;
             currentMatchGeneration = m.generation;
             currentMyTeamName = m.my_team_name;
@@ -4379,6 +4389,10 @@
 
         // Match Report Modal
         function openReportModal() {
+            if (seriesStarted()) {
+                showToast('Серия идёт в боте — присылайте скрины каток боту.', false);
+                return;
+            }
             haptic('light');
             document.getElementById('myTeamScoreLabel').textContent = currentMyTeamName || 'Моя команда';
             document.getElementById('oppTeamScoreLabel').textContent = currentOppTeamName || 'Соперник';
