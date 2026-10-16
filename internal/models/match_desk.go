@@ -33,6 +33,10 @@ type DeskMatch struct {
 	CardRevision    [2]int64
 	CaptainKeys     [2]string
 	AlertKey        string
+	// AlertSince is when the current problems were first alerted; an alert
+	// still unresolved after a while is sent once more (AlertRepeated).
+	AlertSince    time.Time
+	AlertRepeated bool
 	// Reminded counts the "press ready" reminders sent to each side since the
 	// lobby deadline was last set.
 	Reminded [2]int
@@ -81,6 +85,20 @@ type DeskContext struct {
 	Matches    []BracketMatch
 	Captains   map[int]TelegramPlayer
 	// Members are the Telegram chats of every player per team id.
-	Members  map[int][]int64
+	Members map[int][]int64
+	// Series is the reported games of each open match at its current
+	// revision, by bracket match id; absent when no game was reported.
+	Series   map[int]DeskSeries
 	StartsAt time.Time
+}
+
+// DeskSeries is what the desk needs to know of a match's games.
+type DeskSeries struct {
+	// LastActivity is the latest game report, confirmation, dispute or
+	// referee decision.
+	LastActivity time.Time
+	// DisputedGame is the number of a game waiting for a referee, 0 if none;
+	// DisputedAt is when it was disputed.
+	DisputedGame int
+	DisputedAt   time.Time
 }

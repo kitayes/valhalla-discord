@@ -961,7 +961,7 @@ func (s *AdminServer) handleAdminDesk(w http.ResponseWriter, r *http.Request) {
 			resp.ActiveMatches = matches
 			resp.ArchivedMatches = archived
 			for _, m := range matches {
-				if m.HasIssues {
+				if m.HasIssues || len(m.Problems) > 0 {
 					resp.Disputes = append(resp.Disputes, m)
 				}
 			}

@@ -131,6 +131,44 @@ func (r *TelegramPostgres) UpdateMatchDesk(ctx context.Context, change func(*mod
 		return err
 	}
 
+	// The games of each open match at its current revision: the desk flags a
+	// dispute nobody decided and a series with no news.
+	snapshot.Series = map[int]models.DeskSeries{}
+	err = func() error {
+		rows, err := tx.QueryContext(ctx, `SELECT g.bracket_match_id, g.game_no, g.status, g.created_at, g.resolved_at
+ FROM telegram_match_games g JOIN telegram_bracket_matches m ON m.id = g.bracket_match_id AND g.match_revision = m.desk_revision
+ WHERE m.tournament_id = $1 AND m.state = 'open'`, active.ID)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var matchID, gameNo int
+			var status string
+			var created time.Time
+			var resolved sql.NullTime
+			if err = rows.Scan(&matchID, &gameNo, &status, &created, &resolved); err != nil {
+				return err
+			}
+			st := snapshot.Series[matchID]
+			at := created
+			if resolved.Valid && resolved.Time.After(at) {
+				at = resolved.Time
+			}
+			if at.After(st.LastActivity) {
+				st.LastActivity = at
+			}
+			if status == models.GameDisputed {
+				st.DisputedGame, st.DisputedAt = gameNo, at
+			}
+			snapshot.Series[matchID] = st
+		}
+		return rows.Err()
+	}()
+	if err != nil {
+		return err
+	}
+
 	if err = change(&d, snapshot); err != nil {
 		return err
 	}

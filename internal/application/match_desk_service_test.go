@@ -4,6 +4,7 @@ import (
 	"blackwatch/internal/models"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -403,5 +404,114 @@ func TestDeskAlertOffersForfeitAndExtension(t *testing.T) {
 	// minutes away the first one goes out at once — to Alpha only.
 	if r := store.state.Matches[1].Reminded; r != [2]int{1, 0} {
 		t.Errorf("reminders after the extension = %v, want [1 0]", r)
+	}
+}
+
+// adminAlerts are the attention cards queued for the admin of the fixture.
+func adminAlerts(store *memoryDeskStore) []models.DeskNotice {
+	var out []models.DeskNotice
+	for _, n := range store.state.Outbox {
+		if n.Kind == "alert" && n.ChatID == 999 {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func readyBoth(t *testing.T, s *MatchDeskService, store *memoryDeskStore) {
+	t.Helper()
+	ctx := context.Background()
+	if err := s.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	gen := store.state.Matches[1].Generation
+	for _, tg := range []int64{100, 200} {
+		if err := s.CaptainAction(ctx, tg, 1, gen, "ready"); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A referee who missed the alert hears it once more ten minutes later; the
+// match used to stand still with nobody reminded.
+func TestDeskEscalatesAnUnresolvedAlertOnce(t *testing.T) {
+	s, store, now := deskServiceFixture(t)
+	ctx := context.Background()
+	clock := now
+	s.now = func() time.Time { return clock }
+	if err := s.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	clock = now.Add(11 * time.Minute) // readiness deadline passed
+	_ = s.Tick(ctx)
+	if n := len(adminAlerts(store)); n != 1 {
+		t.Fatalf("alerts after the deadline = %d, want 1", n)
+	}
+	clock = now.Add(20 * time.Minute)
+	_ = s.Tick(ctx)
+	if n := len(adminAlerts(store)); n != 1 {
+		t.Fatalf("alerts 9 minutes later = %d, want still 1", n)
+	}
+	clock = now.Add(22 * time.Minute)
+	_ = s.Tick(ctx)
+	alerts := adminAlerts(store)
+	if len(alerts) != 2 || !strings.Contains(alerts[1].Text, "Не решено") {
+		t.Fatalf("alerts 11 minutes later = %+v, want a second one marked unresolved", alerts)
+	}
+	clock = now.Add(60 * time.Minute)
+	_ = s.Tick(ctx)
+	if n := len(adminAlerts(store)); n != 2 {
+		t.Fatalf("alerts later on = %d, want no more than 2", n)
+	}
+}
+
+// Both teams ready and no game reported for a long time: the referee is told.
+func TestDeskFlagsASeriesWithNoResult(t *testing.T) {
+	s, store, now := deskServiceFixture(t)
+	ctx := context.Background()
+	clock := now
+	s.now = func() time.Time { return clock }
+	readyBoth(t, s, store)
+
+	clock = now.Add(30 * time.Minute)
+	store.snapshot.Series = map[int]models.DeskSeries{1: {LastActivity: now.Add(25 * time.Minute)}}
+	_ = s.Tick(ctx)
+	clock = now.Add(50 * time.Minute) // 25 minutes after the last game
+	_ = s.Tick(ctx)
+	if n := len(adminAlerts(store)); n != 0 {
+		t.Fatalf("alerts while games keep coming = %d, want 0", n)
+	}
+	clock = now.Add(66 * time.Minute) // 41 minutes after the last game
+	_ = s.Tick(ctx)
+	alerts := adminAlerts(store)
+	if len(alerts) != 1 || !strings.Contains(alerts[0].Text, "Нет результата") {
+		t.Fatalf("alerts after a long silence = %+v, want one about the missing result", alerts)
+	}
+	m := store.state.Matches[1]
+	if p := deskAllProblems(m, store.snapshot, clock); len(p) == 0 {
+		t.Error("the stalled match is missing from /attention")
+	}
+}
+
+// A disputed game nobody decided within ten minutes reaches the desk.
+func TestDeskFlagsAnUndecidedGameDispute(t *testing.T) {
+	s, store, now := deskServiceFixture(t)
+	ctx := context.Background()
+	clock := now
+	s.now = func() time.Time { return clock }
+	readyBoth(t, s, store)
+
+	disputed := now.Add(20 * time.Minute)
+	store.snapshot.Series = map[int]models.DeskSeries{1: {LastActivity: disputed, DisputedGame: 2, DisputedAt: disputed}}
+	clock = disputed.Add(9 * time.Minute)
+	_ = s.Tick(ctx)
+	if n := len(adminAlerts(store)); n != 0 {
+		t.Fatalf("alerts 9 minutes into a dispute = %d, want 0: the dispute card already went out", n)
+	}
+	clock = disputed.Add(11 * time.Minute)
+	_ = s.Tick(ctx)
+	alerts := adminAlerts(store)
+	if len(alerts) != 1 || !strings.Contains(alerts[0].Text, "Спор по катке 2") {
+		t.Fatalf("alerts 11 minutes into a dispute = %+v, want one about game 2", alerts)
 	}
 }

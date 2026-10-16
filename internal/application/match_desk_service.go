@@ -10,6 +10,19 @@ import (
 	"time"
 )
 
+// A match with no visible way forward reaches the referees: the alert itself
+// goes out once, so a referee who missed it left the bracket standing.
+const (
+	// deskStallAfter: both teams ready and no game reported, confirmed or
+	// decided for this long.
+	deskStallAfter = 40 * time.Minute
+	// deskDisputeAfter: a disputed game still undecided. The dispute itself
+	// already reached the referees with its buttons.
+	deskDisputeAfter = 10 * time.Minute
+	// deskRepeatAfter: an alert still unresolved is sent once more.
+	deskRepeatAfter = 10 * time.Minute
+)
+
 type MatchDeskStore interface {
 	// A failed callback must roll back all state changes. Implementations lock
 	// the desk and pairings for the whole callback; no network I/O belongs here.
@@ -338,15 +351,27 @@ func (s *MatchDeskService) queueNotices(d *models.MatchDesk, c models.DeskContex
 		s.queueReminders(m, c, now, enqueue)
 		problems := deskAllProblems(m, c, now)
 		key := strings.Join(problems, "\n")
-		if key != m.AlertKey {
-			m.AlertKey = key
-			if key != "" {
-				for id := range s.admins {
-					n := s.attentionCard(m, c, problems, id)
-					n.AlertKey = key
-					enqueue(n)
-				}
+		alert := func(lines []string) {
+			for id := range s.admins {
+				n := s.attentionCard(m, c, lines, id)
+				n.AlertKey = key
+				enqueue(n)
 			}
+		}
+		if m.AlertSince.IsZero() {
+			// A desk saved before alerts were repeated: count from now.
+			m.AlertSince = now
+		}
+		switch {
+		case key != m.AlertKey:
+			m.AlertKey = key
+			m.AlertSince, m.AlertRepeated = now, false
+			if key != "" {
+				alert(problems)
+			}
+		case key != "" && !m.AlertRepeated && !now.Before(m.AlertSince.Add(deskRepeatAfter)):
+			m.AlertRepeated = true
+			alert(append([]string{fmt.Sprintf("Не решено больше %d минут.", int(deskRepeatAfter.Minutes()))}, problems...))
 		}
 	}
 	pending := d.Outbox[:0]
@@ -416,7 +441,31 @@ func deskAllProblems(m *models.DeskMatch, c models.DeskContext, now time.Time) [
 			problems = append(problems, m.Names[side]+": нет контакта капитана")
 		}
 	}
-	return problems
+	return append(problems, deskSeriesProblems(m, c.Series[m.ID], now)...)
+}
+
+// deskSeriesProblems are the ways a series under way can stand still: a
+// disputed game nobody decided, or no game news long after both teams were
+// ready.
+func deskSeriesProblems(m *models.DeskMatch, st models.DeskSeries, now time.Time) []string {
+	if !m.Active || !m.PausedAt.IsZero() || !m.Ready[0] || !m.Ready[1] {
+		return nil
+	}
+	if st.DisputedGame > 0 {
+		if now.Before(st.DisputedAt.Add(deskDisputeAfter)) {
+			return nil
+		}
+		return []string{fmt.Sprintf("Спор по катке %d не решён больше %d минут — решите его кнопками в сообщении о споре",
+			st.DisputedGame, int(deskDisputeAfter.Minutes()))}
+	}
+	last := m.StartedAt
+	if st.LastActivity.After(last) {
+		last = st.LastActivity
+	}
+	if last.IsZero() || now.Before(last.Add(deskStallAfter)) {
+		return nil
+	}
+	return []string{fmt.Sprintf("Нет результата катки больше %d минут — уточните у капитанов", int(deskStallAfter.Minutes()))}
 }
 
 // MatchDeskDetail carries real-time desk state formatted for the web app.
@@ -580,6 +629,9 @@ type AdminArchivedMatchItem struct {
 	History       []models.DeskEvent `json:"history,omitempty"`
 }
 
+// AdminMatchItem is an active match in the Mini App admin desk. Problems is
+// everything the referees are alerted about for it: the captains' calls, a
+// missed readiness deadline, a stalled series.
 type AdminMatchItem struct {
 	MatchID           int                `json:"match_id"`
 	Number            int                `json:"number"`
@@ -599,6 +651,7 @@ type AdminMatchItem struct {
 	ScheduledTime     string             `json:"scheduled_time"`
 	Issues            [2]string          `json:"issues"`
 	HasIssues         bool               `json:"has_issues"`
+	Problems          []string           `json:"problems,omitempty"`
 	History           []models.DeskEvent `json:"history,omitempty"`
 }
 
@@ -657,6 +710,7 @@ func (s *MatchDeskService) GetAdminMatches(ctx context.Context, actor int64) (bo
 				ScheduledTime:     schedTime,
 				Issues:            m.Issues,
 				HasIssues:         hasIssues,
+				Problems:          deskAllProblems(m, c, now),
 				History:           m.History,
 			})
 		}

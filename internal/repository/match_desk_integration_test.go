@@ -48,6 +48,10 @@ func TestMatchDeskPostgresPersistenceRollbackAndReopen(t *testing.T) {
 	if _, err = db.Exec(string(migration)); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = db.Exec(`CREATE TABLE telegram_match_games (id SERIAL PRIMARY KEY,bracket_match_id INT NOT NULL,match_revision BIGINT NOT NULL,
+   game_no INT NOT NULL,status TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),resolved_at TIMESTAMPTZ)`); err != nil {
+		t.Fatal(err)
+	}
 	repo := NewTelegramPostgres(db)
 	ctx := context.Background()
 	err = repo.UpdateMatchDesk(ctx, func(d *models.MatchDesk, c models.DeskContext) error {
@@ -76,12 +80,25 @@ func TestMatchDeskPostgresPersistenceRollbackAndReopen(t *testing.T) {
 	if _, err = db.Exec(`UPDATE telegram_bracket_matches SET state='complete'; UPDATE telegram_bracket_matches SET state='open'`); err != nil {
 		t.Fatal(err)
 	}
+	// Games of the reopened match: one from before the reopen (revision 1)
+	// that no longer counts, a confirmed game 1 and a disputed game 2.
+	disputedAt := time.Date(2026, 9, 16, 12, 40, 0, 0, time.UTC)
+	if _, err = db.Exec(`INSERT INTO telegram_match_games (bracket_match_id,match_revision,game_no,status,created_at,resolved_at) VALUES
+   (1,1,1,'confirmed','2026-09-16T13:30:00Z','2026-09-16T13:31:00Z'),
+   (1,2,1,'confirmed','2026-09-16T12:20:00Z','2026-09-16T12:22:00Z'),
+   (1,2,2,'disputed','2026-09-16T12:38:00Z',$1)`, disputedAt); err != nil {
+		t.Fatal(err)
+	}
 	err = repo.UpdateMatchDesk(ctx, func(d *models.MatchDesk, c models.DeskContext) error {
 		if d.NextGeneration != 42 || len(d.Outbox) != 1 {
 			t.Fatalf("rollback/persistence: %+v", d)
 		}
 		if c.Revisions[1] != 2 {
 			t.Fatalf("reopen epoch: %d", c.Revisions[1])
+		}
+		st := c.Series[1]
+		if st.DisputedGame != 2 || !st.DisputedAt.Equal(disputedAt) || !st.LastActivity.Equal(disputedAt) {
+			t.Fatalf("series snapshot = %+v, want game 2 disputed at %v", st, disputedAt)
 		}
 		return nil
 	})

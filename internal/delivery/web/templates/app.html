@@ -5257,13 +5257,16 @@
                     const card = document.createElement('div');
                     card.className = 'admin-dispute-card';
                     const issuesText = (d.issues[0] ? `Команда 1: ${d.issues[0]}` : '') + (d.issues[1] ? ` | Команда 2: ${d.issues[1]}` : '');
+                    // Problems cover the captains' calls and what the desk
+                    // noticed itself: a missed deadline, a stalled series.
+                    const problemsText = (d.problems && d.problems.length) ? d.problems.join(' | ') : issuesText;
                     card.innerHTML = `
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                             <strong style="font-size: 13px; color: var(--accent-red);">Матч #${d.number}: ${escapeHtml(d.team1_name)} vs ${escapeHtml(d.team2_name)}</strong>
                             <span class="status-pill status-waiting">СУДЬЯ В МАТЧЕ</span>
                         </div>
                         <div style="font-size: 12px; color: var(--text-main); margin-bottom: 10px; background: rgba(0,0,0,0.25); padding: 8px; border-radius: 6px;">
-                            <strong>Обращение:</strong> ${escapeHtml(issuesText)}
+                            <strong>${d.has_issues ? 'Обращение' : 'Проблема'}:</strong> ${escapeHtml(problemsText)}
                         </div>
                         <div style="display: flex; gap: 6px;">
                             <button class="btn btn-green btn-sm" style="flex: 1;" onclick="resolveDispute(${d.match_id}, ${d.generation})">
