@@ -2528,7 +2528,8 @@
             } else if (pr) {
                 mainButtonAction = null;
                 tg.MainButton.hide();
-            } else if (!m.my_ready && m.can_ready && currentUserIsCaptain) {
+            } else if (!m.my_ready && m.can_ready) {
+                // Any player of the team may press ready; the server decides.
                 mainButtonAction = confirmReady;
                 tg.MainButton.setText('ПОДТВЕРДИТЬ ГОТОВНОСТЬ');
                 tg.MainButton.color = '#2ecc71';
@@ -2877,7 +2878,7 @@
                                     <span>${escapeHtml(pNick)}</span>
                                     ${capBadge}
                                 </div>
-                                <div class="player-meta">ID: ${pGameId || '—'} ${pZoneId ? '(' + pZoneId + ')' : ''}</div>
+                                <div class="player-meta">ID: ${pGameId || '—'} ${pZoneId ? '(' + pZoneId + ')' : ''}${p.telegram_id ? '' : ' · <span style="color:var(--accent-gold);">нет Telegram</span>'}</div>
                             </div>
                         </div>
                         <div style="display:flex; align-items:center; flex-shrink:0;">
@@ -2911,6 +2912,21 @@
                     `;
                     list.appendChild(emptyItem);
                 }
+            }
+
+            // Players added by hand have no Telegram: the bot cannot reach
+            // them with match cards, reminders or the ready button.
+            const noTelegram = players.filter(p => !p.telegram_id).length;
+            if (noTelegram > 0) {
+                const hint = document.createElement('div');
+                hint.style.cssText = 'font-size:12px; color:var(--text-muted); padding:8px 2px 0; line-height:1.4;';
+                const one = noTelegram === 1;
+                const word = one ? 'игрок' : (noTelegram < 5 ? 'игрока' : 'игроков');
+                hint.textContent = `${noTelegram} ${word} без Telegram ` +
+                    (one ? 'не получает уведомления о матчах и не может' : 'не получают уведомления о матчах и не могут') +
+                    ' нажать «готовы» или прислать скрин. ' +
+                    (isCaptain ? 'Чтобы подключить игрока, удалите его строку из состава и отправьте ему ссылку-приглашение.' : 'Капитан может пригласить их по ссылке.');
+                list.appendChild(hint);
             }
 
             const btnAdd = document.getElementById('btnOpenAddPlayer');
@@ -3596,11 +3612,8 @@
             if (!m.my_ready) {
                 if (pIndicator) pIndicator.textContent = 'Шаг 1 из 4';
                 if (pText) {
-                    if (currentUserIsCaptain) {
-                        pText.innerHTML = '<strong>Подтвердите готовность</strong>: Нажмите кнопку «ПОДТВЕРДИТЬ ГОТОВНОСТЬ» до истечения таймера.';
-                    } else {
-                        pText.innerHTML = '<strong>Ожидание капитана</strong>: Капитан вашей команды должен подтвердить готовность к матчу.';
-                    }
+                    // Any player of the team confirms readiness.
+                    pText.innerHTML = '<strong>Подтвердите готовность</strong>: Нажмите кнопку «ПОДТВЕРДИТЬ ГОТОВНОСТЬ» до истечения таймера — это может сделать любой игрок команды.';
                 }
                 if (b1) b1.classList.add('active');
             } else if (!m.opponent_ready) {
@@ -3668,7 +3681,7 @@
             if (sr.waiting_game_no) {
                 hint.textContent = `Катка ${sr.waiting_game_no} ждёт подтверждения в боте.`;
             } else if (sr.next_game_no <= sr.bo) {
-                hint.textContent = `Дальше катка ${sr.next_game_no} из максимум ${sr.bo}. После неё капитан присылает скрин результата боту в личные сообщения.`;
+                hint.textContent = `Дальше катка ${sr.next_game_no} из максимум ${sr.bo}. После неё любой игрок команды присылает скрин результата боту в личные сообщения.`;
             } else {
                 hint.textContent = '';
             }
@@ -3791,9 +3804,9 @@
 
             renderPendingResult(currentPendingResult);
 
-            const captainCanReady = currentUserIsCaptain && phase === 'ready' && m.can_ready;
+            const canReadyNow = phase === 'ready' && m.can_ready;
             const captainCanReport = currentUserIsCaptain && phase === 'lobby';
-            if (btnReady) btnReady.style.display = (!native && captainCanReady) ? 'flex' : 'none';
+            if (btnReady) btnReady.style.display = (!native && canReadyNow) ? 'flex' : 'none';
             if (btnReport) btnReport.style.display = (!native && captainCanReport) ? 'flex' : 'none';
 
             // Anyone without a button to press gets a one-line status instead.
@@ -3804,10 +3817,9 @@
                 statusText = '';
             } else if (phase === 'paused') {
                 statusText = 'Матч на паузе — действия заморожены судьёй.';
-            } else if (!currentUserIsCaptain) {
-                statusText = phase === 'ready' ? 'Готовность подтверждает капитан вашей команды.'
-                    : phase === 'waiting' ? 'Ваша команда готова. Ждём соперника.'
-                    : 'Обе команды готовы — заходите в лобби MLBB.';
+            } else if (!currentUserIsCaptain && phase !== 'ready') {
+                statusText = phase === 'waiting' ? 'Ваша команда готова. Ждём соперника.'
+                    : 'Обе команды готовы — заходите в лобби MLBB. Скрины каток присылайте боту.';
                 ok = phase === 'lobby';
             } else if (phase === 'waiting') {
                 statusText = 'Готовность подтверждена. Ждём ' + (m.opponent_team_name || 'соперника') + '.';
@@ -4256,15 +4268,6 @@
                 btnReady.style.cursor = 'default';
                 if (btnReadySubtext) {
                     btnReadySubtext.textContent = m.opponent_ready ? 'Обе команды готовы. Начинайте матч в лобби MLBB!' : 'Ожидаем подтверждения от соперника...';
-                    btnReadySubtext.style.display = 'block';
-                }
-            } else if (!currentUserIsCaptain) {
-                btnReadyText.textContent = 'ОЖИДАНИЕ ГОТОВНОСТИ (КАПИТАН)';
-                btnReady.disabled = true;
-                btnReady.style.opacity = '0.5';
-                btnReady.style.cursor = 'not-allowed';
-                if (btnReadySubtext) {
-                    btnReadySubtext.textContent = 'Подтвердить готовность может только капитан команды';
                     btnReadySubtext.style.display = 'block';
                 }
             } else if (m.can_ready) {

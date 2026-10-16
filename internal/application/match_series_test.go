@@ -71,16 +71,45 @@ func TestSeriesOneOpenGameAtATime(t *testing.T) {
 	}
 }
 
+// playerOf is a non-captain player of a team with Telegram (addBracketTeam
+// gives telegram id 100*team+i).
+func playerOf(teamID int) int64 { return int64(100*teamID + 1) }
+
 func TestSeriesOnlyTheOpponentAnswers(t *testing.T) {
 	svc, repo, _, _ := resultFixture(t, models.StageStandalone, 0)
+	ctx := context.Background()
 	m := openMatchOf(t, repo, 1)
 	ev := claim(t, svc, *m.Team1ID, true)
-	if _, err := svc.ConfirmGame(context.Background(), captainOf(*m.Team1ID), ev.Game.ID); err == nil {
+	if _, err := svc.ConfirmGame(ctx, captainOf(*m.Team1ID), ev.Game.ID); err == nil {
 		t.Error("the reporting captain confirmed the team's own game")
 	}
+	if _, err := svc.ConfirmGame(ctx, playerOf(*m.Team1ID), ev.Game.ID); err == nil {
+		t.Error("the reporter's teammate confirmed the team's own game")
+	}
 	other := openMatchOf(t, repo, 2)
-	if _, err := svc.ConfirmGame(context.Background(), captainOf(*other.Team1ID), ev.Game.ID); err == nil {
+	if _, err := svc.ConfirmGame(ctx, captainOf(*other.Team1ID), ev.Game.ID); err == nil {
 		t.Error("a captain from another match confirmed the game")
+	}
+	// The opposing captain is in the draft of the next game: a teammate answers.
+	if _, err := svc.ConfirmGame(ctx, playerOf(*m.Team2ID), ev.Game.ID); err != nil {
+		t.Errorf("an opposing player could not confirm: %v", err)
+	}
+}
+
+func TestSeriesAnyPlayerOfTheTeamReportsAGame(t *testing.T) {
+	svc, repo, _, _ := resultFixture(t, models.StageStandalone, 0)
+	ctx := context.Background()
+	m := openMatchOf(t, repo, 1)
+	prompt, err := svc.AddGamePhoto(ctx, playerOf(*m.Team1ID), "x")
+	if err != nil {
+		t.Fatalf("a player's screenshot was refused: %v", err)
+	}
+	ev, err := svc.ClaimGame(ctx, playerOf(*m.Team1ID), prompt.Match.ID, true)
+	if err != nil || ev.Game.WinnerTeamID != *m.Team1ID {
+		t.Fatalf("a player's claim = %+v, %v", ev, err)
+	}
+	if _, err := svc.DisputeGame(ctx, playerOf(*m.Team2ID), ev.Game.ID); err != nil {
+		t.Errorf("an opposing player could not dispute: %v", err)
 	}
 }
 
@@ -138,16 +167,16 @@ func TestSeriesBestOfOneDecidesAtOnce(t *testing.T) {
 	}
 }
 
-func TestSeriesNeedsScreenshotAndCaptain(t *testing.T) {
+func TestSeriesNeedsScreenshotAndTeam(t *testing.T) {
 	svc, repo, _, _ := resultFixture(t, models.StageStandalone, 0)
 	ctx := context.Background()
 	m := openMatchOf(t, repo, 1)
 	if _, err := svc.ClaimGame(ctx, captainOf(*m.Team1ID), m.ID, true); err == nil {
 		t.Error("a game without a screenshot was accepted")
 	}
-	// Non-captain member of team 1 (addBracketTeam gives telegram id 100*id+i).
-	if _, err := svc.AddGamePhoto(ctx, int64(100**m.Team1ID+1), "x"); err == nil {
-		t.Error("a non-captain's screenshot was accepted")
+	repo.addPlayer(999, nil, false, models.StateIdle)
+	if _, err := svc.AddGamePhoto(ctx, 999, "x"); err == nil {
+		t.Error("a screenshot from a player without a team was accepted")
 	}
 }
 

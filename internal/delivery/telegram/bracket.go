@@ -189,6 +189,17 @@ func (b *Bot) notifyAdmins(text string) {
 }
 
 func (b *Bot) notifyTeam(ctx context.Context, teamID int, text, kb string) {
+	for _, chatID := range b.teamChatIDs(ctx, teamID) {
+		if b.webAppURL != "" {
+			b.SendMatchNotification(chatID, text, true)
+		} else {
+			b.sendMessage(chatID, text, kb)
+		}
+	}
+}
+
+// teamChatIDs are the Telegram chats of every player of a team.
+func (b *Bot) teamChatIDs(ctx context.Context, teamID int) []int64 {
 	var chatIDs []int64
 	seen := make(map[int64]bool)
 	if b.bracket != nil {
@@ -209,13 +220,7 @@ func (b *Bot) notifyTeam(ctx context.Context, teamID int, text, kb string) {
 			}
 		}
 	}
-	for _, chatID := range chatIDs {
-		if b.webAppURL != "" {
-			b.SendMatchNotification(chatID, text, true)
-		} else {
-			b.sendMessage(chatID, text, kb)
-		}
-	}
+	return chatIDs
 }
 
 func (b *Bot) notifyMatchesReady(ctx context.Context, ms []models.BracketMatch) {

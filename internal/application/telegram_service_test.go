@@ -63,7 +63,16 @@ func (r *fakeTelegramRepo) CreateOrUpdatePlayer(context.Context, *models.Telegra
 	return nil
 }
 func (r *fakeTelegramRepo) GetPlayerByTelegramID(_ context.Context, tgID int64) (*models.TelegramPlayer, error) {
-	return r.players[tgID], nil
+	if p := r.players[tgID]; p != nil {
+		return p, nil
+	}
+	// Teammates live in members; those with Telegram are found like anyone.
+	for _, p := range r.members {
+		if p.TelegramID != nil && *p.TelegramID == tgID {
+			return p, nil
+		}
+	}
+	return nil, nil
 }
 func (r *fakeTelegramRepo) GetPlayerByID(_ context.Context, playerID int) (*models.TelegramPlayer, error) {
 	for _, p := range r.players {

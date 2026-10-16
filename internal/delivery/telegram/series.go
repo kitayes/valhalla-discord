@@ -13,8 +13,8 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
-// Series played game by game: a captain sends a game's screenshots here, says
-// who won, and the other captain confirms. Callbacks:
+// Series played game by game: any player sends a game's screenshots here, says
+// who won, and any player of the other team confirms. Callbacks:
 //
 //	game:claim:<matchID>:<1 we won | 0 they won>
 //	game:ok:<gameID>   game:no:<gameID>
@@ -32,7 +32,7 @@ type seriesBatch struct {
 }
 
 // handleSeriesPhoto takes a screenshot sent outside any dialogue as a game of
-// the captain's current series.
+// the player's current series.
 func (b *Bot) handleSeriesPhoto(ctx context.Context, chatID int64, photoID string) {
 	prompt, err := b.service.AddGamePhoto(ctx, chatID, photoID)
 
@@ -156,7 +156,7 @@ func teamName(m models.BracketMatch, id int) string {
 	return fmt.Sprintf("Команда #%d", id)
 }
 
-// reportingTeam is the team whose captain reported the game.
+// reportingTeam is the team whose player reported the game.
 func (b *Bot) reportingTeam(ctx context.Context, g models.TelegramMatchGame) int {
 	p, _ := b.service.GetPlayer(ctx, g.ReporterTelegramID)
 	if p == nil || p.TeamID == nil {
@@ -165,17 +165,9 @@ func (b *Bot) reportingTeam(ctx context.Context, g models.TelegramMatchGame) int
 	return *p.TeamID
 }
 
-func (b *Bot) captainChats(ctx context.Context, teamID int) []int64 {
-	caps, _ := b.service.GetTeamCaptains(ctx, teamID)
-	var ids []int64
-	for _, p := range caps {
-		if p.TelegramID != nil && *p.TelegramID > 0 {
-			ids = append(ids, *p.TelegramID)
-		}
-	}
-	return ids
-}
-
+// announceGameClaimed tells the reporter's team the game went out and asks
+// every player of the other team to confirm it: the captain is often in the
+// draft of the next game, and an unanswered game counts by default.
 func (b *Bot) announceGameClaimed(ctx context.Context, actor int64, ev *application.GameEvent) {
 	g, m := ev.Game, ev.Match
 	reporter := b.reportingTeam(ctx, g)
@@ -183,13 +175,20 @@ func (b *Bot) announceGameClaimed(ctx context.Context, actor int64, ev *applicat
 	if o := m.Opponent(reporter); o != nil {
 		opponent = *o
 	}
-	b.sendMessage(actor, fmt.Sprintf("Катка %d отправлена капитану «%s» на подтверждение. Без ответа за %d минут она засчитается автоматически.",
-		g.GameNo, teamName(m, opponent), int(application.GameConfirmWindow.Minutes())), "empty")
-	caption := fmt.Sprintf("Матч #%d, катка %d: капитан «%s» сообщает, что катку выиграла команда «%s».",
+	sent := fmt.Sprintf("Катка %d (победа «%s») отправлена команде «%s» на подтверждение. Без ответа за %d минут она засчитается автоматически.",
+		g.GameNo, teamName(m, g.WinnerTeamID), teamName(m, opponent), int(application.GameConfirmWindow.Minutes()))
+	chats := b.teamChatIDs(ctx, reporter)
+	if len(chats) == 0 {
+		chats = []int64{actor}
+	}
+	for _, chatID := range chats {
+		b.sendMessage(chatID, sent, "empty")
+	}
+	caption := fmt.Sprintf("Матч #%d, катка %d: команда «%s» сообщает, что катку выиграла команда «%s».",
 		m.PlayOrder, g.GameNo, teamName(m, reporter), teamName(m, g.WinnerTeamID))
-	for _, chatID := range b.captainChats(ctx, opponent) {
+	for _, chatID := range b.teamChatIDs(ctx, opponent) {
 		b.sendReportMediaToChat(chatID, g.PhotoFileIDs, caption)
-		b.sendInline(chatID, caption+fmt.Sprintf("\n\nВсё верно? Без ответа за %d минут катка засчитается.", int(application.GameConfirmWindow.Minutes())),
+		b.sendInline(chatID, caption+fmt.Sprintf("\n\nВсё верно? Ответить может любой игрок команды. Без ответа за %d минут катка засчитается.", int(application.GameConfirmWindow.Minutes())),
 			tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(
 				tgbotapi.NewInlineKeyboardButtonData("Подтверждаю", fmt.Sprintf("game:ok:%d", g.ID)),
 				tgbotapi.NewInlineKeyboardButtonData("Оспорить", fmt.Sprintf("game:no:%d", g.ID)),
@@ -208,7 +207,7 @@ func (b *Bot) announceGameCounted(ctx context.Context, ev *application.GameEvent
 	case st.Decided():
 		text += fmt.Sprintf("\n\nСерия завершена: «%s» побеждает. Результат записан в сетку.", teamName(m, st.WinnerID))
 	default:
-		text += fmt.Sprintf("\n\nДальше катка %d из максимум %d. После неё капитан присылает скрин сюда же.", st.NextGameNo, st.BO)
+		text += fmt.Sprintf("\n\nДальше катка %d из максимум %d. После неё любой игрок команды присылает скрин сюда же.", st.NextGameNo, st.BO)
 	}
 	for _, id := range []*int{m.Team1ID, m.Team2ID} {
 		if id != nil {
@@ -225,10 +224,10 @@ func (b *Bot) announceGameCounted(ctx context.Context, ev *application.GameEvent
 func (b *Bot) announceGameDisputed(ctx context.Context, ev *application.GameEvent) {
 	g, m := ev.Game, ev.Match
 	reporter := b.reportingTeam(ctx, g)
-	for _, chatID := range b.captainChats(ctx, reporter) {
+	for _, chatID := range b.teamChatIDs(ctx, reporter) {
 		b.sendMessage(chatID, fmt.Sprintf("Соперник оспорил катку %d матча #%d. Судья посмотрит скрины и решит — результат придёт сюда.", g.GameNo, m.PlayOrder), "empty")
 	}
-	caption := fmt.Sprintf("СПОР ПО КАТКЕ\n\nМатч #%d: %s vs %s, катка %d.\nКапитан «%s» заявляет победу «%s», соперник не согласен.\n%s",
+	caption := fmt.Sprintf("СПОР ПО КАТКЕ\n\nМатч #%d: %s vs %s, катка %d.\nКоманда «%s» заявляет победу «%s», соперник не согласен.\n%s",
 		m.PlayOrder, m.Team1Name, m.Team2Name, g.GameNo, teamName(m, reporter), teamName(m, g.WinnerTeamID), application.SeriesLine(m, ev.Series))
 	var rows [][]tgbotapi.InlineKeyboardButton
 	for _, id := range []*int{m.Team1ID, m.Team2ID} {
@@ -246,7 +245,7 @@ func (b *Bot) announceGameDisputed(ctx context.Context, ev *application.GameEven
 
 func (b *Bot) announceGameAnnulled(ctx context.Context, ev *application.GameEvent) {
 	m := ev.Match
-	text := fmt.Sprintf("Судья аннулировал катку %d матча #%d — её нужно переиграть.\n%s\n\nПосле катки капитан присылает скрин сюда же.", ev.Game.GameNo, m.PlayOrder, application.SeriesLine(m, ev.Series))
+	text := fmt.Sprintf("Судья аннулировал катку %d матча #%d — её нужно переиграть.\n%s\n\nПосле катки любой игрок команды присылает скрин сюда же.", ev.Game.GameNo, m.PlayOrder, application.SeriesLine(m, ev.Series))
 	for _, id := range []*int{m.Team1ID, m.Team2ID} {
 		if id != nil {
 			b.notifyTeam(ctx, *id, text, "empty")

@@ -9,7 +9,7 @@ import (
 	"blackwatch/internal/models"
 )
 
-// GameConfirmWindow is how long the other captain has to object to a game
+// GameConfirmWindow is how long the other team has to object to a game
 // before it counts.
 const GameConfirmWindow = 5 * time.Minute
 
@@ -24,7 +24,7 @@ type SeriesState struct {
 	Wins map[int]int
 	// Games are the non-annulled games in order.
 	Games []models.TelegramMatchGame
-	// Open is the game waiting for the other captain or a referee, if any.
+	// Open is the game waiting for the other team or a referee, if any.
 	Open       *models.TelegramMatchGame
 	WinnerID   int // set once a team has Need wins
 	NextGameNo int
@@ -45,7 +45,7 @@ type GameEvent struct {
 	Queued bool
 }
 
-// SeriesPrompt asks the captain who won the game the screenshots show.
+// SeriesPrompt asks the player who won the game the screenshots show.
 type SeriesPrompt struct {
 	Match  models.BracketMatch
 	Series SeriesState
@@ -61,13 +61,12 @@ type seriesDraft struct {
 }
 
 var (
-	errNotCaptain     = errors.New("скрины каток присылает капитан команды")
-	errNoOpenMatch    = errors.New("у вашей команды сейчас нет открытого матча — скрин катки принимается во время матча")
-	errSeriesDecided  = errors.New("серия уже решена, результат записан в сетку")
-	errGameNotFound   = errors.New("катка не найдена")
-	errGameNotOpen    = errors.New("эта катка уже рассмотрена")
-	errSeriesNoDraft  = errors.New("сначала пришлите скрин результата катки")
-	errNotOpponentCap = errors.New("подтвердить катку может только капитан команды соперника")
+	errNoOpenMatch   = errors.New("у вашей команды сейчас нет открытого матча — скрин катки принимается во время матча")
+	errSeriesDecided = errors.New("серия уже решена, результат записан в сетку")
+	errGameNotFound  = errors.New("катка не найдена")
+	errGameNotOpen   = errors.New("эта катка уже рассмотрена")
+	errSeriesNoDraft = errors.New("сначала пришлите скрин результата катки")
+	errNotOpponent   = errors.New("подтвердить или оспорить катку может только игрок команды соперника")
 )
 
 // FormatLong spells a best-of out: "BO3 — до 2 побед".
@@ -141,22 +140,22 @@ func (s *TelegramServiceImpl) SeriesFor(ctx context.Context, matchID int) (*Seri
 	return &st, nil
 }
 
-// captainTeam is the team the Telegram user captains, or an error.
-func (s *TelegramServiceImpl) captainTeam(ctx context.Context, tgID int64) (int, error) {
+// playerTeam is the team of the Telegram user, or an error. Any player of the
+// team plays a series in the bot: the captain is often the one in the draft
+// of the next game, and a game confirmed only by an absent captain counted by
+// default.
+func (s *TelegramServiceImpl) playerTeam(ctx context.Context, tgID int64) (int, error) {
 	p, err := s.repo.GetPlayerByTelegramID(ctx, tgID)
 	if err != nil || p == nil || p.TeamID == nil {
 		return 0, errors.New("вы не состоите в команде")
 	}
-	if !p.IsCaptain {
-		return 0, errNotCaptain
-	}
 	return *p.TeamID, nil
 }
 
-// AddGamePhoto collects a screenshot of the game the captain's team is
+// AddGamePhoto collects a screenshot of the game the player's team is
 // playing. Several photos (an album) make one game; the prompt says which.
 func (s *TelegramServiceImpl) AddGamePhoto(ctx context.Context, tgID int64, fileID string) (*SeriesPrompt, error) {
-	teamID, err := s.captainTeam(ctx, tgID)
+	teamID, err := s.playerTeam(ctx, tgID)
 	if err != nil {
 		return nil, err
 	}
@@ -191,10 +190,10 @@ func (s *TelegramServiceImpl) AddGamePhoto(ctx context.Context, tgID int64, file
 	return &SeriesPrompt{Match: *m, Series: st, Photos: len(d.photos), GameNo: st.NextGameNo}, nil
 }
 
-// ClaimGame records the game the captain's screenshots show and hands it to
-// the other captain for confirmation.
+// ClaimGame records the game the player's screenshots show and hands it to
+// the other team for confirmation.
 func (s *TelegramServiceImpl) ClaimGame(ctx context.Context, tgID int64, matchID int, weWon bool) (*GameEvent, error) {
-	teamID, err := s.captainTeam(ctx, tgID)
+	teamID, err := s.playerTeam(ctx, tgID)
 	if err != nil {
 		return nil, err
 	}
@@ -230,8 +229,9 @@ func (s *TelegramServiceImpl) ClaimGame(ctx context.Context, tgID int64, matchID
 		ReporterTelegramID: tgID, PhotoFileIDs: append([]string(nil), d.photos...), Status: models.GamePending, ExpiresAt: &expires,
 	}
 	if err := s.repo.CreateMatchGame(ctx, g); err != nil {
-		// The other captain claimed this game a moment earlier.
-		return nil, fmt.Errorf("катку %d уже отправил капитан соперника — проверьте сообщения бота", st.NextGameNo)
+		// Someone else claimed this game a moment earlier: a teammate or the
+		// other team.
+		return nil, fmt.Errorf("катку %d уже отправили — проверьте сообщения бота", st.NextGameNo)
 	}
 	delete(s.seriesDrafts, tgID)
 	_, st, _ = s.seriesContext(ctx, m.ID)
@@ -257,7 +257,7 @@ func (s *TelegramServiceImpl) openGame(ctx context.Context, gameID int) (*models
 	return g, m, nil
 }
 
-// ConfirmGame is the other captain agreeing with a reported game.
+// ConfirmGame is a player of the other team agreeing with a reported game.
 func (s *TelegramServiceImpl) ConfirmGame(ctx context.Context, tgID int64, gameID int) (*GameEvent, error) {
 	s.seriesMu.Lock()
 	defer s.seriesMu.Unlock()
@@ -268,13 +268,13 @@ func (s *TelegramServiceImpl) ConfirmGame(ctx context.Context, tgID int64, gameI
 	if g.Status != models.GamePending {
 		return nil, errGameNotOpen
 	}
-	if err := s.checkOpponentCaptain(ctx, tgID, g, m); err != nil {
+	if err := s.checkOpponent(ctx, tgID, g, m); err != nil {
 		return nil, err
 	}
 	return s.settleGame(ctx, g, m, g.WinnerTeamID, tgID)
 }
 
-// DisputeGame is the other captain objecting; a referee decides.
+// DisputeGame is a player of the other team objecting; a referee decides.
 func (s *TelegramServiceImpl) DisputeGame(ctx context.Context, tgID int64, gameID int) (*GameEvent, error) {
 	s.seriesMu.Lock()
 	defer s.seriesMu.Unlock()
@@ -285,7 +285,7 @@ func (s *TelegramServiceImpl) DisputeGame(ctx context.Context, tgID int64, gameI
 	if g.Status != models.GamePending {
 		return nil, errGameNotOpen
 	}
-	if err := s.checkOpponentCaptain(ctx, tgID, g, m); err != nil {
+	if err := s.checkOpponent(ctx, tgID, g, m); err != nil {
 		return nil, err
 	}
 	if err := s.repo.SetMatchGameStatus(ctx, g.ID, models.GameDisputed); err != nil {
@@ -319,7 +319,7 @@ func (s *TelegramServiceImpl) JudgeGame(ctx context.Context, gameID, winnerTeamI
 	return s.settleGame(ctx, g, m, winnerTeamID, 0)
 }
 
-// AutoConfirmExpiredGames counts the games the other captain did not answer
+// AutoConfirmExpiredGames counts the games the other team did not answer
 // in time, so an absent opponent cannot hold the series.
 func (s *TelegramServiceImpl) AutoConfirmExpiredGames(ctx context.Context) ([]GameEvent, error) {
 	expired, err := s.repo.GetExpiredPendingGames(ctx, s.now())
@@ -345,16 +345,16 @@ func (s *TelegramServiceImpl) AutoConfirmExpiredGames(ctx context.Context) ([]Ga
 	return out, nil
 }
 
-// checkOpponentCaptain: only the captain of the team that did not report a
-// game may answer it.
-func (s *TelegramServiceImpl) checkOpponentCaptain(ctx context.Context, tgID int64, g *models.TelegramMatchGame, m models.BracketMatch) error {
-	teamID, err := s.captainTeam(ctx, tgID)
+// checkOpponent: only a player of the team that did not report a game may
+// answer it.
+func (s *TelegramServiceImpl) checkOpponent(ctx context.Context, tgID int64, g *models.TelegramMatchGame, m models.BracketMatch) error {
+	teamID, err := s.playerTeam(ctx, tgID)
 	if err != nil {
-		return errNotOpponentCap
+		return errNotOpponent
 	}
 	reporter, _ := s.repo.GetPlayerByTelegramID(ctx, g.ReporterTelegramID)
 	if !m.Has(teamID) || (reporter != nil && reporter.TeamID != nil && *reporter.TeamID == teamID) {
-		return errNotOpponentCap
+		return errNotOpponent
 	}
 	return nil
 }

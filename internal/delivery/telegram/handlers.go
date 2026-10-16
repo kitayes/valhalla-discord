@@ -596,7 +596,7 @@ func (b *Bot) handlePhoto(ctx context.Context, chatID int64, msg *tgbotapi.Messa
 	photoID := msg.Photo[len(msg.Photo)-1].FileID
 	if p.FSMState != models.StateReportScreenshots && p.FSMState != models.StateWaitingReport {
 		// Outside the admin's /report dialogue a screenshot is a game of the
-		// captain's current series.
+		// player's current series.
 		b.handleSeriesPhoto(ctx, chatID, photoID)
 		return
 	}

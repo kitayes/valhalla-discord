@@ -515,3 +515,48 @@ func TestDeskFlagsAnUndecidedGameDispute(t *testing.T) {
 		t.Fatalf("alerts 11 minutes into a dispute = %+v, want one about game 2", alerts)
 	}
 }
+
+// The captain may be away or busy in the game: any player of the team can
+// press ready. Calling the referee stays with the captain.
+func TestDeskAnyPlayerOfTheTeamPressesReady(t *testing.T) {
+	s, store, now := deskServiceFixture(t)
+	ctx := context.Background()
+	store.snapshot.Members = map[int][]int64{10: {100, 101}, 20: {200, 201}}
+	clock := now
+	s.now = func() time.Time { return clock }
+	if err := s.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	gen := store.state.Matches[1].Generation
+	if err := s.CaptainAction(ctx, 101, 1, gen, "judge_lobby"); err == nil {
+		t.Error("a player who is not the captain called the referee")
+	}
+	if err := s.CaptainAction(ctx, 300, 1, gen, "ready"); err == nil {
+		t.Error("an outsider pressed ready")
+	}
+	if err := s.CaptainAction(ctx, 101, 1, gen, "ready"); err != nil || !store.state.Matches[1].Ready[0] {
+		t.Fatalf("a player of Alpha pressed ready: %v, ready %v", err, store.state.Matches[1].Ready)
+	}
+	d, err := s.GetMatchDeskDetail(ctx, 201)
+	if err != nil || d == nil || !d.CanReady || d.MyTeamName != "Beta" {
+		t.Fatalf("detail for a player of Beta = %+v, %v", d, err)
+	}
+
+	// The reminder reaches every player of a team not ready, each with the button.
+	clock = now.Add(5*time.Minute + time.Second)
+	notices, _ := s.Pending(ctx)
+	for _, n := range notices {
+		if n.Kind != "remind" {
+			continue
+		}
+		if n.ChatID != 200 && n.ChatID != 201 {
+			t.Errorf("reminder to %d, Alpha is ready", n.ChatID)
+		}
+		if len(n.Buttons) == 0 {
+			t.Errorf("reminder to %d has no ready button", n.ChatID)
+		}
+	}
+	if err := s.ReadyCaptain(ctx, 201); err != nil || !store.state.Matches[1].Ready[1] {
+		t.Fatalf("a player of Beta pressed ready from the app: %v", err)
+	}
+}

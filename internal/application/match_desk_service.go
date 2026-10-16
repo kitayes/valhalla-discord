@@ -77,6 +77,9 @@ func (s *MatchDeskService) update(ctx context.Context, action func(*models.Match
 
 func (s *MatchDeskService) Tick(ctx context.Context) error { return s.update(ctx, nil) }
 
+// CaptainAction is a team's action on its match. Any player of the team may
+// press ready — the captain is often away from the phone or already in the
+// game — while calling the referee stays with the captain.
 func (s *MatchDeskService) CaptainAction(ctx context.Context, actor int64, id int, generation int64, action string) error {
 	return s.update(ctx, func(d *models.MatchDesk, c models.DeskContext) error {
 		m := d.Matches[id]
@@ -88,8 +91,26 @@ func (s *MatchDeskService) CaptainAction(ctx context.Context, actor int64, id in
 				return deskCaptainAction(m, team, action, s.now())
 			}
 		}
+		if action == "ready" {
+			for _, team := range m.Teams {
+				if deskIsMember(c, team, actor) {
+					return deskCaptainAction(m, team, action, s.now())
+				}
+			}
+			return errors.New("действие доступно только игрокам команд этого матча")
+		}
 		return errors.New("действие доступно только капитану команды")
 	})
+}
+
+// deskIsMember reports whether the Telegram user plays for the team.
+func deskIsMember(c models.DeskContext, team int, actor int64) bool {
+	for _, chat := range c.Members[team] {
+		if chat == actor {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *MatchDeskService) AdminAction(ctx context.Context, actor int64, id int, generation int64, action string) error {
@@ -256,7 +277,7 @@ func (s *MatchDeskService) card(m *models.DeskMatch, side int, c models.DeskCont
 	text := fmt.Sprintf("Матч #%d: %s vs %s\nФормат: %s\nКапитан соперника: %s\nGame ID капитана соперника: %s\nСтатус: %s",
 		m.Number, m.Names[0], m.Names[1], FormatLong(MatchFormat(c.Tournament, c.Matches, deskRound(m, c))), deskCaptainLabel(opponent), gameID, deskStatus(m))
 	if m.Ready[0] && m.Ready[1] {
-		text += "\nПосле каждой катки капитан присылает сюда скрин результата — бот спросит, кто победил, и попросит соперника подтвердить."
+		text += "\nПосле каждой катки любой игрок команды присылает сюда скрин результата — бот спросит, кто победил, и попросит соперника подтвердить."
 	}
 	if !m.Ready[0] || !m.Ready[1] {
 		if m.PausedAt.IsZero() {
@@ -402,16 +423,11 @@ func (s *MatchDeskService) queueReminders(m *models.DeskMatch, c models.DeskCont
 			chats = []int64{*captain.TelegramID}
 		}
 		deadline := m.Deadline.In(s.location).Format("15:04")
+		// Any player may press ready, so everyone gets the button.
+		text := fmt.Sprintf("Матч #%d против «%s» ждёт вашу команду (%s).\n", m.Number, m.Names[1-side], format) +
+			fmt.Sprintf("Зайдите в лобби и нажмите «Мы в лобби / Готовы» до %s — это может сделать любой игрок команды. Иначе судья может засчитать техническое поражение.", deadline)
+		buttons := [][]models.DeskButton{{{Text: "Мы в лобби / Готовы", Data: DeskCallback(m, "ready")}}}
 		for _, chatID := range chats {
-			isCaptain := captain.TelegramID != nil && *captain.TelegramID == chatID
-			text := fmt.Sprintf("Матч #%d против «%s» ждёт вашу команду (%s).\n", m.Number, m.Names[1-side], format)
-			var buttons [][]models.DeskButton
-			if isCaptain {
-				text += fmt.Sprintf("Зайдите в лобби и нажмите «Мы в лобби / Готовы» до %s — иначе судья может засчитать техническое поражение.", deadline)
-				buttons = [][]models.DeskButton{{{Text: "Мы в лобби / Готовы", Data: DeskCallback(m, "ready")}}}
-			} else {
-				text += fmt.Sprintf("Капитан ещё не подтвердил готовность. Напомните капитану и будьте в лобби до %s — иначе судья может засчитать техническое поражение.", deadline)
-			}
 			enqueue(models.DeskNotice{MatchID: m.ID, Generation: m.Generation, Kind: "remind", AlertKey: fmt.Sprintf("remind:%d", side), ChatID: chatID, Text: text, Buttons: buttons})
 		}
 		deskEvent(m, now, fmt.Sprintf("Напоминание о готовности: %s", m.Names[side]))
@@ -508,7 +524,7 @@ func (s *MatchDeskService) GetMatchDeskDetail(ctx context.Context, actor int64) 
 			}
 			for side, teamID := range m.Teams {
 				p := c.Captains[teamID]
-				if p.TelegramID != nil && *p.TelegramID == actor {
+				if (p.TelegramID != nil && *p.TelegramID == actor) || deskIsMember(c, teamID, actor) {
 					oppSide := 1 - side
 					oppTeamID := m.Teams[oppSide]
 					oppCaptain := c.Captains[oppTeamID]
