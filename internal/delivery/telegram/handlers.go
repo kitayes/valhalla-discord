@@ -242,7 +242,7 @@ func (b *Bot) handleAdminCommand(ctx context.Context, chatID int64, text string)
 			}
 			tTimeStr := "время не назначено"
 			if t.TournamentTime != nil {
-				tTimeStr = t.TournamentTime.Format("02.01.2006 15:04")
+				tTimeStr = t.TournamentTime.In(application.DisplayZone).Format("02.01.2006 15:04") + " (КЗ)"
 			}
 			winnerStr := ""
 			if t.WinnerTeamName != "" {

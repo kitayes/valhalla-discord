@@ -29,11 +29,12 @@ func (s *TelegramServiceImpl) ConfirmReport(ctx context.Context, actorTgID int64
 	if rep.Status != models.ReportPending {
 		return errors.New("отчёт уже оспорен — решение примет судья")
 	}
-	if err := s.applyReport(ctx, rep, models.ReportConfirmed); err != nil {
+	recorded, err := s.applyReport(ctx, rep, models.ReportConfirmed)
+	if err != nil {
 		return err
 	}
 	s.notifyTeamOfReporter(ctx, rep.ReporterTelegramID, rep,
-		fmt.Sprintf("Соперник подтвердил результат матча: %s %s %s. Сетка обновлена.", rep.WinnerTeamName, rep.Score, rep.LoserTeamName))
+		fmt.Sprintf("Соперник подтвердил результат матча: %s %s %s. %s", rep.WinnerTeamName, rep.Score, rep.LoserTeamName, bracketLine(recorded)))
 	return nil
 }
 
@@ -65,14 +66,15 @@ func (s *TelegramServiceImpl) AutoConfirmExpiredReports(ctx context.Context) ([]
 	var done []models.TelegramMatchReport
 	for i := range expired {
 		rep := &expired[i]
-		if err := s.applyReport(ctx, rep, models.ReportAutoConfirmed); err != nil {
+		recorded, err := s.applyReport(ctx, rep, models.ReportAutoConfirmed)
+		if err != nil {
 			s.logger.Error("telegram: auto-confirm report %d: %v", rep.ID, err)
 			continue
 		}
 		done = append(done, *rep)
 		s.notifyTeamOfReporter(ctx, rep.ReporterTelegramID, rep,
-			fmt.Sprintf("Результат %s %s %s принят: соперник не возразил за %d минут. Сетка обновлена.",
-				rep.WinnerTeamName, rep.Score, rep.LoserTeamName, int(ReportConfirmWindow.Minutes())))
+			fmt.Sprintf("Результат %s %s %s принят: соперник не возразил за %d минут. %s",
+				rep.WinnerTeamName, rep.Score, rep.LoserTeamName, int(ReportConfirmWindow.Minutes()), bracketLine(recorded)))
 	}
 	return done, nil
 }
@@ -109,26 +111,35 @@ func (s *TelegramServiceImpl) openReportForActor(ctx context.Context, actorTgID 
 	return rep, nil
 }
 
-// applyReport closes the report with status and moves the bracket as filed.
-// A bracket already settled by a referee is not an error here: the status
-// still records how the report ended.
-func (s *TelegramServiceImpl) applyReport(ctx context.Context, rep *models.TelegramMatchReport, status string) error {
+// bracketLine ends a result message: whether the bracket already shows it.
+func bracketLine(recorded bool) string {
+	if recorded {
+		return "Сетка обновлена."
+	}
+	return "Сетка сейчас недоступна — результат сохранён, бот повторит запись автоматически и сетка обновится в течение нескольких минут."
+}
+
+// applyReport closes the report with status and moves the bracket as filed;
+// recorded says whether the bracket took the result now. A bracket already
+// settled by a referee is not an error here: the status still records how the
+// report ended.
+func (s *TelegramServiceImpl) applyReport(ctx context.Context, rep *models.TelegramMatchReport, status string) (recorded bool, err error) {
 	if err := s.repo.SetReportStatus(ctx, rep.ID, status); err != nil {
-		return fmt.Errorf("не удалось закрыть отчёт: %w", err)
+		return false, fmt.Errorf("не удалось закрыть отчёт: %w", err)
 	}
 	rep.Status = status
 	if rep.BracketMatchID == nil {
-		return nil
+		return true, nil
 	}
 	win, lose, _, ok := parseScore(rep.Score)
 	if !ok {
-		return fmt.Errorf("некорректный счёт в отчёте: %q", rep.Score)
+		return false, fmt.Errorf("некорректный счёт в отчёте: %q", rep.Score)
 	}
 	if err := s.recordResult(ctx, *rep.BracketMatchID, rep.WinnerTeamID, win, lose, false); err != nil {
 		// Challonge unreachable or busy: the report stays queued (confirmed,
 		// not synced) and FlushPendingReports retries it.
 		s.logger.Error("telegram: applyReport %d recordResult: %v", rep.ID, err)
-		return nil
+		return false, nil
 	}
 	if s.bracket != nil {
 		if err := s.repo.SetReportSynced(ctx, rep.ID); err == nil {
@@ -136,7 +147,7 @@ func (s *TelegramServiceImpl) applyReport(ctx context.Context, rep *models.Teleg
 			rep.SyncedAt = &now
 		}
 	}
-	return nil
+	return true, nil
 }
 
 // CloseOpenReport is closeOpenReport for a referee's decision made in the bot.

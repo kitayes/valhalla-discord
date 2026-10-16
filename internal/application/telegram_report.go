@@ -344,7 +344,7 @@ func (s *TelegramServiceImpl) GetRecentMatchReports(ctx context.Context, limit i
 	for i, r := range reports {
 		sb.WriteString(fmt.Sprintf("%d. %s %s %s (%s) — скриншотов: %d\n",
 			i+1, r.WinnerTeamName, r.Score, r.LoserTeamName,
-			r.CreatedAt.Format("02.01 15:04"), len(r.PhotoFileIDs)))
+			r.CreatedAt.In(DisplayZone).Format("02.01 15:04"), len(r.PhotoFileIDs)))
 	}
 	return sb.String(), nil
 }

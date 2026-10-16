@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -155,5 +156,23 @@ func TestFormatLong(t *testing.T) {
 		if got := FormatLong(bo); got != want {
 			t.Errorf("FormatLong(%d) = %q, want %q", bo, got, want)
 		}
+	}
+}
+
+// A series decided while Challonge is down is saved but not in the bracket
+// yet; the bot must not say it was written.
+func TestSeriesDecidedWhileChallongeIsDownIsQueued(t *testing.T) {
+	svc, repo, prov, _ := resultFixture(t, models.StageQualifier, 2)
+	active, _ := repo.GetActiveTournament(context.Background())
+	active.FormatFinal = 1
+	m := openMatchOf(t, repo, 1)
+	ev := claim(t, svc, *m.Team1ID, true)
+	prov.fail["ReportMatch"] = errors.New("503")
+	ev, err := svc.ConfirmGame(context.Background(), captainOf(*m.Team2ID), ev.Game.ID)
+	if err != nil || ev.Final == nil {
+		t.Fatalf("BO1 series while down: %+v, %v", ev, err)
+	}
+	if !ev.Queued {
+		t.Error("series result reported as written while Challonge refused it")
 	}
 }

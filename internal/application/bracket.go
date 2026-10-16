@@ -381,7 +381,7 @@ func (s *BracketService) build(ctx context.Context, forTournament time.Time) (*B
 	}
 
 	slug := "valhalla_" + s.now().UTC().Format("20060102_150405")
-	name := "Valhalla " + forTournament.Format("02.01.2006")
+	name := "Valhalla " + forTournament.In(DisplayZone).Format("02.01.2006")
 	if activeTourney != nil && activeTourney.Name != "" {
 		name = activeTourney.Name
 		if activeTourney.Slug != "" {

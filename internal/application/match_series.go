@@ -40,6 +40,9 @@ type GameEvent struct {
 	Series SeriesState
 	// Final is the report recorded when this game decided the series.
 	Final *models.TelegramMatchReport
+	// Queued: the series is decided but Challonge did not take the result
+	// yet; the retry queue writes it.
+	Queued bool
 }
 
 // SeriesPrompt asks the captain who won the game the screenshots show.
@@ -385,17 +388,17 @@ func (s *TelegramServiceImpl) settleGame(ctx context.Context, g *models.Telegram
 	if !st.Decided() {
 		return ev, nil
 	}
-	rep, err := s.recordSeries(ctx, m, st, actor)
+	rep, recorded, err := s.recordSeries(ctx, m, st, actor)
 	if err != nil {
 		return ev, err
 	}
-	ev.Final = rep
+	ev.Final, ev.Queued = rep, !recorded
 	return ev, nil
 }
 
 // recordSeries turns a decided series into a confirmed report — every game
 // was already agreed — and writes it to the bracket.
-func (s *TelegramServiceImpl) recordSeries(ctx context.Context, m models.BracketMatch, st SeriesState, actor int64) (*models.TelegramMatchReport, error) {
+func (s *TelegramServiceImpl) recordSeries(ctx context.Context, m models.BracketMatch, st SeriesState, actor int64) (*models.TelegramMatchReport, bool, error) {
 	loser := *m.Opponent(st.WinnerID)
 	var photos []string
 	reporter := actor
@@ -430,12 +433,10 @@ func (s *TelegramServiceImpl) recordSeries(ctx context.Context, m models.Bracket
 		Status:             models.ReportPending,
 	}
 	if err := s.repo.CreateMatchReport(ctx, rep); err != nil {
-		return nil, fmt.Errorf("не удалось сохранить итог серии: %w", err)
+		return nil, false, fmt.Errorf("не удалось сохранить итог серии: %w", err)
 	}
-	if err := s.applyReport(ctx, rep, models.ReportConfirmed); err != nil {
-		return rep, err
-	}
-	return rep, nil
+	recorded, err := s.applyReport(ctx, rep, models.ReportConfirmed)
+	return rep, recorded, err
 }
 
 // SeriesScores is the live score of each open match's series, team 1 first

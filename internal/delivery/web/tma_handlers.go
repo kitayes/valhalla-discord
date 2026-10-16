@@ -892,7 +892,9 @@ func (s *AdminServer) handleReportDecision(w http.ResponseWriter, r *http.Reques
 		message = "Результат оспорен. Матч передан судье — ожидайте решения в приложении."
 	} else {
 		err = s.services.TelegramService.ConfirmReport(r.Context(), user.ID, req.ReportID)
-		message = "Результат подтверждён. Сетка обновлена."
+		// The reporter's team hears from the bot whether the bracket took it
+		// at once or the retry queue will.
+		message = "Результат подтверждён."
 	}
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)

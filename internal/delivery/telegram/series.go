@@ -202,9 +202,12 @@ func (b *Bot) announceGameClaimed(ctx context.Context, actor int64, ev *applicat
 func (b *Bot) announceGameCounted(ctx context.Context, ev *application.GameEvent, prefix string) {
 	g, m, st := ev.Game, ev.Match, ev.Series
 	text := fmt.Sprintf("%sМатч #%d, катка %d засчитана: победа «%s».\n%s", prefix, m.PlayOrder, g.GameNo, teamName(m, g.WinnerTeamID), application.SeriesLine(m, st))
-	if st.Decided() {
+	switch {
+	case st.Decided() && ev.Queued:
+		text += fmt.Sprintf("\n\nСерия завершена: «%s» побеждает. Сетка сейчас недоступна — результат сохранён, бот запишет его автоматически в течение нескольких минут.", teamName(m, st.WinnerID))
+	case st.Decided():
 		text += fmt.Sprintf("\n\nСерия завершена: «%s» побеждает. Результат записан в сетку.", teamName(m, st.WinnerID))
-	} else {
+	default:
 		text += fmt.Sprintf("\n\nДальше катка %d из максимум %d. После неё капитан присылает скрин сюда же.", st.NextGameNo, st.BO)
 	}
 	for _, id := range []*int{m.Team1ID, m.Team2ID} {

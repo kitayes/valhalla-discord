@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"blackwatch/internal/application"
 	"blackwatch/internal/domain"
 	"blackwatch/internal/models"
 
@@ -90,7 +91,7 @@ func renderPost(matchID int, post livePost, pool models.BetPool) string {
 			pool.Total(), poolLine(pool, domain.TeamA), poolLine(pool, domain.TeamB))
 	}
 
-	fmt.Fprintf(&sb, "Ставки принимаются до %s.\n", post.deadline.Format("15:04"))
+	fmt.Fprintf(&sb, "Ставки принимаются до %s (КЗ).\n", post.deadline.In(application.DisplayZone).Format("15:04"))
 	sb.WriteString("Коэффициент плавающий: он меняется с каждой ставкой и становится окончательным в момент закрытия.")
 
 	return sb.String()

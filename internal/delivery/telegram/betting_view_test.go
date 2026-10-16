@@ -207,3 +207,11 @@ func TestRenderClosedPostQuotesNoPool(t *testing.T) {
 		t.Errorf("closed post lost the captains:\n%s", text)
 	}
 }
+
+// The server runs in UTC; the channel reads Kazakhstan time.
+func TestBettingDeadlineInKazakhstanTime(t *testing.T) {
+	post := livePost{captainA: "A", captainB: "B", deadline: time.Date(2026, 10, 18, 15, 10, 0, 0, time.UTC)}
+	if got := renderPost(1, post, models.BetPool{}); !strings.Contains(got, "до 20:10 (КЗ)") {
+		t.Errorf("post = %q, want the deadline as 20:10 (КЗ)", got)
+	}
+}

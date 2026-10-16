@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestReportRefusedWithoutTeam(t *testing.T) {
@@ -329,5 +330,43 @@ func TestFlushPushesMatchClosedOnlyInCache(t *testing.T) {
 		if got.ID == m.ID && (got.State != models.BracketComplete || got.WinnerID == nil || *got.WinnerID != 1) {
 			t.Errorf("match after flush = %+v, want T1 winner", got)
 		}
+	}
+}
+
+// The reporter's team is told the bracket was updated only when it was.
+func TestConfirmWhileChallongeIsDownSaysQueued(t *testing.T) {
+	bsvc, repo, prov := buildFour(t)
+	svc := NewTelegramServiceImpl(repo, nopLogger{}).WithBracket(bsvc)
+	var sent []string
+	svc.SetMatchNotifier(func(_ context.Context, _ int64, text string, _ bool) { sent = append(sent, text) })
+	ctx := context.Background()
+	rep, err := svc.ReportMatchDirect(ctx, 100, 0, 2, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prov.fail["ReportMatch"] = errors.New("503")
+	if err := svc.ConfirmReport(ctx, 400, rep.ID); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	var confirmed string
+	for _, s := range sent {
+		if strings.HasPrefix(s, "Соперник подтвердил") {
+			confirmed = s
+		}
+	}
+	if confirmed == "" || strings.Contains(confirmed, "Сетка обновлена") || !strings.Contains(confirmed, "повторит запись") {
+		t.Fatalf("confirmation while down = %q, want the result queued for Challonge", confirmed)
+	}
+}
+
+// Times read back from Postgres come in UTC; players see Kazakhstan time.
+func TestRegistrationClosedShowsKazakhstanTime(t *testing.T) {
+	svc, _ := newTelegramSvc()
+	ctx := context.Background()
+	start := time.Date(2026, 10, 18, 15, 0, 0, 0, time.UTC) // 20:00 in Kazakhstan
+	svc.now = func() time.Time { return start.Add(-30 * time.Minute) }
+	svc.SetTournamentTime(ctx, start)
+	if _, reason := svc.RegistrationStatus(ctx); !strings.Contains(reason, "20:00 (КЗ)") {
+		t.Errorf("reason = %q, want the start as 20:00 (КЗ)", reason)
 	}
 }

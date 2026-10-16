@@ -1016,7 +1016,7 @@ func (s *TelegramServiceImpl) RegistrationStatus(ctx context.Context) (bool, str
 	}
 	start := s.GetTournamentTime(ctx)
 	if !start.IsZero() && !s.now().Before(start.Add(-RegistrationCloseLead)) {
-		return false, fmt.Sprintf("Регистрация закрыта: до турнира меньше часа (старт %s).", start.Format("15:04"))
+		return false, fmt.Sprintf("Регистрация закрыта: до турнира меньше часа (старт %s (КЗ)).", start.In(DisplayZone).Format("15:04"))
 	}
 	return true, ""
 }
