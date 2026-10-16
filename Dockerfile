@@ -20,6 +20,9 @@ WORKDIR /root/
 
 COPY --from=builder /app/blackwatch-bot .
 COPY --from=builder /app/migrations ./migrations
+# FAQ knowledge base (FAQ_FILE_PATH, assets/faq.md); without it the FAQ service
+# failed to start in the container.
+COPY --from=builder /app/assets/faq.md ./assets/faq.md
 COPY wait-for-postgres.sh google-credentials.json* ./
 
 RUN chmod +x wait-for-postgres.sh
