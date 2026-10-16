@@ -980,6 +980,57 @@ func (s *BracketService) Reinstate(ctx context.Context, teamName string) (*Brack
 	if err := s.provider.ReopenMatch(ctx, tID, lost.ChallongeMatchID); err != nil {
 		return nil, err
 	}
+	return s.afterReopen(ctx, tID, before, *lost)
+}
+
+// Reopen clears a played match's result in Challonge so it is played again.
+// Challonge resets what branched from it and the cache is rebuilt from it; a
+// match whose teams already played on is refused. matchID may be the cache id
+// or the play order.
+func (s *BracketService) Reopen(ctx context.Context, matchID int) (*BracketChange, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tID := s.tournamentID(ctx)
+	if tID == 0 {
+		return nil, ErrBracketNotBuilt
+	}
+	before, err := s.repo.GetBracketMatches(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var m *models.BracketMatch
+	for i := range before {
+		if before[i].ID == matchID || before[i].PlayOrder == matchID {
+			m = &before[i]
+			break
+		}
+	}
+	if m == nil {
+		return nil, ErrMatchNotFound
+	}
+	if m.State != models.BracketComplete || m.Team1ID == nil || m.Team2ID == nil {
+		return nil, errors.New("матч не завершён, откат не требуется")
+	}
+	if next := playedAfter(before, *m); next != nil {
+		return nil, fmt.Errorf("невозможно откатить: команды уже сыграли следующий матч #%d", next.PlayOrder)
+	}
+	if err := s.provider.ReopenMatch(ctx, tID, m.ChallongeMatchID); err != nil {
+		s.recordQuota(ctx, err)
+		return nil, err
+	}
+	ch, err := s.afterReopen(ctx, tID, before, *m)
+	if err != nil {
+		return nil, err
+	}
+	// Its own teams hear the result is gone before the card to replay it.
+	ch.Reset = append([]models.BracketMatch{*m}, ch.Reset...)
+	return ch, nil
+}
+
+// afterReopen syncs after a match was reopened in Challonge and works out
+// whom to tell: the reopened match and new pairs to play, matches whose pair
+// or state changed as reset. The caller holds mu.
+func (s *BracketService) afterReopen(ctx context.Context, tID int64, before []models.BracketMatch, reopened models.BracketMatch) (*BracketChange, error) {
 	ready, err := s.sync(ctx, tID)
 	if err != nil {
 		return nil, err
@@ -995,7 +1046,7 @@ func (s *BracketService) Reinstate(ctx context.Context, teamName string) (*Brack
 	}
 	// The reopened match keeps its pair, so both_notified survived the sync
 	// and it is not in ready; the captains still need to hear it is back on.
-	if a, ok := afterByID[lost.ID]; ok && a.Ready() {
+	if a, ok := afterByID[reopened.ID]; ok && a.Ready() {
 		already := false
 		for _, r := range ready {
 			already = already || r.ID == a.ID
@@ -1005,7 +1056,7 @@ func (s *BracketService) Reinstate(ctx context.Context, teamName string) (*Brack
 		}
 	}
 	for _, b := range before {
-		if b.ID == lost.ID || (!b.Ready() && b.State != models.BracketComplete) {
+		if b.ID == reopened.ID || (!b.Ready() && b.State != models.BracketComplete) {
 			continue
 		}
 		if a, ok := afterByID[b.ID]; !ok || a.State != b.State || !samePairIDs(a, b) {

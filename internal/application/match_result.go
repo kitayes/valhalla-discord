@@ -42,19 +42,48 @@ func (s *TelegramServiceImpl) recordResult(ctx context.Context, matchID, winnerT
 	if loser == nil {
 		return errors.New("у матча ещё не определены обе команды")
 	}
+	var change *BracketChange
 	if override {
 		winner, err := s.repo.GetTeamByID(ctx, winnerTeamID)
 		if err != nil || winner == nil {
 			return errors.New("команда-победитель не найдена")
 		}
-		if _, err := s.bracket.SetWinner(ctx, m.PlayOrder, winner.Name, winScore, loseScore); err != nil {
+		if change, err = s.bracket.SetWinner(ctx, m.PlayOrder, winner.Name, winScore, loseScore); err != nil {
 			return err
 		}
-	} else if _, err := s.bracket.ReportResult(ctx, m.ID, winnerTeamID, winScore, loseScore); err != nil {
-		return err
+	} else {
+		ready, err := s.bracket.ReportResult(ctx, m.ID, winnerTeamID, winScore, loseScore)
+		if err != nil {
+			return err
+		}
+		change = &BracketChange{Ready: ready}
 	}
 	s.notifyResult(ctx, *m, winnerTeamID, *loser, winScore, loseScore)
+	s.announceChange(ctx, change)
 	return nil
+}
+
+// SetBracketChangeNotifier installs the announcer of new pairs and reset
+// matches; the bot passes its own, so a result recorded here reads the same
+// as one set with /set_winner.
+func (s *TelegramServiceImpl) SetBracketChangeNotifier(fn func(ctx context.Context, ch *BracketChange)) {
+	s.hookMu.Lock()
+	s.changeHook = fn
+	s.hookMu.Unlock()
+}
+
+// announceChange hands a bracket change to the bot. The sync that produced it
+// marked its new pairs announced, so a change dropped here is never told.
+func (s *TelegramServiceImpl) announceChange(ctx context.Context, ch *BracketChange) {
+	if ch == nil || (len(ch.Ready) == 0 && len(ch.Reset) == 0) {
+		return
+	}
+	s.hookMu.RLock()
+	fn := s.changeHook
+	s.hookMu.RUnlock()
+	if fn != nil {
+		fn(ctx, ch)
+	}
 }
 
 // notifyResult tells both teams what a result means for them. The meaning

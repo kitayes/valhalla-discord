@@ -154,6 +154,7 @@ func main() {
 			services.TelegramService.SetMatchNotifier(func(ctx context.Context, chatID int64, text string, hasWebAppBtn bool) {
 				telegramBot.SendMatchNotification(chatID, text, hasWebAppBtn)
 			})
+			services.TelegramService.SetBracketChangeNotifier(telegramBot.ApplyBracketChange)
 		}
 	}
 	discordBot := discord.NewBot(&cfg, services, log)

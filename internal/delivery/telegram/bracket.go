@@ -252,6 +252,12 @@ func (b *Bot) notifyMatchesReset(ctx context.Context, ms []models.BracketMatch) 
 	}
 }
 
+// ApplyBracketChange tells the teams of reset matches and of new pairs. The
+// service calls it after a result it recorded itself.
+func (b *Bot) ApplyBracketChange(ctx context.Context, ch *application.BracketChange) {
+	b.applyBracketChange(ctx, ch)
+}
+
 func (b *Bot) applyBracketChange(ctx context.Context, ch *application.BracketChange) {
 	if ch == nil {
 		return

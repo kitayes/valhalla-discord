@@ -126,6 +126,30 @@ func TotalRounds(ms []models.BracketMatch) int {
 // its latest loss in play order, which in double elimination is the
 // lower-bracket loss rather than the earlier upper one. Nil while the team is
 // still in the bracket or has never lost.
+// playedAfter is a played match that one of m's teams went on to after m, or
+// nil. Reopening m in Challonge resets what branched from it, so an admin
+// correction stops there instead of wiping a match already played.
+func playedAfter(ms []models.BracketMatch, m models.BracketMatch) *models.BracketMatch {
+	total := TotalRounds(ms)
+	hasNegative := false
+	for _, x := range ms {
+		hasNegative = hasNegative || x.Round < 0
+	}
+	key := RoundSortKey(m.Round, total, hasNegative)
+	for i := range ms {
+		x := &ms[i]
+		if x.ID == m.ID || x.State != models.BracketComplete || x.Team1ID == nil || x.Team2ID == nil {
+			continue
+		}
+		if (m.Team1ID != nil && x.Has(*m.Team1ID)) || (m.Team2ID != nil && x.Has(*m.Team2ID)) {
+			if RoundSortKey(x.Round, total, hasNegative) > key {
+				return x
+			}
+		}
+	}
+	return nil
+}
+
 func eliminationMatch(ms []models.BracketMatch, teamID int) *models.BracketMatch {
 	total := TotalRounds(ms)
 	hasNegative := false

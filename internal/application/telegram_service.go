@@ -104,6 +104,7 @@ type TelegramService interface {
 
 	GetTeamCaptains(ctx context.Context, teamID int) ([]models.TelegramPlayer, error)
 	SetMatchNotifier(fn func(ctx context.Context, chatID int64, text string, hasWebAppBtn bool))
+	SetBracketChangeNotifier(fn func(ctx context.Context, ch *BracketChange))
 	GetTeamDetails(ctx context.Context, teamID int) (*models.TelegramTeam, []models.TelegramPlayer, error)
 
 	// Referee panel: team roster review and management (telegram_admin_teams.go)
@@ -190,6 +191,9 @@ type TelegramServiceImpl struct {
 	// stale "not confirmed" in the app and un-checked the team by tapping it.
 	hookMu    sync.RWMutex
 	eventHook func(event string, payload map[string]any)
+	// changeHook announces new pairs and reset matches after a result; the
+	// bot installs it. Under hookMu.
+	changeHook func(ctx context.Context, ch *BracketChange)
 
 	// finishMu serialises FinishTournament.
 	finishMu sync.Mutex
@@ -1808,6 +1812,18 @@ func (s *TelegramServiceImpl) sendMatchResultNotifications(ctx context.Context, 
 }
 
 func (s *TelegramServiceImpl) RollbackMatch(ctx context.Context, matchID int) error {
+	// With Challonge on, Challonge is the bracket: reopening only the cache let
+	// the captains replay a match Challonge still had closed, their result was
+	// refused there and the next sync brought the old winner back.
+	if s.bracket != nil {
+		change, err := s.bracket.Reopen(ctx, matchID)
+		if err != nil {
+			return err
+		}
+		s.closeOpenReport(ctx, matchID)
+		s.announceChange(ctx, change)
+		return nil
+	}
 	ms, err := s.repo.GetBracketMatches(ctx)
 	if err != nil {
 		return err
@@ -1914,6 +1930,20 @@ func (s *TelegramServiceImpl) ChangeWinnerDirect(ctx context.Context, matchID in
 		return errors.New("команда не участвует в этом матче")
 	}
 
+	// With Challonge on, the decision goes there and the cache follows it.
+	// Moving the cache first advanced the winner by position, wrong outside
+	// single elimination, and a failed Challonge write went unnoticed.
+	if s.bracket != nil {
+		if next := playedAfter(ms, *target); next != nil {
+			return fmt.Errorf("невозможно изменить победителя: команды уже сыграли следующий матч #%d", next.PlayOrder)
+		}
+		if err := s.recordResult(ctx, target.ID, team.ID, winScore, loseScore, true); err != nil {
+			return err
+		}
+		s.closeOpenReport(ctx, target.ID)
+		return nil
+	}
+
 	oldWinnerID := target.WinnerID
 
 	// Check downstream match
@@ -1970,10 +2000,6 @@ func (s *TelegramServiceImpl) ChangeWinnerDirect(ctx context.Context, matchID in
 
 	if err := s.repo.ReplaceBracketMatches(ctx, ms); err != nil {
 		return err
-	}
-
-	if s.bracket != nil {
-		_, _ = s.bracket.SetWinner(ctx, target.PlayOrder, newWinnerTeamName, winScore, loseScore)
 	}
 	s.closeOpenReport(ctx, target.ID)
 
