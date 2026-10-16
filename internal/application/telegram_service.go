@@ -2114,6 +2114,9 @@ func (s *TelegramServiceImpl) SetActiveTournament(ctx context.Context, id int) e
 	if err != nil || t == nil {
 		return errors.New("турнир не найден")
 	}
+	if err := s.activeUnderWay(ctx, id); err != nil {
+		return err
+	}
 	if err := s.repo.SetActiveTournament(ctx, id); err != nil {
 		return err
 	}

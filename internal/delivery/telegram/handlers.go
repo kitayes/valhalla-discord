@@ -266,7 +266,7 @@ func (b *Bot) handleAdminCommand(ctx context.Context, chatID int64, text string)
 			b.sendMessage(chatID, "Ошибка создания турнира: "+err.Error(), "main_menu")
 			return
 		}
-		msg := fmt.Sprintf("Новый турнир '%s' успешно создан и запущен (ID: %d)!\nПредыдущий турнир завершён.\n\nЗадайте время старта командой:\n/set_tourney 20.05.2026 18:00", t.Name, t.ID)
+		msg := fmt.Sprintf("Новый турнир '%s' успешно создан и запущен (ID: %d)!\nПредыдущий турнир больше не активен.\n\nЗадайте время старта командой:\n/set_tourney 20.05.2026 18:00", t.Name, t.ID)
 		b.sendMessage(chatID, msg, "main_menu")
 		return
 	}

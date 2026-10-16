@@ -129,6 +129,9 @@ func (s *TelegramServiceImpl) CreateTournament(ctx context.Context, set Tourname
 	if err := normalizeSettings(&set); err != nil {
 		return nil, err
 	}
+	if err := s.activeUnderWay(ctx, 0); err != nil {
+		return nil, err
+	}
 	slug, err := normalizeChallongeSlug(set.Slug)
 	if err != nil {
 		return nil, err
@@ -165,6 +168,40 @@ func (s *TelegramServiceImpl) CreateTournament(ctx context.Context, set Tourname
 	_ = s.repo.SetSetting(ctx, settingChallongeURL, "")
 	_ = s.repo.SetSetting(ctx, settingChallongeFor, "")
 	return created, nil
+}
+
+// activeUnderWay refuses to replace the active tournament while its bracket
+// is being played. Creating or activating another one used to mark it
+// completed without finishing it: a qualifier's teams were never recorded as
+// qualified and its last match could no longer be decided, since the bot
+// only works on the active bracket. keep is a tournament id the caller may
+// switch to anyway (itself), 0 for none. A tournament still taking
+// registrations has nothing to lose and may be replaced.
+func (s *TelegramServiceImpl) activeUnderWay(ctx context.Context, keep int) error {
+	t, err := s.repo.GetActiveTournament(ctx)
+	if err != nil || t == nil || t.ID == keep || t.Status != models.TournamentStatusActive {
+		return err
+	}
+	if t.Qualifier() {
+		matches, err := s.repo.GetBracketMatchesForTournament(ctx, t.ID)
+		if err != nil {
+			return err
+		}
+		entries, err := s.repo.GetTournamentEntries(ctx, t.ID)
+		if err != nil {
+			return err
+		}
+		if out := QualifierStatus(t, matches, bracketParticipants(entries, matches)); len(out.Pending) > 0 {
+			nums := make([]string, 0, len(out.Pending))
+			for _, m := range out.Pending {
+				nums = append(nums, fmt.Sprintf("#%d", m.PlayOrder))
+			}
+			return fmt.Errorf("квалификация «%s» не доиграна: не сыграны матчи %s. Когда судья их решит, квала закроется сама и объявит прошедших — после этого создавайте новый турнир",
+				t.Name, strings.Join(nums, ", "))
+		}
+		return fmt.Errorf("квалификация «%s» не завершена: завершите её в админке, чтобы прошедшие команды были записаны, затем создавайте новый турнир", t.Name)
+	}
+	return fmt.Errorf("турнир «%s» ещё идёт: завершите его в админке, чтобы записать итоги, затем создавайте новый", t.Name)
 }
 
 // UpdateTournamentSettings edits an existing tournament. The stage and the

@@ -714,3 +714,47 @@ func TestRegistrationInvitesForSecondQualifier(t *testing.T) {
 		t.Error("a main stage announced open registration")
 	}
 }
+
+// Creating the next tournament used to mark a running qualifier completed
+// without finishing it: its qualified teams were never recorded and its last
+// match could no longer be decided. A tournament under way is finished first.
+func TestNewTournamentWaitsForTheRunningQualifier(t *testing.T) {
+	svc, repo := qualifierFixture(t, false) // match #8 not played
+	ctx := context.Background()
+	_, err := svc.CreateTournament(ctx, TournamentSettings{Name: "Квалификация 2", Stage: models.StageQualifier, AdvanceCount: 8})
+	if err == nil || !strings.Contains(err.Error(), "#8") {
+		t.Fatalf("create during the qualifier = %v, want a refusal naming match #8", err)
+	}
+	if active, _ := repo.GetActiveTournament(ctx); active == nil || active.ID != 1 || active.Status != models.TournamentStatusActive {
+		t.Fatalf("the running qualifier was touched: %+v", active)
+	}
+	other := &models.TelegramTournament{Name: "Другой", Status: models.TournamentStatusRegistration}
+	other, _ = repo.CreateTournament(ctx, other)
+	if err := svc.SetActiveTournament(ctx, other.ID); err == nil {
+		t.Fatal("switching away from the running qualifier succeeded")
+	}
+}
+
+func TestNewTournamentAfterTheQualifierFinished(t *testing.T) {
+	svc, _ := qualifierFixture(t, true)
+	ctx := context.Background()
+	if _, err := svc.CreateTournament(ctx, TournamentSettings{Name: "Квалификация 2", Stage: models.StageQualifier, AdvanceCount: 8}); err == nil ||
+		!strings.Contains(err.Error(), "завершите") {
+		t.Fatalf("create before finishing a played qualifier = %v, want to be told to finish it", err)
+	}
+	if _, err := svc.FinishTournament(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateTournament(ctx, TournamentSettings{Name: "Квалификация 2", Stage: models.StageQualifier, AdvanceCount: 8}); err != nil {
+		t.Fatalf("create after finishing: %v", err)
+	}
+}
+
+// While a tournament only takes registrations nothing is lost: replacing it
+// stays allowed.
+func TestNewTournamentDuringRegistration(t *testing.T) {
+	svc, _ := newTelegramSvc()
+	if _, err := svc.CreateTournament(context.Background(), TournamentSettings{Name: "Квалификация 2"}); err != nil {
+		t.Fatalf("create while the active one takes registrations: %v", err)
+	}
+}
