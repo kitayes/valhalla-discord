@@ -205,6 +205,10 @@ func (m *mockTelegramSvc) RegistrationStatus(ctx context.Context) (bool, string)
 	return true, ""
 }
 
+func (m *mockTelegramSvc) RosterStatus(ctx context.Context) (bool, string) {
+	return true, ""
+}
+
 func (m *mockTelegramSvc) CreateTeamInApp(ctx context.Context, captainTgID int64, teamName, nick, gameID, zoneID, role string) error {
 	m.team = &models.TelegramTeam{ID: 2, Name: teamName}
 	m.player = &models.TelegramPlayer{

@@ -2702,12 +2702,15 @@
                     cachedTeammates = data.teammates || [];
                     const isCaptain = data.player ? data.player.is_captain : false;
                     currentUserIsCaptain = isCaptain;
-                    const regOpen = data.registration_open !== false;
+                    // Closing registration stops new teams only; a team that
+                    // has not checked in edits its roster until check-in closes.
+                    const rosterOpen = data.roster_open !== false;
+                    rosterClosedReason = data.roster_closed_reason || '';
                     // The tournament entry is what the bracket reads; the team
                     // row only mirrors it.
                     const checkedIn = data.tournament_team ? !!data.tournament_team.is_checked_in : !!data.team.is_checked_in;
-                    updateCheckInStatus(checkedIn, isCaptain, regOpen, checkInOpenFor(data.active_tournament));
-                    const canEdit = !data.team.is_checked_in && regOpen;
+                    updateCheckInStatus(checkedIn, isCaptain, rosterOpen, checkInOpenFor(data.active_tournament));
+                    const canEdit = !data.team.is_checked_in && rosterOpen;
                     renderRoster(cachedTeammates, canEdit, isCaptain, data.player ? data.player.id : null);
 
                     // Stage Registration Box
@@ -2926,7 +2929,8 @@
             return true;
         }
 
-        function updateCheckInStatus(isChecked, isCaptain = true, regOpen = true, checkInOpen = true) {
+        let rosterClosedReason = '';
+        function updateCheckInStatus(isChecked, isCaptain = true, rosterOpen = true, checkInOpen = true) {
             currentCheckInOpen = checkInOpen;
             demoCheckedIn = isChecked;
             currentTeamCheckedIn = isChecked;
@@ -2948,13 +2952,13 @@
                 btn.className = 'btn btn-red-outline';
                 lockedNotice.style.display = 'flex';
                 if (lockedText) lockedText.textContent = 'Состав зафиксирован (Check-in пройден). Чтобы изменить данные игроков, сначала отмените Check-in.';
-            } else if (!regOpen) {
+            } else if (!rosterOpen) {
                 badge.className = 'status-pill status-waiting';
                 badgeText.textContent = 'НЕ ПОДТВЕРЖДЕНО';
                 btnText.textContent = 'Подтвердить участие (Check-in)';
                 btn.className = 'btn btn-green';
                 lockedNotice.style.display = 'flex';
-                if (lockedText) lockedText.textContent = 'Состав зафиксирован (Roster Lock). Регистрация на турнир закрыта, изменение состава заблокировано.';
+                if (lockedText) lockedText.textContent = 'Состав зафиксирован: ' + (rosterClosedReason || 'турнир уже начался') + '. Изменить его могут только организаторы.';
             } else {
                 badge.className = 'status-pill status-waiting';
                 badgeText.textContent = 'НЕ ПОДТВЕРЖДЕНО';
@@ -2977,8 +2981,8 @@
                 btn.style.opacity = '1';
                 btn.style.cursor = 'pointer';
                 notice.style.display = 'none';
-                // Show invite section if not checked-in and reg is open
-                if (inviteSection) inviteSection.style.display = (!isChecked && regOpen) ? 'block' : 'none';
+                // Show invite section while the roster can still change
+                if (inviteSection) inviteSection.style.display = (!isChecked && rosterOpen) ? 'block' : 'none';
             }
 
             const btnDelete = document.getElementById('btnDeleteTeam');

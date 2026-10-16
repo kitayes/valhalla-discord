@@ -21,6 +21,10 @@ type MeResponse struct {
 	Teammates        []models.TelegramPlayer `json:"teammates,omitempty"`
 	IsAdmin          bool                    `json:"is_admin"`
 	RegistrationOpen bool                    `json:"registration_open"`
+	// RosterOpen: a team that has not checked in may still change its roster.
+	// It stays open after registration closes, until the check-in closes.
+	RosterOpen         bool   `json:"roster_open"`
+	RosterClosedReason string `json:"roster_closed_reason,omitempty"`
 	// BotUsername lets the app build t.me links without hardcoding the bot.
 	BotUsername      string                     `json:"bot_username,omitempty"`
 	ActiveTournament *models.TelegramTournament `json:"active_tournament,omitempty"`
@@ -223,13 +227,13 @@ func (s *AdminServer) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	regOpen := true
+	regOpen, rosterOpen, rosterReason := true, true, ""
 	if s.services.TelegramService != nil {
-		open, _ := s.services.TelegramService.RegistrationStatus(r.Context())
-		regOpen = open
+		regOpen, _ = s.services.TelegramService.RegistrationStatus(r.Context())
+		rosterOpen, rosterReason = s.services.TelegramService.RosterStatus(r.Context())
 	}
 
-	resp := MeResponse{User: user, IsAdmin: s.isAdmin(user.ID), RegistrationOpen: regOpen, BotUsername: s.botUsername}
+	resp := MeResponse{User: user, IsAdmin: s.isAdmin(user.ID), RegistrationOpen: regOpen, RosterOpen: rosterOpen, RosterClosedReason: rosterReason, BotUsername: s.botUsername}
 	player, _ := s.services.TelegramService.GetPlayer(r.Context(), user.ID)
 	if player == nil && s.services.TelegramService != nil {
 		_ = s.services.TelegramService.RegisterUser(r.Context(), user.ID, user.Username, user.FirstName)

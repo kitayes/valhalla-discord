@@ -1003,12 +1003,62 @@ func TestUpdateTeamPlayerRosterLock(t *testing.T) {
 		t.Fatalf("expected error containing 'Check-in', got: %v", err)
 	}
 
-	// 3. Blocked when registration is closed
+	// 3. Closed registration stops new teams, not a team fixing its roster
 	repo.teams[teamID].IsCheckedIn = false
 	svc.SetRegistrationOpen(ctx, false)
-	err = svc.UpdateTeamPlayer(ctx, 100, p.ID, "AnotherNick", "12345", "1001", "Mid")
-	if err == nil || !strings.Contains(err.Error(), "регистрация на турнир закрыта") {
-		t.Fatalf("expected error containing 'регистрация на турнир закрыта', got: %v", err)
+	if err = svc.UpdateTeamPlayer(ctx, 100, p.ID, "AnotherNick", "12345", "1001", "Mid"); err != nil {
+		t.Fatalf("update with registration closed: %v", err)
+	}
+
+	// 4. Blocked once the tournament started
+	start := time.Now().Add(-time.Minute)
+	svc.SetTournamentTime(ctx, start)
+	err = svc.UpdateTeamPlayer(ctx, 100, p.ID, "ThirdNick", "12345", "1001", "Mid")
+	if err == nil || !strings.Contains(err.Error(), "турнир уже начался") {
+		t.Fatalf("expected error containing 'турнир уже начался', got: %v", err)
+	}
+}
+
+// Registration closes an hour before the start, and the check-in reminder
+// sent at that moment tells an incomplete team to fill its roster. Until the
+// check-in closes a team that has not checked in can still do that.
+func TestRosterOpenUntilCheckInCloses(t *testing.T) {
+	svc, repo := newTelegramSvc()
+	ctx := context.Background()
+	now := time.Date(2026, 10, 18, 14, 30, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
+	svc.SetTournamentTime(ctx, now.Add(30*time.Minute))
+	if open, _ := svc.RegistrationStatus(ctx); open {
+		t.Fatal("registration open 30 minutes before the start")
+	}
+
+	team := 1
+	repo.teams[team] = &models.TelegramTeam{ID: team, Name: "Late"}
+	repo.addPlayer(100, &team, true, models.StateIdle)
+	if open, reason := svc.RosterStatus(ctx); !open {
+		t.Fatalf("roster closed 30 minutes before the start: %s", reason)
+	}
+	if _, err := svc.AddTeamPlayer(ctx, 100, "Sub", "777", "1", "Mid", false); err != nil {
+		t.Fatalf("add player in the last hour: %v", err)
+	}
+	token, err := svc.GenerateInviteToken(ctx, 100)
+	if err != nil {
+		t.Fatalf("invite: %v", err)
+	}
+	repo.addPlayer(200, nil, false, models.StateIdle)
+	if err := svc.JoinTeamByToken(ctx, 200, token); err != nil {
+		t.Fatalf("join in the last hour: %v", err)
+	}
+	if resp, _ := svc.StartTeamRegistration(ctx, 300); !strings.Contains(resp, "Регистрация закрыта") {
+		t.Errorf("new team in the last hour = %q, want refusal", resp)
+	}
+
+	now = now.Add(31 * time.Minute)
+	if open, _ := svc.RosterStatus(ctx); open {
+		t.Fatal("roster open after the start")
+	}
+	if _, err := svc.AddTeamPlayer(ctx, 100, "Late", "778", "1", "Mid", false); err == nil {
+		t.Error("player added after the start")
 	}
 }
 

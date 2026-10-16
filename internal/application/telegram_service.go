@@ -58,6 +58,7 @@ type TelegramService interface {
 
 	SetRegistrationOpen(ctx context.Context, isOpen bool)
 	RegistrationStatus(ctx context.Context) (open bool, reason string)
+	RosterStatus(ctx context.Context) (open bool, reason string)
 	GenerateTeamsCSV(ctx context.Context) ([]byte, error)
 	ExportTeamsToSheet(ctx context.Context) (string, error)
 	GetBroadcastList(ctx context.Context) ([]int64, error)
@@ -536,8 +537,8 @@ func (s *TelegramServiceImpl) UpdateTeamPlayer(ctx context.Context, callerTgID i
 	if team.IsCheckedIn {
 		return errors.New("редактирование заблокировано: команда уже прошла Check-in")
 	}
-	if open, _ := s.RegistrationStatus(ctx); !open {
-		return errors.New("редактирование состава заблокировано: регистрация на турнир закрыта")
+	if open, reason := s.RosterStatus(ctx); !open {
+		return errors.New("редактирование состава заблокировано: " + reason)
 	}
 
 	members, err := s.repo.GetTeamMembers(ctx, team.ID)
@@ -672,8 +673,8 @@ func (s *TelegramServiceImpl) AddTeamPlayer(ctx context.Context, captainTgID int
 	if team.IsCheckedIn {
 		return nil, errors.New("добавление игроков заблокировано: команда уже прошла Check-in")
 	}
-	if open, _ := s.RegistrationStatus(ctx); !open {
-		return nil, errors.New("добавление игроков заблокировано: регистрация на турнир закрыта")
+	if open, reason := s.RosterStatus(ctx); !open {
+		return nil, errors.New("добавление игроков заблокировано: " + reason)
 	}
 
 	members, err := s.repo.GetTeamMembers(ctx, team.ID)
@@ -762,8 +763,8 @@ func (s *TelegramServiceImpl) GenerateInviteToken(ctx context.Context, captainTg
 
 // JoinTeamByToken joins the caller to a team using a previously generated invite token.
 func (s *TelegramServiceImpl) JoinTeamByToken(ctx context.Context, playerTgID int64, token string) error {
-	if open, reason := s.RegistrationStatus(ctx); !open {
-		return errors.New(reason)
+	if open, reason := s.RosterStatus(ctx); !open {
+		return errors.New("присоединиться нельзя: " + reason)
 	}
 	token = strings.TrimSpace(token)
 	if token == "" {
@@ -984,6 +985,22 @@ func (s *TelegramServiceImpl) SetRegistrationOpen(ctx context.Context, isOpen bo
 		val = registrationForced
 	}
 	s.logWrite("SetSetting", s.repo.SetSetting(ctx, "registration_open", val))
+}
+
+// RosterStatus reports whether a team that has not checked in may still
+// change its roster and, if not, why. Closing registration an hour before the
+// start stops new teams only: the check-in reminder sent at that moment asks
+// an incomplete team to fill its roster, and a player who drops out in the
+// last hour must be replaceable. The check-in itself locks the roster, and
+// nothing changes once the check-in closes.
+func (s *TelegramServiceImpl) RosterStatus(ctx context.Context) (bool, string) {
+	if active, _ := s.repo.GetActiveTournament(ctx); active != nil && !tournamentAcceptsEntries(active) {
+		return false, "сетка турнира уже сформирована"
+	}
+	if start := s.GetTournamentTime(ctx); !start.IsZero() && !s.now().Before(start) {
+		return false, "турнир уже начался"
+	}
+	return true, ""
 }
 
 // RegistrationStatus reports whether sign-ups are accepted and, if not, the
