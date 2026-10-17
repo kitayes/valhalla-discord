@@ -59,16 +59,24 @@ func NewLayout(t *models.TelegramTournament, ms []models.BracketMatch) Layout {
 // Cutoff is where a qualifier stops: upper rounds 1..UB and lower rounds
 // -1..-LB are played, everything after them belongs to the main stage. All
 // means the field is no bigger than the advance count and everyone goes on.
+//
+// A single-elimination qualifier sending one team fewer than a power of two
+// (3, 7, 15) plays one match more: the second match of the round that starts
+// with that power of two, the pairing of its 4th and 5th seeds for eight. Its
+// loser is out and the rest of the round goes on. Playoff is that round,
+// PlayoffOrder the match's play order (0 while the list does not show it).
 type Cutoff struct {
-	All    bool
-	UB, LB int
+	All                   bool
+	UB, LB                int
+	Playoff, PlayoffOrder int
 }
 
 // Cutoff computes the advance line for `advance` teams. Single elimination
 // keeps the rounds that leave `advance` teams; double elimination keeps the
 // upper rounds that leave advance/2 teams there plus the lower rounds that
-// absorb those rounds' losers and leave advance/2 more.
-func (l Layout) Cutoff(advance int) Cutoff {
+// absorb those rounds' losers and leave advance/2 more. ms is the full match
+// list or the qualifier's cache: the playoff is found in either.
+func (l Layout) Cutoff(advance int, ms []models.BracketMatch) Cutoff {
 	if l.Other || advance <= 0 {
 		return Cutoff{All: true}
 	}
@@ -79,14 +87,64 @@ func (l Layout) Cutoff(advance int) Cutoff {
 		}
 		return Cutoff{UB: u, LB: 2*u - 2}
 	}
-	c := l.UBRounds - log2(advance)
-	if c <= 0 {
+	line := NextPow2(advance)
+	c := l.UBRounds - log2(line)
+	if line == advance {
+		if c <= 0 {
+			return Cutoff{All: true}
+		}
+		return Cutoff{UB: c}
+	}
+	if c < 0 {
 		return Cutoff{All: true}
 	}
-	return Cutoff{UB: c}
+	order, played := playoffOrder(ms, c, line)
+	if !played {
+		return Cutoff{All: true}
+	}
+	return Cutoff{UB: c, Playoff: c + 1, PlayoffOrder: order}
 }
 
-// InStage reports whether a round is played inside the qualifier.
+// playoffOrder finds the play order of the playoff, the second match of round
+// c+1. Challonge numbers single-elimination matches round by round, so it
+// comes two after the last match of round c, which the cache keeps too. With
+// c = 0 the playoff opens the bracket: it is played only when round 1 is full
+// (every seed plays, the field is `line` teams); with byes the field is no
+// bigger than the advance count. played is false then.
+func playoffOrder(ms []models.BracketMatch, c, line int) (order int, played bool) {
+	var round []models.BracketMatch
+	last := 0
+	for _, m := range ms {
+		switch m.Round {
+		case c + 1:
+			round = append(round, m)
+		case c:
+			if c > 0 && m.PlayOrder > last {
+				last = m.PlayOrder
+			}
+		}
+	}
+	if c > 0 {
+		if last == 0 {
+			return 0, true
+		}
+		return last + 2, true
+	}
+	switch {
+	case len(round) == 0:
+		return 0, true
+	case len(round) == line/2:
+		sort.Slice(round, func(i, j int) bool { return round[i].PlayOrder < round[j].PlayOrder })
+		return round[1].PlayOrder, true
+	case len(round) == 1 && round[0].PlayOrder == 2:
+		// The cache: only the playoff is left of round 1.
+		return 2, true
+	}
+	return 0, false
+}
+
+// InStage reports whether a round is played inside the qualifier. The
+// playoff's round is only partly: see Keeps.
 func (c Cutoff) InStage(round int) bool {
 	if c.All {
 		return true
@@ -97,12 +155,31 @@ func (c Cutoff) InStage(round int) bool {
 	return round < 0 && -round <= c.LB
 }
 
-// Decider reports whether a round is the last one before the advance line.
+// Keeps reports whether a match is played inside the qualifier.
+func (c Cutoff) Keeps(m models.BracketMatch) bool {
+	if !c.All && c.Playoff > 0 && m.Round == c.Playoff {
+		return c.PlayoffOrder > 0 && m.PlayOrder == c.PlayoffOrder
+	}
+	return c.InStage(m.Round)
+}
+
+// IsPlayoff reports whether the match is the qualifier's playoff.
+func (c Cutoff) IsPlayoff(m models.BracketMatch) bool {
+	return !c.All && c.Playoff > 0 && c.PlayoffOrder > 0 && m.Round == c.Playoff && m.PlayOrder == c.PlayoffOrder
+}
+
+// Decider reports whether a round is the last one before the advance line,
+// the playoff's included.
 func (c Cutoff) Decider(round int) bool {
 	if c.All {
 		return false
 	}
-	return round == c.UB || (c.LB > 0 && round == -c.LB)
+	return (c.UB > 0 && round == c.UB) || (c.LB > 0 && round == -c.LB) || (c.Playoff > 0 && round == c.Playoff)
+}
+
+// StageCut is the advance line of a qualifier for its match list.
+func StageCut(t *models.TelegramTournament, ms []models.BracketMatch) Cutoff {
+	return NewLayout(t, ms).Cutoff(t.AdvanceCount, ms)
 }
 
 // QualifierOutcome is where a qualifier stands.
@@ -117,8 +194,8 @@ type QualifierOutcome struct {
 // participants are the team ids that were seeded into the bracket.
 func QualifierStatus(t *models.TelegramTournament, ms []models.BracketMatch, participants []int) QualifierOutcome {
 	l := NewLayout(t, ms)
-	cut := l.Cutoff(t.AdvanceCount)
-	if cut.All {
+	cut := l.Cutoff(t.AdvanceCount, ms)
+	if cut.All || len(participants) <= t.AdvanceCount {
 		out := append([]int(nil), participants...)
 		sort.Ints(out)
 		return QualifierOutcome{Done: true, Qualified: out}
@@ -130,7 +207,7 @@ func QualifierStatus(t *models.TelegramTournament, ms []models.BracketMatch, par
 	losses := map[int]int{}
 	var out QualifierOutcome
 	for _, m := range ms {
-		if !cut.InStage(m.Round) {
+		if !cut.Keeps(m) {
 			continue
 		}
 		if m.State == models.BracketComplete {
@@ -164,13 +241,13 @@ func FilterStage(t *models.TelegramTournament, ms []models.BracketMatch) []model
 	if !t.Qualifier() {
 		return ms
 	}
-	cut := NewLayout(t, ms).Cutoff(t.AdvanceCount)
+	cut := StageCut(t, ms)
 	if cut.All {
 		return ms
 	}
 	out := make([]models.BracketMatch, 0, len(ms))
 	for _, m := range ms {
-		if cut.InStage(m.Round) {
+		if cut.Keeps(m) {
 			out = append(out, m)
 		}
 	}
@@ -199,7 +276,7 @@ func MatchFormat(t *models.TelegramTournament, ms []models.BracketMatch, round i
 		// The third-place match is played like a semifinal.
 		return semi
 	case t.Qualifier():
-		if l.Cutoff(t.AdvanceCount).Decider(round) {
+		if l.Cutoff(t.AdvanceCount, ms).Decider(round) {
 			return final
 		}
 		return rounds
@@ -270,8 +347,14 @@ func RoundTitle(t *models.TelegramTournament, ms []models.BracketMatch, round in
 	default:
 		title = fmt.Sprintf("Нижняя сетка, Раунд %d", -round)
 	}
-	if t.Qualifier() && l.Cutoff(t.AdvanceCount).Decider(round) {
-		title += " — за выход в основу"
+	if t.Qualifier() {
+		cut := l.Cutoff(t.AdvanceCount, ms)
+		switch {
+		case cut.Playoff > 0 && round == cut.Playoff:
+			title = "Добивочный матч — за выход в основу"
+		case cut.Decider(round):
+			title += " — за выход в основу"
+		}
 	}
 	return title
 }

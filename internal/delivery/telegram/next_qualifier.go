@@ -86,7 +86,7 @@ func (b *Bot) handleTourneyCallback(ctx context.Context, cb *tgbotapi.CallbackQu
 		}
 		b.apiRespond(cb, "Создано", false)
 		b.clearButtons(cb)
-		text := fmt.Sprintf("Создана «%s»: регистрация открыта, выходят %d команд.\n\n"+
+		text := fmt.Sprintf("Создана «%s»: регистрация открыта, выходят %d команд. Число прошедших меняется там же, где время старта, пока сетка не построена: 7, 15 или 3 — с одним добивочным матчем.\n\n"+
 			"Задайте время старта — в приложении (Админка → Турниры) или командой /set_tourney ДД.ММ.ГГГГ ЧЧ:ММ. От него считаются закрытие регистрации, напоминания о check-in и построение сетки.\n\n"+
 			"Затем разошлите капитанам, что регистрация открыта: время старта попадёт в сообщение.", t.Name, t.AdvanceCount)
 		b.sendInline(cb.From.ID, text, tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(

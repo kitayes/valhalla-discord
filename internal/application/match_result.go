@@ -114,7 +114,21 @@ func (s *TelegramServiceImpl) notifyResult(ctx context.Context, m models.Bracket
 	winnerName, loserName := name(winnerID), name(loserID)
 	l := NewLayout(t, after)
 	qualifier := t.Qualifier()
-	decider := qualifier && l.Cutoff(t.AdvanceCount).Decider(m.Round)
+	cut := Cutoff{All: true}
+	if qualifier {
+		cut = l.Cutoff(t.AdvanceCount, after)
+	}
+	decider := qualifier && cut.Decider(m.Round)
+	// Before a playoff its round's winners are not all through: the two
+	// that meet in it play once more.
+	intoPlayoff := cut.Playoff > 0 && m.Round == cut.UB
+	playoffKnown, inPlayoff := false, false
+	for _, x := range after {
+		if intoPlayoff && cut.IsPlayoff(x) {
+			playoffKnown = x.Team1ID != nil && x.Team2ID != nil
+			inPlayoff = x.Has(winnerID)
+		}
+	}
 	grandFinal := l.Double && m.Round > l.UBRounds
 	final := !qualifier && ((!l.Double && m.Round == l.UBRounds) || (grandFinal && !stillIn(winnerID)))
 	head := fmt.Sprintf("Матч #%d (%s) завершён: %s %d:%d %s.", m.PlayOrder, RoundTitle(t, after, m.Round), winnerName, winScore, loseScore, loserName)
@@ -123,6 +137,10 @@ func (s *TelegramServiceImpl) notifyResult(ctx context.Context, m models.Bracket
 	switch {
 	case m.Round == 0:
 		winnerText = head + fmt.Sprintf("\n\nКоманда «%s» занимает 3-е место!", winnerName)
+	case intoPlayoff && inPlayoff:
+		winnerText = head + fmt.Sprintf("\n\nПобеда! У команды «%s» впереди добивочный матч: победитель выходит в основу, проигравший выбывает. Карточка матча придёт отдельно.", winnerName)
+	case intoPlayoff && !playoffKnown:
+		winnerText = head + fmt.Sprintf("\n\nПобеда! Команда «%s» в числе %d оставшихся: %d из них проходят в основной этап сразу, одна пара играет добивочный матч. Если он ваш, карточка придёт отдельно.", winnerName, NextPow2(t.AdvanceCount), t.AdvanceCount-1)
 	case decider:
 		winnerText = head + fmt.Sprintf("\n\nПобеда! Команда «%s» проходит в основной этап. Итог квалификации объявим, когда сыграют все матчи.", winnerName)
 	case final:

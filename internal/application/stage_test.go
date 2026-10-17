@@ -51,7 +51,7 @@ func TestCutoffSingle(t *testing.T) {
 		{3, Cutoff{All: true}},
 	}
 	for _, c := range cases {
-		if got := (Layout{UBRounds: c.ub}).Cutoff(8); got != c.want {
+		if got := (Layout{UBRounds: c.ub}).Cutoff(8, nil); got != c.want {
 			t.Errorf("SE UBRounds=%d: got %+v, want %+v", c.ub, got, c.want)
 		}
 	}
@@ -68,7 +68,7 @@ func TestCutoffDouble(t *testing.T) {
 	}
 	for _, c := range cases {
 		l := Layout{Double: true, UBRounds: c.ub, LBRounds: 2*c.ub - 2}
-		if got := l.Cutoff(8); got != c.want {
+		if got := l.Cutoff(8, nil); got != c.want {
 			t.Errorf("DE UBRounds=%d: got %+v, want %+v", c.ub, got, c.want)
 		}
 	}

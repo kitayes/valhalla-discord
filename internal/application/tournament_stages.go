@@ -93,8 +93,15 @@ func normalizeSettings(set *TournamentSettings) error {
 		if double {
 			minAdvance = 4
 		}
-		if set.AdvanceCount < minAdvance || set.AdvanceCount&(set.AdvanceCount-1) != 0 {
-			return fmt.Errorf("из квалификации должно выходить %d, 8, 16… команд (степень двойки не меньше %d)", minAdvance, minAdvance)
+		pow2 := set.AdvanceCount&(set.AdvanceCount-1) == 0
+		// One fewer than a power of two is played with one extra match
+		// (see Cutoff); double elimination has no such match.
+		playoff := !double && set.AdvanceCount >= 3 && (set.AdvanceCount+1)&set.AdvanceCount == 0
+		if set.AdvanceCount < minAdvance || (!pow2 && !playoff) {
+			if double {
+				return fmt.Errorf("из квалификации double elimination должно выходить 4, 8, 16… команд (степень двойки не меньше 4)")
+			}
+			return fmt.Errorf("из квалификации должно выходить 2, 4, 8, 16… команд или на одну меньше — 3, 7, 15: тогда играется один добивочный матч")
 		}
 	default:
 		return fmt.Errorf("неизвестный этап %q", set.Stage)
@@ -435,12 +442,12 @@ func bracketParticipants(entries []models.TournamentTeam, matches []models.Brack
 // advance line. Their matches leave the cache, and left open the reports were
 // later auto-confirmed and announced as results of games that were cancelled.
 func (s *TelegramServiceImpl) closeCutReports(ctx context.Context, t *models.TelegramTournament, matches []models.BracketMatch) {
-	cut := NewLayout(t, matches).Cutoff(t.AdvanceCount)
+	cut := StageCut(t, matches)
 	if cut.All {
 		return
 	}
 	for _, m := range matches {
-		if cut.InStage(m.Round) {
+		if cut.Keeps(m) {
 			continue
 		}
 		rep, err := s.repo.GetOpenReportForMatch(ctx, m.ID)
