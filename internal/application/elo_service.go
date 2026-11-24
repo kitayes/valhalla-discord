@@ -174,7 +174,7 @@ func (s *EloService) ProcessMatchResultWithKDA(
 		}
 		// matchID goes with the change so a player can see which match cost
 		// or earned them the points, and so a replay is recognised as one.
-		if err := s.lobbyMatch.UpdatePlayerMMR(ctx, pid, bd.NewMMR, matchID); err != nil {
+		if err := s.lobbyMatch.UpdatePlayerMMRWithBreakdown(ctx, pid, bd.NewMMR, matchID, bd.BaseDelta, bd.KDAMod, bd.MedalBonus); err != nil {
 			s.logger.Error("elo: failed to update MMR for player %d: %v", pid, err)
 			updateErrs = append(updateErrs, fmt.Errorf("player %d: %w", pid, err))
 			continue

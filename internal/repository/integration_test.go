@@ -1617,3 +1617,142 @@ func TestIntegrationRosterScoreboardAndAliases(t *testing.T) {
 		t.Errorf("aliases[pB] = %v, want empty (stolen alias must be ignored)", aliases[pB])
 	}
 }
+
+func TestIntegrationMMRBreakdownAliasesAndMergePlayers(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	matchRepo := newMatchRepo(t, db)
+	lobbyRepo := NewLobbyMatchPostgres(db)
+
+	canonName := uniqueName(t, "canon")
+	phantomName := uniqueName(t, "phantom")
+	otherName := uniqueName(t, "other")
+
+	canonID, err := matchRepo.EnsurePlayerExists(ctx, canonName)
+	if err != nil {
+		t.Fatalf("EnsurePlayerExists(canon): %v", err)
+	}
+	phantomID, err := matchRepo.EnsurePlayerExists(ctx, phantomName)
+	if err != nil {
+		t.Fatalf("EnsurePlayerExists(phantom): %v", err)
+	}
+	otherID, err := matchRepo.EnsurePlayerExists(ctx, otherName)
+	if err != nil {
+		t.Fatalf("EnsurePlayerExists(other): %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DELETE FROM players WHERE id IN ($1, $2, $3)`, canonID, phantomID, otherID)
+	})
+
+	// 1. MMR breakdown persistence + read-back.
+	lmID, err := lobbyRepo.Create(ctx, models.CreateLobbyMatchRequest{
+		GuildID:    "test-guild-merge",
+		CaptainAID: phantomID,
+		CaptainBID: otherID,
+		TeamAIDs:   []int{phantomID},
+		TeamBIDs:   []int{otherID},
+	})
+	if err != nil {
+		t.Fatalf("lobbyRepo.Create: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM lobby_matches WHERE id = $1`, lmID) })
+
+	if err := lobbyRepo.UpdatePlayerMMRWithBreakdown(ctx, phantomID, 1032, lmID, 24, 5, 3); err != nil {
+		t.Fatalf("UpdatePlayerMMRWithBreakdown: %v", err)
+	}
+	hist, err := lobbyRepo.GetMMRHistory(ctx, phantomID, 5)
+	if err != nil {
+		t.Fatalf("GetMMRHistory: %v", err)
+	}
+	if len(hist) != 1 || hist[0].BaseDelta != 24 || hist[0].KDAMod != 5 || hist[0].MedalBonus != 3 || hist[0].After != 1032 {
+		t.Fatalf("GetMMRHistory(phantom) = %+v, want base=24 kda=5 medal=3 after=1032", hist)
+	}
+
+	// 2. Manual aliases CRUD & conflict rejection.
+	manualAlias := uniqueName(t, "smurf-nick")
+	if err := matchRepo.AddManualAlias(ctx, phantomID, manualAlias); err != nil {
+		t.Fatalf("AddManualAlias: %v", err)
+	}
+	if err := matchRepo.AddManualAlias(ctx, canonID, manualAlias); err == nil {
+		t.Error("AddManualAlias should reject alias already owned by another player")
+	}
+	if err := matchRepo.AddManualAlias(ctx, canonID, otherName); err == nil {
+		t.Error("AddManualAlias should reject another active player's canonical name")
+	}
+	list, err := matchRepo.ListAliases(ctx, phantomID)
+	if err != nil || len(list) != 1 || list[0].Alias != manualAlias || list[0].Source != "admin" {
+		t.Fatalf("ListAliases(phantom) = %+v, err=%v", list, err)
+	}
+	// Delete & re-add to verify DeleteAlias.
+	deleted, err := matchRepo.DeleteAlias(ctx, phantomID, "  "+strings.ToUpper(manualAlias)+"  ")
+	if err != nil || !deleted {
+		t.Fatalf("DeleteAlias = (%v, %v), want (true, nil)", deleted, err)
+	}
+	if err := matchRepo.AddManualAlias(ctx, phantomID, manualAlias); err != nil {
+		t.Fatalf("re-AddManualAlias: %v", err)
+	}
+
+	// 3. Record a match on phantomID with MVP medal, then merge phantomID -> canonID.
+	mID, err := matchRepo.Create(ctx, models.Match{
+		FileHash:       fmt.Sprintf("hash-merge-%d", time.Now().UnixNano()),
+		MatchSignature: fmt.Sprintf("sig-merge-%d", time.Now().UnixNano()),
+		MVP:            phantomName,
+		Players: []models.PlayerResult{
+			{PlayerID: phantomID, PlayerName: phantomName, Result: "WIN", Kills: 10, Deaths: 1, Assists: 5},
+			{PlayerID: otherID, PlayerName: otherName, Result: "LOSE", Kills: 1, Deaths: 10, Assists: 0},
+		},
+	})
+	if err != nil {
+		t.Fatalf("matchRepo.Create: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM matches WHERE id = $1`, mID) })
+
+	// Bind conflicting Discord IDs first -> merge must refuse!
+	d1 := fmt.Sprintf("disc-1-%d", time.Now().UnixNano())
+	d2 := fmt.Sprintf("disc-2-%d", time.Now().UnixNano())
+	if err := matchRepo.SetDiscordID(ctx, phantomID, d1); err != nil {
+		t.Fatalf("SetDiscordID(phantom): %v", err)
+	}
+	if err := matchRepo.SetDiscordID(ctx, canonID, d2); err != nil {
+		t.Fatalf("SetDiscordID(canon): %v", err)
+	}
+	if _, err := matchRepo.MergePlayers(ctx, phantomID, canonID); err == nil {
+		t.Fatal("MergePlayers with two different discord_ids must fail")
+	}
+	if err := matchRepo.ClearDiscordID(ctx, canonID); err != nil {
+		t.Fatalf("ClearDiscordID(canon): %v", err)
+	}
+
+	// Now merge phantomID (has discord_id d1) -> canonID (no discord_id): must move everything!
+	summary, err := matchRepo.MergePlayers(ctx, phantomID, canonID)
+	if err != nil {
+		t.Fatalf("MergePlayers: %v", err)
+	}
+	if summary.MovedResults != 1 || summary.MovedMedals != 1 || summary.MovedHistory != 1 || summary.LearnedAlias != phantomName {
+		t.Errorf("unexpected merge summary: %+v", summary)
+	}
+
+	// Canon inherited discord_id d1, MMR history with breakdown, both aliases, and MVP medal.
+	gotDiscord, err := matchRepo.GetDiscordIDByPlayerID(ctx, canonID)
+	if err != nil || gotDiscord != d1 {
+		t.Errorf("canon discord_id = (%q, %v), want (%q, nil)", gotDiscord, err, d1)
+	}
+	canonHist, err := lobbyRepo.GetMMRHistory(ctx, canonID, 5)
+	if err != nil || len(canonHist) != 1 || canonHist[0].KDAMod != 5 {
+		t.Errorf("canon MMR history = %+v, err=%v", canonHist, err)
+	}
+	canonAliases, err := matchRepo.ListAliases(ctx, canonID)
+	if err != nil || len(canonAliases) != 2 {
+		t.Errorf("canon aliases = %+v (want 2: %q + %q), err=%v", canonAliases, manualAlias, phantomName, err)
+	}
+	medals, err := matchRepo.GetLifetimeMedals(ctx, canonID)
+	if err != nil || medals.MVP != 1 {
+		t.Errorf("canon lifetime medals = %+v, err=%v, want MVP=1", medals, err)
+	}
+	// Lobby match captain and team_a_ids now point to canonID.
+	updatedLM, err := lobbyRepo.GetByID(ctx, lmID)
+	if err != nil || updatedLM.CaptainAID != canonID || len(updatedLM.TeamAIDs) != 1 || updatedLM.TeamAIDs[0] != canonID {
+		t.Errorf("updated lobby match = %+v, err=%v, want CaptainAID & TeamAIDs=%d", updatedLM, err, canonID)
+	}
+}

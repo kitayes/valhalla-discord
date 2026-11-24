@@ -3,10 +3,12 @@ package discord
 import (
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"blackwatch/internal/application"
 	"blackwatch/internal/domain"
+	"blackwatch/internal/models"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -132,5 +134,45 @@ func TestScoreboardPreviewEmbedAndRuneTruncation(t *testing.T) {
 	}
 	if !strings.Contains(embed.Fields[2].Value, "сумма киллов") {
 		t.Errorf("Warnings field missing expected text: %q", embed.Fields[2].Value)
+	}
+}
+
+func TestFormatMMRHistoryLineAndMergeButtonParsing(t *testing.T) {
+	ts := time.Date(2026, 11, 24, 15, 0, 0, 0, time.UTC)
+
+	withBreakdown := formatMMRHistoryLine(models.MMRChange{
+		MatchID:    42,
+		Before:     1500,
+		After:      1532,
+		Delta:      32,
+		BaseDelta:  24,
+		KDAMod:     5,
+		MedalBonus: 3,
+		CreatedAt:  ts,
+	})
+	for _, want := range []string{"`+32` → 1532", "+24 база", "+5 KDA", "+3 медаль", "матч #42", "24.11"} {
+		if !strings.Contains(withBreakdown, want) {
+			t.Errorf("formatMMRHistoryLine(breakdown) = %q, missing %q", withBreakdown, want)
+		}
+	}
+
+	legacy := formatMMRHistoryLine(models.MMRChange{
+		MatchID:   41,
+		Before:    1482,
+		After:     1500,
+		Delta:     18,
+		CreatedAt: ts,
+	})
+	if strings.Contains(legacy, "KDA") || !strings.Contains(legacy, "матч #41") {
+		t.Errorf("formatMMRHistoryLine(legacy) = %q, unexpected breakdown", legacy)
+	}
+
+	if a, b, ok := parseTwoIDsFromPrefix("confirm_merge_player_12_34", "confirm_merge_player_"); !ok || a != 12 || b != 34 {
+		t.Errorf("parseTwoIDsFromPrefix = (%d, %d, %v), want (12, 34, true)", a, b, ok)
+	}
+	for _, bad := range []string{"confirm_merge_player_12_12", "confirm_merge_player_0_5", "confirm_merge_player_12", "other_1_2"} {
+		if _, _, ok := parseTwoIDsFromPrefix(bad, "confirm_merge_player_"); ok {
+			t.Errorf("parseTwoIDsFromPrefix(%q) unexpectedly succeeded", bad)
+		}
 	}
 }

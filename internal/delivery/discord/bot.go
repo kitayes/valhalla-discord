@@ -171,6 +171,8 @@ func (b *Bot) Init() error {
 		b.newResetPlayerCommand(),
 		b.newWipePlayerCommand(),
 		b.newRenamePlayerCommand(),
+		b.newAliasesCommand(),
+		b.newMergePlayerCommand(),
 		b.newBindCommand(),
 		b.newWhoamiCommand(),
 		b.newBindPlayerCommand(),
@@ -474,6 +476,9 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 	case "cancel_match":
 		b.handleCancelMatch(ctx, s, i.Interaction)
 		return
+	case "aliases":
+		b.handleAliases(ctx, s, i.Interaction)
+		return
 	}
 
 	// Admin-only commands
@@ -501,6 +506,8 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 		b.handleWipe(ctx, s, i.Interaction)
 	case "wipe_player":
 		b.handleWipePlayer(ctx, s, i.Interaction)
+	case "merge_player":
+		b.handleMergePlayer(ctx, s, i.Interaction)
 	case "rename_player":
 		b.handleRenamePlayer(ctx, s, i.Interaction)
 	case "update_nick":

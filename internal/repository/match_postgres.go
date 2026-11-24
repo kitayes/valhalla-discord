@@ -1109,3 +1109,352 @@ func (r *MatchPostgres) LearnAlias(ctx context.Context, playerID int, alias, sou
 	}
 	return nil
 }
+
+// ListAliases returns all scoreboard aliases registered for playerID.
+func (r *MatchPostgres) ListAliases(ctx context.Context, playerID int) ([]models.PlayerAlias, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, player_id, alias, source, created_at
+		   FROM player_aliases
+		  WHERE player_id = $1
+		  ORDER BY id`,
+		playerID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list aliases for player %d: %w", playerID, err)
+	}
+	defer rows.Close() //nolint:errcheck // best-effort cleanup
+
+	var out []models.PlayerAlias
+	for rows.Next() {
+		var a models.PlayerAlias
+		if err := rows.Scan(&a.ID, &a.PlayerID, &a.Alias, &a.Source, &a.CreatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan player alias: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// AddManualAlias adds an explicit admin/referee alias for playerID, returning
+// a descriptive error if the nickname already belongs to another active player
+// or another player's alias.
+func (r *MatchPostgres) AddManualAlias(ctx context.Context, playerID int, alias string) error {
+	clean := strings.TrimSpace(alias)
+	if playerID <= 0 || clean == "" {
+		return fmt.Errorf("алиас не может быть пустым")
+	}
+
+	var ownerID int
+	var ownerName string
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, name FROM players
+		  WHERE LOWER(TRIM(name)) = LOWER(TRIM($1))
+		    AND is_deleted = FALSE
+		  LIMIT 1`,
+		clean,
+	).Scan(&ownerID, &ownerName)
+	if err == nil {
+		return fmt.Errorf("ник %q уже является основным ником игрока %s (ID: %d)", clean, ownerName, ownerID)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("failed to check canonical name for alias %q: %w", clean, err)
+	}
+
+	var existingOwner int
+	err = r.db.QueryRowContext(ctx,
+		`SELECT player_id FROM player_aliases
+		  WHERE LOWER(TRIM(alias)) = LOWER(TRIM($1))
+		  LIMIT 1`,
+		clean,
+	).Scan(&existingOwner)
+	if err == nil {
+		if existingOwner == playerID {
+			return fmt.Errorf("алиас %q уже добавлен этому игроку", clean)
+		}
+		return fmt.Errorf("алиас %q уже принадлежит игроку с ID %d", clean, existingOwner)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("failed to check existing alias %q: %w", clean, err)
+	}
+
+	if _, err := r.db.ExecContext(ctx,
+		`INSERT INTO player_aliases (player_id, alias, source) VALUES ($1, $2, 'admin')`,
+		playerID, clean,
+	); err != nil {
+		return fmt.Errorf("failed to add alias %q for player %d: %w", clean, playerID, err)
+	}
+	return nil
+}
+
+// DeleteAlias removes one alias belonging to playerID (case/whitespace insensitive).
+func (r *MatchPostgres) DeleteAlias(ctx context.Context, playerID int, alias string) (bool, error) {
+	clean := strings.TrimSpace(alias)
+	if playerID <= 0 || clean == "" {
+		return false, nil
+	}
+	res, err := r.db.ExecContext(ctx,
+		`DELETE FROM player_aliases
+		  WHERE player_id = $1
+		    AND LOWER(TRIM(alias)) = LOWER(TRIM($2))`,
+		playerID, clean,
+	)
+	if err != nil {
+		return false, fmt.Errorf("failed to delete alias %q for player %d: %w", clean, playerID, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("failed to read deleted alias count: %w", err)
+	}
+	return affected > 0, nil
+}
+
+// MergePlayers folds a duplicate/phantom profile (sourceID) into a canonical
+// profile (targetID) in a single transaction, transferring match rows, medals,
+// MMR history, lobby rosters, aliases, and non-conflicting bindings, then
+// soft-deleting sourceID and saving its name as an alias for targetID.
+func (r *MatchPostgres) MergePlayers(ctx context.Context, sourceID, targetID int) (*models.PlayerMergeSummary, error) {
+	if sourceID <= 0 || targetID <= 0 {
+		return nil, fmt.Errorf("некорректные ID игроков (%d, %d)", sourceID, targetID)
+	}
+	if sourceID == targetID {
+		return nil, fmt.Errorf("нельзя объединить игрока с самим собой (ID %d)", sourceID)
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin merge transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // best-effort cleanup
+
+	type lockedPlayer struct {
+		id        int
+		name      string
+		discordID sql.NullString
+		tgID      sql.NullInt64
+		mvpCount  int
+		svpCount  int
+		isDeleted bool
+	}
+
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id, name, discord_id, tg_id, COALESCE(mvp_count, 0), COALESCE(svp_count, 0), is_deleted
+		   FROM players
+		  WHERE id IN ($1, $2)
+		  ORDER BY id
+		    FOR UPDATE`,
+		sourceID, targetID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to lock players for merge: %w", err)
+	}
+	locked := make(map[int]lockedPlayer, 2)
+	for rows.Next() {
+		var lp lockedPlayer
+		if err := rows.Scan(&lp.id, &lp.name, &lp.discordID, &lp.tgID, &lp.mvpCount, &lp.svpCount, &lp.isDeleted); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("failed to scan locked player: %w", err)
+		}
+		locked[lp.id] = lp
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close locked players cursor: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read locked players: %w", err)
+	}
+
+	src, okSrc := locked[sourceID]
+	if !okSrc || src.isDeleted {
+		return nil, fmt.Errorf("исходный игрок с ID %d не найден или уже удалён", sourceID)
+	}
+	dst, okDst := locked[targetID]
+	if !okDst || dst.isDeleted {
+		return nil, fmt.Errorf("целевой игрок с ID %d не найден или удалён", targetID)
+	}
+
+	if src.discordID.Valid && dst.discordID.Valid && src.discordID.String != dst.discordID.String {
+		return nil, fmt.Errorf("оба профиля привязаны к разным Discord-аккаунтам — сначала отвяжите лишний через /unbind_player")
+	}
+	if src.tgID.Valid && dst.tgID.Valid && src.tgID.Int64 != dst.tgID.Int64 {
+		return nil, fmt.Errorf("оба профиля привязаны к разным Telegram-аккаунтам — сначала отвяжите лишний через /unlink_player")
+	}
+
+	// Move bindings from source to target only if target has none. Clear source
+	// first to satisfy partial unique indexes on discord_id and tg_id.
+	if src.discordID.Valid && !dst.discordID.Valid {
+		if _, err := tx.ExecContext(ctx, `UPDATE players SET discord_id = NULL WHERE id = $1`, sourceID); err != nil {
+			return nil, fmt.Errorf("failed to clear source discord_id: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE players SET discord_id = $1 WHERE id = $2`, src.discordID.String, targetID); err != nil {
+			return nil, fmt.Errorf("failed to move discord_id to target: %w", err)
+		}
+	}
+	if src.tgID.Valid && !dst.tgID.Valid {
+		if _, err := tx.ExecContext(ctx, `UPDATE players SET tg_id = NULL WHERE id = $1`, sourceID); err != nil {
+			return nil, fmt.Errorf("failed to clear source tg_id: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE players SET tg_id = $1 WHERE id = $2`, src.tgID.Int64, targetID); err != nil {
+			return nil, fmt.Errorf("failed to move tg_id to target: %w", err)
+		}
+	}
+
+	// Move profile_links if target doesn't already have one; drop stale link codes.
+	var dstHasProfileLink bool
+	if err := tx.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM profile_links WHERE discord_player_id = $1)`, targetID,
+	).Scan(&dstHasProfileLink); err != nil {
+		return nil, fmt.Errorf("failed to check target profile_links: %w", err)
+	}
+	if !dstHasProfileLink {
+		if _, err := tx.ExecContext(ctx, `UPDATE profile_links SET discord_player_id = $2 WHERE discord_player_id = $1`, sourceID, targetID); err != nil {
+			return nil, fmt.Errorf("failed to move profile_links: %w", err)
+		}
+	} else {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM profile_links WHERE discord_player_id = $1`, sourceID); err != nil {
+			return nil, fmt.Errorf("failed to delete duplicate source profile_links: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM link_codes WHERE discord_player_id = $1`, sourceID); err != nil {
+		return nil, fmt.Errorf("failed to delete source link_codes: %w", err)
+	}
+
+	// Avoid duplicating a player twice in the same match if both profiles appeared in it.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE player_results
+		    SET is_deleted = TRUE
+		  WHERE player_id = $1
+		    AND is_deleted = FALSE
+		    AND match_id IN (SELECT match_id FROM player_results WHERE player_id = $2 AND is_deleted = FALSE)`,
+		sourceID, targetID,
+	); err != nil {
+		return nil, fmt.Errorf("failed to deduplicate player_results: %w", err)
+	}
+
+	resMoved, err := tx.ExecContext(ctx,
+		`UPDATE player_results SET player_id = $2, player_name = $3 WHERE player_id = $1 AND is_deleted = FALSE`,
+		sourceID, targetID, dst.name,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to reassign active player_results: %w", err)
+	}
+	movedResults, _ := resMoved.RowsAffected()
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE player_results SET player_id = $2 WHERE player_id = $1`,
+		sourceID, targetID,
+	); err != nil {
+		return nil, fmt.Errorf("failed to reassign deleted player_results: %w", err)
+	}
+
+	mvpMoved, err := tx.ExecContext(ctx, `UPDATE matches SET mvp_player_id = $2 WHERE mvp_player_id = $1`, sourceID, targetID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to move match MVP references: %w", err)
+	}
+	svpMoved, err := tx.ExecContext(ctx, `UPDATE matches SET svp_player_id = $2 WHERE svp_player_id = $1`, sourceID, targetID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to move match SVP references: %w", err)
+	}
+	mCount, _ := mvpMoved.RowsAffected()
+	sCount, _ := svpMoved.RowsAffected()
+
+	if src.mvpCount > 0 || src.svpCount > 0 {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE players
+			    SET mvp_count = COALESCE(mvp_count, 0) + $1,
+			        svp_count = COALESCE(svp_count, 0) + $2
+			  WHERE id = $3`,
+			src.mvpCount, src.svpCount, targetID,
+		); err != nil {
+			return nil, fmt.Errorf("failed to fold medal counters: %w", err)
+		}
+	}
+
+	// Update lobby_matches captain and team array references.
+	for _, stmt := range []string{
+		`UPDATE lobby_matches SET captain_a_id = $2 WHERE captain_a_id = $1`,
+		`UPDATE lobby_matches SET captain_b_id = $2 WHERE captain_b_id = $1`,
+		`UPDATE lobby_matches SET team_a_ids = array_replace(team_a_ids, $1, $2) WHERE $1 = ANY(team_a_ids) AND NOT ($2 = ANY(team_a_ids))`,
+		`UPDATE lobby_matches SET team_b_ids = array_replace(team_b_ids, $1, $2) WHERE $1 = ANY(team_b_ids) AND NOT ($2 = ANY(team_b_ids))`,
+	} {
+		if _, err := tx.ExecContext(ctx, stmt, sourceID, targetID); err != nil {
+			return nil, fmt.Errorf("failed to update lobby_matches during merge: %w", err)
+		}
+	}
+
+	// Move MMR history while respecting the unique (player_id, match_id) index.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM mmr_history
+		  WHERE player_id = $1
+		    AND match_id IS NOT NULL
+		    AND match_id IN (SELECT match_id FROM mmr_history WHERE player_id = $2 AND match_id IS NOT NULL)`,
+		sourceID, targetID,
+	); err != nil {
+		return nil, fmt.Errorf("failed to deduplicate mmr_history: %w", err)
+	}
+	histMoved, err := tx.ExecContext(ctx, `UPDATE mmr_history SET player_id = $2 WHERE player_id = $1`, sourceID, targetID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to move mmr_history: %w", err)
+	}
+	movedHistory, _ := histMoved.RowsAffected()
+
+	if _, err := tx.ExecContext(ctx, `UPDATE player_aliases SET player_id = $2 WHERE player_id = $1`, sourceID, targetID); err != nil {
+		return nil, fmt.Errorf("failed to move player_aliases: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE player_nickname_history SET player_id = $2 WHERE player_id = $1`, sourceID, targetID); err != nil {
+		return nil, fmt.Errorf("failed to move player_nickname_history: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM player_resets WHERE player_name = $1`, src.name); err != nil {
+		return nil, fmt.Errorf("failed to delete source player_resets: %w", err)
+	}
+
+	// Soft-delete source player and release unique binding columns.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE players SET is_deleted = TRUE, deleted_at = NOW(), discord_id = NULL, tg_id = NULL WHERE id = $1`,
+		sourceID,
+	); err != nil {
+		return nil, fmt.Errorf("failed to soft-delete source player %d: %w", sourceID, err)
+	}
+
+	// Save the old phantom nickname as a learned alias on target if it is distinct
+	// and not already another active player's canonical name.
+	learnedAlias := ""
+	cleanSrc := strings.TrimSpace(src.name)
+	if cleanSrc != "" && !strings.EqualFold(cleanSrc, strings.TrimSpace(dst.name)) {
+		var canonicalTaken bool
+		if err := tx.QueryRowContext(ctx,
+			`SELECT EXISTS(SELECT 1 FROM players WHERE LOWER(TRIM(name)) = LOWER(TRIM($1)) AND is_deleted = FALSE)`,
+			cleanSrc,
+		).Scan(&canonicalTaken); err != nil {
+			return nil, fmt.Errorf("failed to check alias collision during merge: %w", err)
+		}
+		if !canonicalTaken {
+			aliasRes, err := tx.ExecContext(ctx,
+				`INSERT INTO player_aliases (player_id, alias, source) VALUES ($1, $2, 'merge') ON CONFLICT DO NOTHING`,
+				targetID, cleanSrc,
+			)
+			if err != nil {
+				return nil, fmt.Errorf("failed to record merge alias %q: %w", cleanSrc, err)
+			}
+			if aRows, _ := aliasRes.RowsAffected(); aRows > 0 {
+				learnedAlias = cleanSrc
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit merge transaction: %w", err)
+	}
+
+	r.playerCache.Delete(normalizeForComparison(src.name))
+
+	return &models.PlayerMergeSummary{
+		SourceID:     sourceID,
+		SourceName:   src.name,
+		TargetID:     targetID,
+		TargetName:   dst.name,
+		MovedResults: int(movedResults),
+		MovedMedals:  int(mCount + sCount),
+		MovedHistory: int(movedHistory),
+		LearnedAlias: learnedAlias,
+	}, nil
+}

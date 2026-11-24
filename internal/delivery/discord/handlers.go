@@ -207,17 +207,42 @@ func (b *Bot) appendMMRFields(ctx context.Context, embed *discordgo.MessageEmbed
 
 	var sb strings.Builder
 	for _, c := range history {
-		sb.WriteString(fmt.Sprintf("`%+d` → %d", c.Delta, c.After))
-		if c.MatchID > 0 {
-			sb.WriteString(fmt.Sprintf(" (матч #%d)", c.MatchID))
-		}
-		sb.WriteString(fmt.Sprintf(" — %s\n", c.CreatedAt.Format("02.01")))
+		sb.WriteString(formatMMRHistoryLine(c))
+		sb.WriteByte('\n')
 	}
 	embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
 		Name:   fmt.Sprintf("Последние изменения (%d)", len(history)),
 		Value:  sb.String(),
 		Inline: false,
 	})
+}
+
+func formatMMRHistoryLine(c models.MMRChange) string {
+	var details []string
+	if c.KDAMod != 0 || c.MedalBonus != 0 {
+		var parts []string
+		if c.BaseDelta != 0 {
+			parts = append(parts, fmt.Sprintf("%+d база", c.BaseDelta))
+		}
+		if c.KDAMod != 0 {
+			parts = append(parts, fmt.Sprintf("%+d KDA", c.KDAMod))
+		}
+		if c.MedalBonus != 0 {
+			parts = append(parts, fmt.Sprintf("%+d медаль", c.MedalBonus))
+		}
+		if len(parts) > 0 {
+			details = append(details, strings.Join(parts, " "))
+		}
+	}
+	if c.MatchID > 0 {
+		details = append(details, fmt.Sprintf("матч #%d", c.MatchID))
+	}
+
+	line := fmt.Sprintf("`%+d` → %d", c.Delta, c.After)
+	if len(details) > 0 {
+		line += fmt.Sprintf(" (%s)", strings.Join(details, ", "))
+	}
+	return fmt.Sprintf("%s — %s", line, c.CreatedAt.Format("02.01"))
 }
 
 func (b *Bot) handlePlayersList(ctx context.Context, s *discordgo.Session, i *discordgo.Interaction) {
@@ -461,6 +486,142 @@ func (b *Bot) handleRenamePlayer(ctx context.Context, s *discordgo.Session, i *d
 	}
 
 	b.respondMessage(s, i, fmt.Sprintf("Игрок переименован:\n**%s** → **%s**", oldName, newName), false)
+}
+
+func (b *Bot) handleAliases(ctx context.Context, s *discordgo.Session, i *discordgo.Interaction) {
+	if !b.requireReferee(s, i) {
+		return
+	}
+
+	data := i.ApplicationCommandData()
+	idOpt, ok := commandOption(data, "id")
+	if !ok {
+		b.respondMessage(s, i, "Укажите ID игрока.", true)
+		return
+	}
+	playerID := int(idOpt.IntValue())
+	if playerID <= 0 {
+		b.respondMessage(s, i, "Некорректный ID игрока.", true)
+		return
+	}
+
+	playerName, err := b.services.MatchService.GetPlayerNameByID(ctx, playerID)
+	if err != nil {
+		b.respondMessage(s, i, fmt.Sprintf("Игрок с ID %d не найден.", playerID), true)
+		return
+	}
+
+	action := "list"
+	if actOpt, ok := commandOption(data, "action"); ok {
+		action = strings.ToLower(strings.TrimSpace(actOpt.StringValue()))
+	}
+	aliasArg := ""
+	if alOpt, ok := commandOption(data, "alias"); ok {
+		aliasArg = strings.TrimSpace(alOpt.StringValue())
+	}
+
+	switch action {
+	case "add":
+		if aliasArg == "" {
+			b.respondMessage(s, i, "Укажите параметр `alias` для добавления.", true)
+			return
+		}
+		if err := b.services.MatchService.AddPlayerAlias(ctx, playerID, aliasArg); err != nil {
+			b.respondMessage(s, i, fmt.Sprintf("Не удалось добавить алиас: %v", err), true)
+			return
+		}
+		b.respondMessage(s, i, fmt.Sprintf("Алиас **%s** добавлен игроку **%s** (ID: %d).", aliasArg, playerName, playerID), true)
+		return
+
+	case "delete":
+		if aliasArg == "" {
+			b.respondMessage(s, i, "Укажите параметр `alias` для удаления.", true)
+			return
+		}
+		deleted, err := b.services.MatchService.DeletePlayerAlias(ctx, playerID, aliasArg)
+		if err != nil {
+			b.reportFailure(s, i, "aliases delete", "Не удалось удалить алиас.", err)
+			return
+		}
+		if !deleted {
+			b.respondMessage(s, i, fmt.Sprintf("Алиас **%s** не найден у игрока **%s** (ID: %d).", aliasArg, playerName, playerID), true)
+			return
+		}
+		b.respondMessage(s, i, fmt.Sprintf("Алиас **%s** удалён у игрока **%s** (ID: %d).", aliasArg, playerName, playerID), true)
+		return
+	}
+
+	aliases, err := b.services.MatchService.ListPlayerAliases(ctx, playerID)
+	if err != nil {
+		b.reportFailure(s, i, "aliases list", "Не удалось получить список алиасов.", err)
+		return
+	}
+	if len(aliases) == 0 {
+		b.respondMessage(s, i, fmt.Sprintf("У игрока **%s** (ID: %d) нет сохранённых алиасов.", playerName, playerID), true)
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Алиасы игрока **%s** (ID: %d):\n", playerName, playerID))
+	for idx, a := range aliases {
+		sb.WriteString(fmt.Sprintf("%d. `%s` *(источник: %s, %s)*\n", idx+1, a.Alias, a.Source, a.CreatedAt.Format("02.01.2006")))
+	}
+	b.respondMessage(s, i, truncateMessage(sb.String()), true)
+}
+
+func (b *Bot) handleMergePlayer(ctx context.Context, s *discordgo.Session, i *discordgo.Interaction) {
+	data := i.ApplicationCommandData()
+	srcOpt, okSrc := commandOption(data, "source_id")
+	dstOpt, okDst := commandOption(data, "target_id")
+	if !okSrc || !okDst {
+		b.respondMessage(s, i, "Укажите оба ID: `source_id` и `target_id`.", true)
+		return
+	}
+	sourceID := int(srcOpt.IntValue())
+	targetID := int(dstOpt.IntValue())
+	if sourceID <= 0 || targetID <= 0 || sourceID == targetID {
+		b.respondMessage(s, i, "Укажите два разных корректных ID игроков.", true)
+		return
+	}
+
+	sourceName, err := b.services.MatchService.GetPlayerNameByID(ctx, sourceID)
+	if err != nil {
+		b.respondMessage(s, i, fmt.Sprintf("Исходный игрок с ID %d не найден.", sourceID), true)
+		return
+	}
+	targetName, err := b.services.MatchService.GetPlayerNameByID(ctx, targetID)
+	if err != nil {
+		b.respondMessage(s, i, fmt.Sprintf("Целевой игрок с ID %d не найден.", targetID), true)
+		return
+	}
+
+	b.respond(s, i, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: fmt.Sprintf(
+				"**Объединить профили?**\nДубль: **%s** (ID: `%d`) → Основной: **%s** (ID: `%d`)\n\n"+
+					"Все матчи, медали, история MMR и алиасы перейдут к **%s**, старый ник сохранится как алиас, а дубль `#%d` будет помечен удалённым.",
+				sourceName, sourceID, targetName, targetID, targetName, sourceID,
+			),
+			Flags: discordgo.MessageFlagsEphemeral,
+			Components: []discordgo.MessageComponent{
+				discordgo.ActionsRow{
+					Components: []discordgo.MessageComponent{
+						discordgo.Button{
+							Label:    "Да, объединить",
+							Style:    discordgo.DangerButton,
+							CustomID: fmt.Sprintf("confirm_merge_player_%d_%d", sourceID, targetID),
+						},
+						discordgo.Button{
+							Label:    "Отмена",
+							Style:    discordgo.SuccessButton,
+							CustomID: "cancel_merge_player",
+						},
+					},
+				},
+			},
+		},
+	})
 }
 
 func (b *Bot) handleUpdateNick(ctx context.Context, s *discordgo.Session, i *discordgo.Interaction) {
@@ -922,6 +1083,13 @@ func (b *Bot) onDangerButton(s *discordgo.Session, i *discordgo.InteractionCreat
 			return
 		}
 		b.executeWipePlayer(ctx, s, i.Interaction, id)
+	case strings.HasPrefix(data.CustomID, "confirm_merge_player_"):
+		srcID, dstID, ok := parseTwoIDsFromPrefix(data.CustomID, "confirm_merge_player_")
+		if !ok {
+			b.rejectMalformedDangerButton(s, i.Interaction, data.CustomID)
+			return
+		}
+		b.executeMergePlayer(ctx, s, i.Interaction, srcID, dstID)
 	case strings.HasPrefix(data.CustomID, "confirm_reset_player_"):
 		id, ok := parseIDFromPrefix(data.CustomID, "confirm_reset_player_")
 		if !ok {
@@ -934,6 +1102,7 @@ func (b *Bot) onDangerButton(s *discordgo.Session, i *discordgo.InteractionCreat
 	case data.CustomID == "confirm_reset":
 		b.executeReset(ctx, s, i.Interaction)
 	case data.CustomID == "cancel_wipe_player",
+		data.CustomID == "cancel_merge_player",
 		data.CustomID == "cancel_reset_player",
 		data.CustomID == "cancel_wipe",
 		data.CustomID == "cancel_reset":
@@ -957,6 +1126,32 @@ func (b *Bot) executeWipePlayer(ctx context.Context, s *discordgo.Session, i *di
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
 			Content:    fmt.Sprintf("Игрок с ID **%d** и вся его статистика полностью удалены.", playerID),
+			Components: []discordgo.MessageComponent{},
+		},
+	})
+}
+
+func (b *Bot) executeMergePlayer(ctx context.Context, s *discordgo.Session, i *discordgo.Interaction, sourceID, targetID int) {
+	summary, err := b.services.MatchService.MergePlayers(ctx, sourceID, targetID)
+	if err != nil {
+		b.logger.Error("merge_player: failed to merge %d -> %d: %v", sourceID, targetID, err)
+		b.updateWithError(s, i, fmt.Sprintf("Не удалось объединить профили: %v", err))
+		return
+	}
+
+	aliasNote := ""
+	if summary.LearnedAlias != "" {
+		aliasNote = fmt.Sprintf("\nСохранён алиас: `%s`", summary.LearnedAlias)
+	}
+	b.respond(s, i, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseUpdateMessage,
+		Data: &discordgo.InteractionResponseData{
+			Content: fmt.Sprintf(
+				"Профили объединены: **%s** (ID: `%d`) → **%s** (ID: `%d`).\n"+
+					"Перенесено: матчей `%d`, медалей `%d`, записей MMR `%d`.%s",
+				summary.SourceName, summary.SourceID, summary.TargetName, summary.TargetID,
+				summary.MovedResults, summary.MovedMedals, summary.MovedHistory, aliasNote,
+			),
 			Components: []discordgo.MessageComponent{},
 		},
 	})
@@ -1034,6 +1229,23 @@ func parseIDFromPrefix(customID, prefix string) (int, bool) {
 		return 0, false
 	}
 	return id, true
+}
+
+func parseTwoIDsFromPrefix(customID, prefix string) (int, int, bool) {
+	rest, found := strings.CutPrefix(customID, prefix)
+	if !found {
+		return 0, 0, false
+	}
+	parts := strings.Split(rest, "_")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	a, errA := strconv.Atoi(parts[0])
+	b, errB := strconv.Atoi(parts[1])
+	if errA != nil || errB != nil || a <= 0 || b <= 0 || a == b {
+		return 0, 0, false
+	}
+	return a, b, true
 }
 
 // rejectMalformedDangerButton refuses a confirmation whose target cannot be read.

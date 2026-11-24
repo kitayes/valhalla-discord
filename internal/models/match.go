@@ -58,3 +58,25 @@ type MatchResult struct {
 	MVP     string `json:"mvp,omitempty"` // player name, empty when no medal was read
 	SVP     string `json:"svp,omitempty"`
 }
+
+// PlayerAlias records an alternate in-game scoreboard nickname linked to a player.
+type PlayerAlias struct {
+	ID        int       `json:"id"`
+	PlayerID  int       `json:"player_id"`
+	Alias     string    `json:"alias"`
+	Source    string    `json:"source"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// PlayerMergeSummary describes the records migrated when merging a duplicate
+// (phantom) player profile into a target canonical profile.
+type PlayerMergeSummary struct {
+	SourceID     int
+	SourceName   string
+	TargetID     int
+	TargetName   string
+	MovedResults int
+	MovedMedals  int
+	MovedHistory int
+	LearnedAlias string
+}

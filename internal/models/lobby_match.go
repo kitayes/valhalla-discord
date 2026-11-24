@@ -33,11 +33,14 @@ type LobbyMatch struct {
 // worth.
 type MMRChange struct {
 	// MatchID is 0 for a change with no match behind it.
-	MatchID   int       `json:"match_id,omitempty"`
-	Before    int       `json:"mmr_before"`
-	After     int       `json:"mmr_after"`
-	Delta     int       `json:"delta"`
-	CreatedAt time.Time `json:"created_at"`
+	MatchID    int       `json:"match_id,omitempty"`
+	Before     int       `json:"mmr_before"`
+	After      int       `json:"mmr_after"`
+	Delta      int       `json:"delta"`
+	BaseDelta  int       `json:"base_delta,omitempty"`
+	KDAMod     int       `json:"kda_mod,omitempty"`
+	MedalBonus int       `json:"medal_bonus,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 // CreateLobbyMatchRequest is the input for creating a new lobby match.

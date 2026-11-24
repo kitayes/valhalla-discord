@@ -60,6 +60,7 @@ func TestIntegrationMigrationsFromScratch(t *testing.T) {
 		"telegram_bracket_matches": {"challonge_match_id", "both_notified"},
 		"matches":                  {"lobby_match_id"},
 		"player_aliases":           {"player_id", "alias", "source"},
+		"mmr_history":              {"base_delta", "kda_mod", "medal_bonus"},
 	} {
 		for _, column := range columns {
 			var exists bool

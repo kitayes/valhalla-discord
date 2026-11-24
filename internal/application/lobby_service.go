@@ -28,6 +28,7 @@ type LobbyMatchRepository interface {
 	GetActiveByGuild(ctx context.Context, guildID string) (*models.LobbyMatch, error)
 	GetPlayerMMRsBatch(ctx context.Context, playerIDs []int) (map[int]int, error)
 	UpdatePlayerMMR(ctx context.Context, playerID, newMMR, matchID int) error
+	UpdatePlayerMMRWithBreakdown(ctx context.Context, playerID, newMMR, matchID, baseDelta, kdaMod, medalBonus int) error
 	GetMMRHistory(ctx context.Context, playerID, limit int) ([]models.MMRChange, error)
 	SaveThreadID(ctx context.Context, matchID int, threadID string) error
 	GetByThreadID(ctx context.Context, threadID string) (*models.LobbyMatch, error)

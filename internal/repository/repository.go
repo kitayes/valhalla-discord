@@ -45,7 +45,11 @@ type Match interface {
 	RenamePlayer(ctx context.Context, id int, newName string) error
 
 	GetAliasesForPlayers(ctx context.Context, playerIDs []int) (map[int][]string, error)
+	ListAliases(ctx context.Context, playerID int) ([]models.PlayerAlias, error)
 	LearnAlias(ctx context.Context, playerID int, alias, source string) error
+	AddManualAlias(ctx context.Context, playerID int, alias string) error
+	DeleteAlias(ctx context.Context, playerID int, alias string) (bool, error)
+	MergePlayers(ctx context.Context, sourceID, targetID int) (*models.PlayerMergeSummary, error)
 }
 
 type ProfileLink interface {
@@ -160,6 +164,7 @@ type LobbyMatch interface {
 	GetActiveByGuild(ctx context.Context, guildID string) (*models.LobbyMatch, error)
 	GetPlayerMMRsBatch(ctx context.Context, playerIDs []int) (map[int]int, error)
 	UpdatePlayerMMR(ctx context.Context, playerID, newMMR, matchID int) error
+	UpdatePlayerMMRWithBreakdown(ctx context.Context, playerID, newMMR, matchID, baseDelta, kdaMod, medalBonus int) error
 	GetMMRHistory(ctx context.Context, playerID, limit int) ([]models.MMRChange, error)
 	SaveThreadID(ctx context.Context, matchID int, threadID string) error
 	SaveBetPost(ctx context.Context, matchID int, chatID, messageID int64) error

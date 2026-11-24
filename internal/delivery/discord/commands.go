@@ -85,6 +85,39 @@ func (b *Bot) newRenamePlayerCommand() *discordgo.ApplicationCommand {
 	}
 }
 
+func (b *Bot) newAliasesCommand() *discordgo.ApplicationCommand {
+	return &discordgo.ApplicationCommand{
+		Name:        "aliases",
+		Description: "Управление алиасами (доп. никами) игрока для OCR (Рефери / админы)",
+		Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionInteger, Name: "id", Description: "ID игрока", Required: true},
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "action",
+				Description: "Действие (по умолчанию — показать)",
+				Required:    false,
+				Choices: []*discordgo.ApplicationCommandOptionChoice{
+					{Name: "Показать", Value: "list"},
+					{Name: "Добавить", Value: "add"},
+					{Name: "Удалить", Value: "delete"},
+				},
+			},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "alias", Description: "Ник-алиас (для add/delete)", Required: false},
+		},
+	}
+}
+
+func (b *Bot) newMergePlayerCommand() *discordgo.ApplicationCommand {
+	return &discordgo.ApplicationCommand{
+		Name:        "merge_player",
+		Description: "Объединить дубль (фантомный профиль) в основной профиль игрока (Только админы)",
+		Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionInteger, Name: "source_id", Description: "ID дубля (будет удалён, стата перенесётся)", Required: true},
+			{Type: discordgo.ApplicationCommandOptionInteger, Name: "target_id", Description: "ID основного профиля (останется)", Required: true},
+		},
+	}
+}
+
 // newBindCommand takes a nickname, not an id from /players. A player row was
 // only ever created by parsing a match screenshot, so a newcomer had no id to
 // give: joining the lobby needed a binding, the binding needed a profile, and

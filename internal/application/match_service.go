@@ -578,11 +578,40 @@ func (s *MatchServiceImpl) GetHistoryByID(ctx context.Context, id int) ([]string
 }
 
 func (s *MatchServiceImpl) WipePlayerByID(ctx context.Context, id int) error {
-	return s.repo.WipePlayerByID(ctx, id)
+	if err := s.repo.WipePlayerByID(ctx, id); err != nil {
+		return err
+	}
+	s.statsCache.Invalidate()
+	return nil
 }
 
 func (s *MatchServiceImpl) RenamePlayer(ctx context.Context, id int, newName string) error {
-	return s.repo.RenamePlayer(ctx, id, newName)
+	if err := s.repo.RenamePlayer(ctx, id, newName); err != nil {
+		return err
+	}
+	s.statsCache.Invalidate()
+	return nil
+}
+
+func (s *MatchServiceImpl) MergePlayers(ctx context.Context, sourceID, targetID int) (*models.PlayerMergeSummary, error) {
+	summary, err := s.repo.MergePlayers(ctx, sourceID, targetID)
+	if err != nil {
+		return nil, err
+	}
+	s.statsCache.Invalidate()
+	return summary, nil
+}
+
+func (s *MatchServiceImpl) ListPlayerAliases(ctx context.Context, playerID int) ([]models.PlayerAlias, error) {
+	return s.repo.ListAliases(ctx, playerID)
+}
+
+func (s *MatchServiceImpl) AddPlayerAlias(ctx context.Context, playerID int, alias string) error {
+	return s.repo.AddManualAlias(ctx, playerID, alias)
+}
+
+func (s *MatchServiceImpl) DeletePlayerAlias(ctx context.Context, playerID int, alias string) (bool, error) {
+	return s.repo.DeleteAlias(ctx, playerID, alias)
 }
 
 func (s *MatchServiceImpl) GetPlayerStats(ctx context.Context, name string) (*PlayerStats, error) {

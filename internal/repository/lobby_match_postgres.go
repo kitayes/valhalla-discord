@@ -240,16 +240,25 @@ func (r *LobbyMatchPostgres) GetPlayerMMRsBatch(ctx context.Context, playerIDs [
 // (player_id, match_id) turns the second insert into a skip rather than a second
 // "+18" in the player's history.
 func (r *LobbyMatchPostgres) UpdatePlayerMMR(ctx context.Context, playerID, newMMR, matchID int) error {
+	return r.UpdatePlayerMMRWithBreakdown(ctx, playerID, newMMR, matchID, 0, 0, 0)
+}
+
+// UpdatePlayerMMRWithBreakdown sets a player's rating and records the change
+// along with its base Elo, KDA modifier, and medal bonus breakdown.
+func (r *LobbyMatchPostgres) UpdatePlayerMMRWithBreakdown(
+	ctx context.Context,
+	playerID, newMMR, matchID, baseDelta, kdaMod, medalBonus int,
+) error {
 	_, err := r.db.ExecContext(ctx,
 		`WITH prev AS (
 		     SELECT current_mmr FROM players WHERE id = $2 FOR UPDATE
 		 ), upd AS (
 		     UPDATE players SET current_mmr = $1 WHERE id = $2
 		 )
-		 INSERT INTO mmr_history (player_id, match_id, mmr_before, mmr_after, delta)
-		 SELECT $2, $3, prev.current_mmr, $1, $1 - prev.current_mmr FROM prev
+		 INSERT INTO mmr_history (player_id, match_id, mmr_before, mmr_after, delta, base_delta, kda_mod, medal_bonus)
+		 SELECT $2, $3, prev.current_mmr, $1, $1 - prev.current_mmr, $4, $5, $6 FROM prev
 		 ON CONFLICT (player_id, match_id) WHERE match_id IS NOT NULL DO NOTHING`,
-		newMMR, playerID, nullableID(matchID),
+		newMMR, playerID, nullableID(matchID), baseDelta, kdaMod, medalBonus,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update MMR for player %d: %w", playerID, err)
@@ -263,7 +272,7 @@ func (r *LobbyMatchPostgres) GetMMRHistory(ctx context.Context, playerID, limit 
 		limit = 10
 	}
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT match_id, mmr_before, mmr_after, delta, created_at
+		`SELECT match_id, mmr_before, mmr_after, delta, base_delta, kda_mod, medal_bonus, created_at
 		   FROM mmr_history WHERE player_id = $1
 		  ORDER BY created_at DESC, id DESC LIMIT $2`, playerID, limit,
 	)
@@ -276,7 +285,7 @@ func (r *LobbyMatchPostgres) GetMMRHistory(ctx context.Context, playerID, limit 
 	for rows.Next() {
 		var c models.MMRChange
 		var matchID sql.NullInt64
-		if err := rows.Scan(&matchID, &c.Before, &c.After, &c.Delta, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&matchID, &c.Before, &c.After, &c.Delta, &c.BaseDelta, &c.KDAMod, &c.MedalBonus, &c.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan mmr change: %w", err)
 		}
 		c.MatchID = int(matchID.Int64)

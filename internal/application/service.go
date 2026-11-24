@@ -51,6 +51,10 @@ type MatchService interface {
 	UnbindDiscordID(ctx context.Context, playerID int) (string, error)
 	GetHistoryByID(ctx context.Context, id int) ([]string, error)
 	WipePlayerByID(ctx context.Context, id int) error
+	MergePlayers(ctx context.Context, sourceID, targetID int) (*models.PlayerMergeSummary, error)
+	ListPlayerAliases(ctx context.Context, playerID int) ([]models.PlayerAlias, error)
+	AddPlayerAlias(ctx context.Context, playerID int, alias string) error
+	DeletePlayerAlias(ctx context.Context, playerID int, alias string) (bool, error)
 	GetPlayerStats(ctx context.Context, name string) (*PlayerStats, error)
 	GetPlayerStatsByID(ctx context.Context, id int) (*PlayerStats, error)
 	GetLifetimeMedals(ctx context.Context, playerID int) (models.Medals, error)
