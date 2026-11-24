@@ -53,4 +53,20 @@ func TestSimilarityScoreRunesAndCyrillic(t *testing.T) {
 	if sim := SimilarityScore("Алиса", "Annca"); sim < 0.72 {
 		t.Errorf("homoglyph+1typo similarity(Алиса, Annca) = %v, want >= 0.72", sim)
 	}
+
+	for _, pair := range [][2]string{
+		{"ØMΞN", "OMEN"},
+		{"sẹhnsuchtŵ", "sehnsuchtw"},
+		{"Aurélië", "Aurelie"},
+		{"Hɪᴋᴋᴀcent.", "Hikkacent."},
+		{"VΛR Cako", "VAR Cako"},
+		{"SHŌYA", "SHOYA"},
+		{"ковил emperor.", "ковил етрегог."},
+		{"LAVA GϟRL", "LAVA G4RL"},
+	} {
+		sim := SimilarityScore(pair[0], pair[1])
+		if sim < 0.85 {
+			t.Errorf("stylized MLBB homoglyph similarity(%q, %q) = %v, want >= 0.85", pair[0], pair[1], sim)
+		}
+	}
 }

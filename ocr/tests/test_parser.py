@@ -206,6 +206,220 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(out["players"][9]["rating"], 4.9)
         self.assertEqual(out["warnings"], [])
 
+    def test_real_mlbb_two_line_card_geometry_raw_gold_and_lose_mvp_badge(self):
+        # Modeled on real 1024x471 screenshot layout (42 VICTORY 48 + losing "MVP" crest).
+        w, h = 1024, 471
+        boxes = [
+            Box(328, 25, 382, 68, "42", 1.0),
+            Box(412, 19, 611, 59, "VICTORY", 0.996),
+            Box(643, 25, 696, 68, "48", 1.0),
+            Box(787, 56, 970, 71, "Длит. 28:09 23.11.2026 20:27:36", 0.976),
+            Box(316, 77, 337, 94, "X", 0.627),
+            # Row 0 (top Y~113, bottom rating/level Y~145 — closer to Row 1 top than Row 0 top!)
+            Box(205, 105, 287, 121, "anhedo gold.", 0.958),
+            Box(315, 104, 340, 121, "27", 0.96),
+            Box(340, 104, 355, 121, "7", 0.97),
+            Box(360, 104, 375, 121, "1", 0.98),
+            Box(380, 105, 419, 120, "23919", 0.999),
+            Box(605, 104, 708, 120, "16535 3 11 30", 0.971),
+            Box(775, 104, 834, 121, "OMEN", 0.845),
+            Box(131, 138, 152, 153, "49", 0.99),
+            Box(446, 119, 484, 134, "MVP", 0.93),
+            Box(448, 134, 484, 156, "12.0", 0.828),
+            Box(543, 137, 571, 156, "8.8", 0.999),
+            Box(851, 138, 886, 155, "15", 0.769),
+            # Row 1
+            Box(207, 165, 274, 182, "Jeskoo.", 0.992),
+            Box(319, 164, 420, 181, "5  8  22 17160", 0.91),
+            Box(605, 165, 708, 181, "15590  7  7 22", 0.958),
+            Box(732, 165, 833, 181, "Fumetsu", 0.999),
+            Box(452, 198, 481, 216, "8.5", 0.998),
+            Box(541, 196, 573, 216, "10.1", 0.988),
+            # Row 2 (losing team's best player also has literal "MVP" text!)
+            Box(195, 227, 301, 241, "WI Antitoxicité.", 0.936),
+            Box(319, 227, 419, 241, "2 14 21 16220", 0.96),
+            Box(604, 225, 708, 241, "23262 18 10 13", 0.945),
+            Box(765, 225, 833, 242, "Kozurnu", 0.99),
+            Box(540, 240, 575, 255, "MVP", 0.989),
+            Box(453, 257, 478, 276, "6.1", 0.996),
+            Box(540, 255, 573, 276, "10.7", 0.953),
+            Box(876, 262, 884, 272, "5", 0.999),
+            # Row 3
+            Box(211, 286, 289, 303, "twentyblqck", 0.997),
+            Box(318, 285, 419, 302, "2  9  17 16679", 0.981),
+            Box(605, 287, 707, 301, "20018 12 7 14", 0.962),
+            Box(777, 285, 833, 304, "язура", 0.744),
+            Box(452, 318, 479, 337, "6.1", 0.997),
+            Box(546, 319, 570, 337, "9.5", 0.991),
+            Box(858, 320, 892, 335, "48", 0.992),
+            # Row 4 + footer buttons
+            Box(195, 347, 300, 362, "ceylon ft.zoro-R", 0.952),
+            Box(319, 346, 419, 362, "6 11 27 18117", 0.957),
+            Box(605, 346, 708, 362, "15740  8  7 23", 0.938),
+            Box(784, 345, 833, 362, "addzen", 0.999),
+            Box(450, 378, 484, 398, "10.2", 0.997),
+            Box(544, 378, 572, 398, "9.7", 0.997),
+            Box(96, 426, 165, 445, "Данные", 0.958),
+            Box(220, 429, 308, 445, "Быстрый чат", 0.959),
+            Box(357, 426, 462, 446, '"Лайк" всем', 0.968),
+            Box(879, 426, 935, 443, "Выйти", 0.662),
+            Box(54, 458, 209, 470, "Боевой ID 498198225103377251", 0.962),
+        ]
+
+        out = parse_scoreboard(boxes, w, h)
+        self.assertEqual(len(out["players"]), 10)
+        self.assertEqual(out["header_win_kills"], 42)
+        self.assertEqual(out["header_lose_kills"], 48)
+        self.assertEqual(out["mvp"], "anhedo gold.")
+        self.assertEqual(out["svp"], "Kozurnu")
+        self.assertEqual(out["warnings"], [])
+        self.assertEqual(out["players"][0]["player_name"], "anhedo gold.")
+        self.assertEqual((out["players"][0]["kills"], out["players"][0]["deaths"], out["players"][0]["assists"]), (27, 7, 1))
+        self.assertEqual(out["players"][0]["rating"], 12.0)
+        self.assertEqual(out["players"][4]["player_name"], "ceylon ft.zoro-R")
+        self.assertEqual(out["players"][4]["rating"], 10.2)
+        self.assertEqual(out["players"][5]["player_name"], "OMEN")
+        self.assertEqual(out["players"][7]["rating"], 10.7)
+
+    def test_real_mlbb_fuzzy_defeai_ictory_and_banner_kills_over_row0(self):
+        # Verifies 'DEFEAI' + 'Вернуться в лобби' + Row 0 '2 4' does NOT pollute header kills 16 vs 22.
+        w, h = 1024, 471
+        boxes = [
+            Box(456, 8, 566, 22, "Вернуться в лобби", 0.994),
+            Box(328, 25, 382, 68, "16", 0.999),
+            Box(420, 19, 604, 59, "DEFEAI", 0.999),
+            Box(641, 24, 696, 67, "22", 1.0),
+            # Left LOSE rows (sum K = 16)
+            Box(194, 105, 260, 121, "StarsPlayer", 0.95),
+            Box(319, 105, 376, 120, "2 4 4", 0.95),
+            Box(381, 105, 417, 120, "7054", 1.0),
+            Box(454, 137, 480, 156, "5.6", 0.999),
+            Box(193, 165, 272, 182, "PHT Yato.", 0.981),
+            Box(319, 165, 417, 182, "5  7  2  9873", 0.94),
+            Box(454, 197, 481, 217, "5.2", 0.998),
+            Box(194, 226, 259, 243, "Acrolev", 0.996),
+            Box(319, 225, 376, 242, "0 4 7", 0.95),
+            Box(381, 226, 417, 241, "8615", 0.999),
+            Box(453, 258, 480, 277, "5.8", 0.999),
+            Box(193, 285, 250, 303, "KalaM", 0.959),
+            Box(319, 285, 376, 302, "0 5 9", 0.96),
+            Box(381, 287, 415, 301, "8181", 0.999),
+            Box(454, 318, 481, 338, "6.2", 0.999),
+            Box(194, 346, 273, 363, "ONI naoki.", 0.95),
+            Box(319, 346, 376, 364, "9 2 2", 0.96),
+            Box(379, 347, 420, 362, "10603", 0.999),
+            Box(451, 362, 482, 374, "MVP", 0.97),
+            Box(451, 379, 484, 397, "10.3", 0.999),
+            # Right WIN rows (sum K = 22)
+            Box(606, 104, 642, 122, "7616", 1.0),
+            Box(648, 104, 703, 120, "0 6 8", 0.98),
+            Box(771, 104, 835, 121, "K-i-ll-e-r", 0.931),
+            Box(544, 137, 572, 156, "4.8", 0.999),
+            Box(605, 165, 705, 182, "14317 13 0 3", 0.958),
+            Box(766, 165, 833, 182, "HikKAcent.", 0.93),
+            Box(541, 180, 572, 193, "MVP", 0.933),
+            Box(541, 198, 575, 216, "12.6", 0.999),
+            Box(606, 225, 708, 242, "9118  3  4 12", 0.938),
+            Box(744, 227, 834, 243, "ася добрая", 0.963),
+            Box(544, 259, 571, 277, "8.9", 0.999),
+            Box(607, 287, 646, 301, "8893", 0.999),
+            Box(648, 285, 705, 302, "4 3 5", 0.98),
+            Box(762, 287, 832, 303, "EXXTAZY*", 0.987),
+            Box(545, 319, 572, 338, "8.5", 0.997),
+            Box(605, 347, 645, 362, "10480", 0.999),
+            Box(647, 346, 705, 363, "2 3 6", 0.95),
+            Box(732, 346, 832, 363, "Криво-Traher", 0.912),
+            Box(545, 379, 572, 398, "7.5", 0.998),
+        ]
+
+        out = parse_scoreboard(boxes, w, h, header_side_hint="left")
+        self.assertEqual(out["header_win_kills"], 22)
+        self.assertEqual(out["header_lose_kills"], 16)
+        self.assertEqual(out["players"][0]["result"], "LOSE")
+        self.assertEqual(out["players"][5]["result"], "WIN")
+        self.assertEqual(out["mvp"], "HikKAcent.")
+        self.assertEqual(out["svp"], "ONI naoki.")
+        self.assertEqual(out["warnings"], [])
+
+        # Also verify fuzzy 'ICTORY' and bevelled 'CIORY' match VICTORY even without hint.
+        for title_txt in ("ICTORY", "CIORY"):
+            vict_boxes = [
+                Box(324, 24, 377, 67, "21", 1.0),
+                Box(448, 24, 609, 59, title_txt, 0.912),
+                Box(653, 25, 684, 65, "2", 1.0),
+            ] + boxes[4:]
+            out_vict = parse_scoreboard(vict_boxes, w, h)
+            self.assertEqual(out_vict["header_win_kills"], 21)
+            self.assertEqual(out_vict["header_lose_kills"], 2)
+            self.assertEqual(out_vict["players"][0]["result"], "WIN")
+            self.assertEqual(out_vict["players"][5]["result"], "LOSE")
+            self.assertFalse(any("VICTORY/DEFEAT" in w_msg for w_msg in out_vict["warnings"]))
+
+    def test_real_mlbb_glued_name_stats_clan_numbers_and_ui_overlays(self):
+        w, h = 1024, 472
+        boxes = [
+            Box(326, 25, 381, 68, "28", 1.0),
+            Box(413, 19, 611, 59, "VICTORY", 0.994),
+            Box(644, 26, 695, 67, "18", 0.999),
+            Box(92, 47, 248, 60, "Оставьте отзыв об этом матче", 0.977),
+            # Row 0
+            Box(193, 105, 275, 121, "♂ NURMO", 0.95),
+            Box(320, 105, 375, 121, "8 3 9", 0.99),
+            Box(381, 105, 420, 121, "12919", 0.999),
+            Box(450, 138, 484, 156, "10.9", 0.997),
+            Box(605, 106, 644, 121, "11550", 0.999),
+            Box(648, 105, 703, 120, "4 6 9", 0.99),
+            Box(787, 106, 821, 121, "ness♂", 0.999),
+            Box(543, 121, 572, 133, "MVP", 0.97),
+            Box(541, 138, 575, 156, "10.5", 0.998),
+            # Row 1
+            Box(193, 165, 276, 182, "SVR ayumi", 0.934),
+            Box(320, 165, 375, 182, "5 5 9", 0.99),
+            Box(380, 166, 419, 181, "10879", 0.999),
+            Box(454, 198, 481, 217, "7.6", 0.998),
+            Box(493, 178, 503, 195, "+", 0.799),
+            Box(605, 165, 710, 183, "10731  1  7 12", 0.932),
+            Box(792, 165, 835, 183, "minau", 0.998),
+            Box(544, 198, 572, 217, "7.0", 0.996),
+            # Toast overlay in the middle of scoreboard
+            Box(415, 213, 609, 232, "Скопировано в буфер обмена", 0.976),
+            # Row 2
+            Box(192, 226, 284, 244, "sehnsuchtw", 0.993),
+            Box(320, 225, 419, 242, "1 2 20 11314", 0.952),
+            Box(450, 241, 480, 254, "MVP", 0.91),
+            Box(451, 259, 484, 278, "11.2", 0.998),
+            Box(605, 226, 709, 242, "13542  3  4 10", 0.915),
+            Box(768, 225, 835, 244, "Пучина", 0.91),
+            Box(544, 259, 572, 278, "8.8", 0.998),
+            # Row 3: numeric clan tag '009 Nuuur' must keep '009' inside player_name!
+            Box(192, 287, 275, 303, "009 Nuuur", 0.95),
+            Box(320, 287, 375, 303, "1 4 6", 0.99),
+            Box(380, 287, 419, 302, "10606", 0.999),
+            Box(453, 319, 481, 338, "6.6", 0.998),
+            Box(521, 301, 532, 317, "3", 0.997),
+            Box(605, 287, 706, 303, "12395 6 7 5", 0.95),
+            Box(775, 285, 835, 305, "Чернуар", 0.92),
+            Box(545, 319, 571, 339, "6.9", 0.999),
+            # Row 4: glued 'VORA ClYDeee. 33. 13 4 6 13613' + 'натсуw игратьснова' + apostrophe rating "9'6"
+            Box(193, 346, 420, 364, "VORA ClYDeee. 33. 13 4 6 13613", 0.95),
+            Box(451, 380, 484, 398, "9'6", 0.90),
+            Box(607, 347, 705, 364, "9936 4 4 9", 0.98),
+            Box(764, 350, 874, 364, "натсуw игратьснова", 0.806),
+            Box(545, 380, 572, 399, "8.2", 0.998),
+            Box(836, 394, 849, 405, "©", 0.573),
+        ]
+
+        out = parse_scoreboard(boxes, w, h)
+        self.assertEqual(out["warnings"], [])
+        self.assertEqual(out["players"][0]["player_name"], "NURMO")
+        self.assertEqual(out["players"][3]["player_name"], "009 Nuuur")
+        self.assertEqual((out["players"][3]["kills"], out["players"][3]["deaths"], out["players"][3]["assists"]), (1, 4, 6))
+        self.assertEqual(out["players"][4]["player_name"], "VORA ClYDeee. 33.")
+        self.assertEqual((out["players"][4]["kills"], out["players"][4]["deaths"], out["players"][4]["assists"]), (13, 4, 6))
+        self.assertEqual(out["players"][4]["rating"], 9.6)
+        self.assertEqual(out["players"][5]["player_name"], "ness")
+        self.assertEqual(out["players"][9]["player_name"], "натсуw")
+
 
 if __name__ == "__main__":
     unittest.main()

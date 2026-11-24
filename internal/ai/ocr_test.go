@@ -150,3 +150,49 @@ func TestOCRClientLiveContainer(t *testing.T) {
 		t.Errorf("expected 0 warnings on clean synthetic scoreboard, got: %v", match.Warnings)
 	}
 }
+
+func TestOCRClientLiveRealDir(t *testing.T) {
+	ocrURL := os.Getenv("OCR_E2E_URL")
+	realDir := os.Getenv("OCR_E2E_REAL_DIR")
+	if ocrURL == "" || realDir == "" {
+		t.Skip("OCR_E2E_URL and OCR_E2E_REAL_DIR must both be set")
+	}
+
+	entries, err := os.ReadDir(realDir)
+	if err != nil {
+		t.Fatalf("read dir %s: %v", realDir, err)
+	}
+
+	client := NewOCRClient(ocrURL, 60*time.Second)
+	checked := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(entry.Name()))
+		if ext != ".jpg" && ext != ".jpeg" && ext != ".png" {
+			continue
+		}
+		imgBytes, err := os.ReadFile(filepath.Join(realDir, entry.Name()))
+		if err != nil {
+			t.Fatalf("read %s: %v", entry.Name(), err)
+		}
+		match, err := client.ParseImage(context.Background(), imgBytes)
+		if err != nil {
+			t.Errorf("%s: ParseImage error: %v", entry.Name(), err)
+			continue
+		}
+		checked++
+		if len(match.Players) != 10 {
+			t.Errorf("%s: len(Players) = %d, want 10", entry.Name(), len(match.Players))
+		}
+		if len(match.Warnings) != 0 {
+			t.Errorf("%s: unexpected warnings: %v", entry.Name(), match.Warnings)
+		}
+		t.Logf("%s: score=%v:%v mvp=%q svp=%q warnings=%v",
+			entry.Name(), match.HeaderWinKills, match.HeaderLoseKills, match.MVP, match.SVP, match.Warnings)
+	}
+	if checked == 0 {
+		t.Fatalf("no images found in %s", realDir)
+	}
+}
