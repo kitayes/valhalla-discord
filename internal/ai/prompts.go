@@ -39,13 +39,12 @@ const parseImagePromptWithPlayersTemplate = `Analyze this MOBA (Mobile Legends) 
     - Names must be CONSISTENT with the provided list
     
     For each player extract: player_name, result (WIN or LOSE), kills, deaths, assists.
+    Also identify which player received the MVP medal (top performer on winning team) and which received the SVPG medal (top performer on losing team).
     
-    Return a JSON array of objects with these exact keys:
-    "player_name" (string - exact name as displayed), 
-    "result" (string - must be "WIN" or "LOSE"), 
-    "kills" (int), 
-    "deaths" (int), 
-    "assists" (int).`
+    Return a JSON object with keys:
+    "players" (array of objects with exact keys: "player_name" (string), "result" ("WIN" or "LOSE"), "kills" (int), "deaths" (int), "assists" (int)),
+    "mvp" (string - player_name of the MVP on the winning team, or null if not visible),
+    "svp" (string - player_name of the SVPG/SVP on the losing team, or null if not visible).`
 
 // BuildParseImagePrompt constructs the AI prompt, optionally injecting expected player names
 // to improve OCR accuracy for known lobby matches.

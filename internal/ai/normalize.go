@@ -4,11 +4,14 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 var nonAlphaNumericRegex = regexp.MustCompile(`[^\p{L}\p{N}\s._-]`)
 
 func NormalizeName(name string) string {
+	name = norm.NFKC.String(name)
 	name = strings.TrimSpace(name)
 
 	name = nonAlphaNumericRegex.ReplaceAllString(name, "")
@@ -44,20 +47,22 @@ func SimilarityScore(a, b string) float64 {
 		return 1.0
 	}
 
-	if len(a) == 0 || len(b) == 0 {
+	ra := []rune(a)
+	rb := []rune(b)
+	if len(ra) == 0 || len(rb) == 0 {
 		return 0.0
 	}
 
-	distance := levenshteinDistance(a, b)
-	maxLen := len(a)
-	if len(b) > maxLen {
-		maxLen = len(b)
+	distance := levenshteinDistanceRunes(ra, rb)
+	maxLen := len(ra)
+	if len(rb) > maxLen {
+		maxLen = len(rb)
 	}
 
 	return 1.0 - float64(distance)/float64(maxLen)
 }
 
-func levenshteinDistance(a, b string) int {
+func levenshteinDistanceRunes(a, b []rune) int {
 	if len(a) == 0 {
 		return len(b)
 	}
@@ -89,14 +94,4 @@ func levenshteinDistance(a, b string) int {
 	}
 
 	return matrix[len(a)][len(b)]
-}
-
-func min(nums ...int) int {
-	minVal := nums[0]
-	for _, n := range nums[1:] {
-		if n < minVal {
-			minVal = n
-		}
-	}
-	return minVal
 }

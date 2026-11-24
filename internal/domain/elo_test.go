@@ -118,3 +118,175 @@ func TestClampMMR(t *testing.T) {
 		}
 	}
 }
+
+func TestCalculateTeamKDAModifiersWinningRosterOrderingAndZeroSum(t *testing.T) {
+	// Winning team with 25 total kills (11 + 4 + 1 + 2 + 2 = 20 -> wait, let's check:
+	// 11+4+1+2+7 = 25 kills)
+	team := []PlayerKDA{
+		{PlayerID: 1, Kills: 11, Deaths: 2, Assists: 7}, // carry (MVP)
+		{PlayerID: 2, Kills: 4, Deaths: 2, Assists: 10}, // mid
+		{PlayerID: 3, Kills: 1, Deaths: 5, Assists: 17}, // roam tank: high KP
+		{PlayerID: 4, Kills: 2, Deaths: 0, Assists: 3},  // passive KDA saver
+		{PlayerID: 5, Kills: 7, Deaths: 9, Assists: 2},  // lower efficiency / higher deaths
+	}
+	mods := CalculateTeamKDAModifiers(team, 24)
+
+	sum := 0
+	for _, p := range team {
+		sum += mods[p.PlayerID]
+	}
+	if sum != 0 {
+		t.Fatalf("sum of KDA modifiers = %d, want 0 (zero-sum): %v", sum, mods)
+	}
+	if mods[1] <= mods[2] {
+		t.Errorf("carry (%d) should outscore mid (%d)", mods[1], mods[2])
+	}
+	if mods[3] <= mods[4] {
+		t.Errorf("roam tank 1/5/17 (%d) should outscore passive 2/0/3 (%d)", mods[3], mods[4])
+	}
+
+	// Specifically check passive KDA saver 2/0/3 vs roam tank 1/5/17 with exact team kills = 25
+	teamSaver := []PlayerKDA{
+		{PlayerID: 10, Kills: 11, Deaths: 2, Assists: 7},
+		{PlayerID: 11, Kills: 4, Deaths: 2, Assists: 10},
+		{PlayerID: 12, Kills: 1, Deaths: 5, Assists: 17},
+		{PlayerID: 13, Kills: 2, Deaths: 0, Assists: 3},
+		{PlayerID: 14, Kills: 7, Deaths: 6, Assists: 3},
+	}
+	modsSaver := CalculateTeamKDAModifiers(teamSaver, 24)
+	if modsSaver[12] < modsSaver[13] {
+		t.Errorf("roam tank 1/5/17 (%d) should not fall behind passive 2/0/3 (%d)", modsSaver[12], modsSaver[13])
+	}
+}
+
+func TestCalculateTeamKDAModifiersLosingRosterAndZeroSum(t *testing.T) {
+	team := []PlayerKDA{
+		{PlayerID: 1, Kills: 7, Deaths: 2, Assists: 5},
+		{PlayerID: 2, Kills: 1, Deaths: 5, Assists: 9},
+		{PlayerID: 3, Kills: 4, Deaths: 6, Assists: 4},
+		{PlayerID: 4, Kills: 2, Deaths: 5, Assists: 4},
+		{PlayerID: 5, Kills: 1, Deaths: 7, Assists: 1},
+	}
+	mods := CalculateTeamKDAModifiers(team, -24)
+
+	sum := 0
+	for _, p := range team {
+		sum += mods[p.PlayerID]
+	}
+	if sum != 0 {
+		t.Fatalf("sum of losing KDA modifiers = %d, want 0: %v", sum, mods)
+	}
+	if !(mods[1] > mods[2] && mods[2] >= mods[3] && mods[3] >= mods[4] && mods[4] > mods[5]) {
+		t.Errorf("unexpected performance ordering on losing team: %v", mods)
+	}
+}
+
+func TestCalculateTeamKDAModifiersIdenticalStatsYieldZero(t *testing.T) {
+	team := []PlayerKDA{
+		{PlayerID: 1, Kills: 3, Deaths: 3, Assists: 5},
+		{PlayerID: 2, Kills: 3, Deaths: 3, Assists: 5},
+		{PlayerID: 3, Kills: 3, Deaths: 3, Assists: 5},
+		{PlayerID: 4, Kills: 3, Deaths: 3, Assists: 5},
+		{PlayerID: 5, Kills: 3, Deaths: 3, Assists: 5},
+	}
+	mods := CalculateTeamKDAModifiers(team, 24)
+	for _, p := range team {
+		if mods[p.PlayerID] != 0 {
+			t.Errorf("identical stats should give 0 modifier, player %d got %d", p.PlayerID, mods[p.PlayerID])
+		}
+	}
+}
+
+func TestCalculateTeamKDAModifiersZeroKillSurrender(t *testing.T) {
+	team := []PlayerKDA{
+		{PlayerID: 1, Kills: 0, Deaths: 1, Assists: 0},
+		{PlayerID: 2, Kills: 0, Deaths: 2, Assists: 0},
+		{PlayerID: 3, Kills: 0, Deaths: 3, Assists: 0},
+		{PlayerID: 4, Kills: 0, Deaths: 4, Assists: 0},
+		{PlayerID: 5, Kills: 0, Deaths: 8, Assists: 0},
+	}
+	mods := CalculateTeamKDAModifiers(team, -24)
+	sum := 0
+	for _, p := range team {
+		sum += mods[p.PlayerID]
+	}
+	if sum != 0 {
+		t.Fatalf("zero-kill surrender sum = %d, want 0: %v", sum, mods)
+	}
+	if mods[1] <= mods[5] {
+		t.Errorf("0/1/0 (%d) should outscore 0/8/0 (%d)", mods[1], mods[5])
+	}
+	if mods[1] > 3 || mods[5] < -3 {
+		t.Errorf("zero-kill surrender diffs should stay modest due to scale floor: %v", mods)
+	}
+}
+
+func TestCalculateTeamKDAModifiersTierScaling(t *testing.T) {
+	team := []PlayerKDA{
+		{PlayerID: 1, Kills: 15, Deaths: 0, Assists: 10},
+		{PlayerID: 2, Kills: 5, Deaths: 3, Assists: 5},
+		{PlayerID: 3, Kills: 3, Deaths: 4, Assists: 6},
+		{PlayerID: 4, Kills: 2, Deaths: 5, Assists: 4},
+		{PlayerID: 5, Kills: 0, Deaths: 10, Assists: 0},
+	}
+
+	cases := []struct {
+		name      string
+		baseDelta int
+		wantCap   int
+	}{
+		{name: "graphite/carbon ±24", baseDelta: 24, wantCap: 8},
+		{name: "onyx ±16", baseDelta: 16, wantCap: 6},
+		{name: "obsidian ±12", baseDelta: 12, wantCap: 4},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mods := CalculateTeamKDAModifiers(team, tc.baseDelta)
+			if mods[1] != tc.wantCap {
+				t.Errorf("carry mod = %d, want exact cap %d (mods=%v)", mods[1], tc.wantCap, mods)
+			}
+			for _, p := range team {
+				if mods[p.PlayerID] > tc.wantCap || mods[p.PlayerID] < -tc.wantCap {
+					t.Errorf("player %d mod %d exceeds cap ±%d", p.PlayerID, mods[p.PlayerID], tc.wantCap)
+				}
+			}
+			if mods[5] >= 0 || mods[5] >= mods[4] {
+				t.Errorf("feeder mod = %d should be strictly worst (mods=%v)", mods[5], mods)
+			}
+			sum := 0
+			for _, p := range team {
+				sum += mods[p.PlayerID]
+			}
+			if sum != 0 {
+				t.Errorf("sum = %d, want 0", sum)
+			}
+		})
+	}
+}
+
+func TestCalculateTeamKDAModifiersEdgeCases(t *testing.T) {
+	if got := CalculateTeamKDAModifiers(nil, 24); len(got) != 0 {
+		t.Errorf("empty team = %v, want empty map", got)
+	}
+	if got := CalculateTeamKDAModifiers([]PlayerKDA{{PlayerID: 1, Kills: 5}}, 0); len(got) != 0 {
+		t.Errorf("zero baseDelta = %v, want empty map", got)
+	}
+}
+
+func TestApplyMatchDeltaSignGuards(t *testing.T) {
+	// Underdog Obsidian SVP loss: base -4, KDA +4, SVP +4 = +4 -> must clamp to -3.
+	if got := ApplyMatchDelta(-4, 4, SVPMitigationMMR, false); got != MaxLossMMRDelta {
+		t.Errorf("underdog SVP loss = %d, want %d", got, MaxLossMMRDelta)
+	}
+	// Favorite feeder win: base +6, KDA -4 = +2 -> must clamp to +3.
+	if got := ApplyMatchDelta(6, -4, 0, true); got != MinWinMMRDelta {
+		t.Errorf("favorite feeder win = %d, want %d", got, MinWinMMRDelta)
+	}
+	// Normal win & loss stay unclamped.
+	if got := ApplyMatchDelta(24, 5, MVPBonusMMR, true); got != 32 {
+		t.Errorf("MVP win = %d, want 32", got)
+	}
+	if got := ApplyMatchDelta(-24, 8, SVPMitigationMMR, false); got != -12 {
+		t.Errorf("SVP loss = %d, want -12", got)
+	}
+}

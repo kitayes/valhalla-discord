@@ -107,23 +107,49 @@ func (s *MatchServiceImpl) ProcessImageWithPlayers(ctx context.Context, data []b
 		s.logger.Info("match #%d medals — MVP: %q, SVP: %q", matchID, match.MVP, match.SVP)
 	}
 
-	if s.sheetsClient != nil {
-		// Deliberately NOT ctx: the caller cancels it as soon as the upload
-		// response is sent, which would abort the sync before it started.
-		s.syncWg.Add(1)
-		go func() {
-			defer s.syncWg.Done()
-
-			syncCtx, cancel := context.WithTimeout(context.Background(), sheetSyncTimeout)
-			defer cancel()
-
-			if _, err := s.SyncToGoogleSheet(syncCtx); err != nil {
-				s.logger.Error("Auto-sync failed: %v", err)
-			}
-		}()
-	}
+	s.triggerBackgroundSheetSync()
 
 	return &models.MatchResult{MatchID: matchID, MVP: match.MVP, SVP: match.SVP}, nil
+}
+
+func (s *MatchServiceImpl) triggerBackgroundSheetSync() {
+	if s.sheetsClient == nil {
+		return
+	}
+	// Deliberately NOT ctx: the caller cancels it as soon as the upload
+	// response is sent, which would abort the sync before it started.
+	s.syncWg.Add(1)
+	go func() {
+		defer s.syncWg.Done()
+
+		syncCtx, cancel := context.WithTimeout(context.Background(), sheetSyncTimeout)
+		defer cancel()
+
+		if _, err := s.SyncToGoogleSheet(syncCtx); err != nil {
+			s.logger.Error("Auto-sync failed: %v", err)
+		}
+	}()
+}
+
+// PendingScoreboard holds a parsed screenshot matched against a lobby match
+// while waiting for referee confirmation.
+type PendingScoreboard struct {
+	FileHash     string
+	LobbyMatchID int
+	Roster       LobbyRoster
+	Result       *ScoreboardMatchResult
+}
+
+// CommitScoreboardRequest carries the verified scoreboard rows and learned
+// aliases into persistence.
+type CommitScoreboardRequest struct {
+	LobbyMatchID   int
+	FileHash       string
+	Winner         string
+	Rows           []MatchedRow
+	MVPPlayerID    int
+	SVPPlayerID    int
+	LearnedAliases []LearnedAlias
 }
 
 func (s *MatchServiceImpl) ProcessImageFromURL(ctx context.Context, url string) (*models.MatchResult, error) {
@@ -133,6 +159,172 @@ func (s *MatchServiceImpl) ProcessImageFromURL(ctx context.Context, url string) 
 // ProcessImageFromURLWithPlayers downloads and processes an image from a URL,
 // injecting expected player names into the AI prompt for improved OCR accuracy.
 func (s *MatchServiceImpl) ProcessImageFromURLWithPlayers(ctx context.Context, url string, expectedPlayers []string) (*models.MatchResult, error) {
+	data, err := s.downloadImage(ctx, url)
+	if err != nil {
+		return nil, err
+	}
+	return s.ProcessImageWithPlayers(ctx, data, expectedPlayers)
+}
+
+// ParseScreenshotForLobby downloads and parses a scoreboard screenshot without
+// committing it, linking the 10 rows against the lobby match's known roster.
+func (s *MatchServiceImpl) ParseScreenshotForLobby(ctx context.Context, url string, lobbyMatch *models.LobbyMatch) (*PendingScoreboard, error) {
+	if lobbyMatch == nil {
+		return nil, fmt.Errorf("parse screenshot: lobby match is nil")
+	}
+
+	data, err := s.downloadImage(ctx, url)
+	if err != nil {
+		return nil, err
+	}
+
+	hash := sha256.Sum256(data)
+	fileHash := hex.EncodeToString(hash[:])
+
+	exists, err := s.repo.Exists(ctx, fileHash, "")
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return nil, fmt.Errorf("file hash %s: %w", fileHash, domain.ErrDuplicateMatch)
+	}
+
+	allIDs := make([]int, 0, len(lobbyMatch.TeamAIDs)+len(lobbyMatch.TeamBIDs))
+	allIDs = append(allIDs, lobbyMatch.TeamAIDs...)
+	allIDs = append(allIDs, lobbyMatch.TeamBIDs...)
+
+	names, err := s.repo.GetPlayerNamesByIDs(ctx, allIDs)
+	if err != nil {
+		return nil, fmt.Errorf("parse screenshot: failed to resolve player names: %w", err)
+	}
+
+	aliases, err := s.repo.GetAliasesForPlayers(ctx, allIDs)
+	if err != nil {
+		s.logger.Warn("parse screenshot: failed to load aliases for lobby match #%d: %v", lobbyMatch.ID, err)
+		aliases = map[int][]string{}
+	}
+
+	buildTeam := func(ids []int) []RosterPlayer {
+		team := make([]RosterPlayer, 0, len(ids))
+		for _, pid := range ids {
+			name := names[pid]
+			if name == "" {
+				name = fmt.Sprintf("Player#%d", pid)
+			}
+			team = append(team, RosterPlayer{
+				PlayerID: pid,
+				Name:     name,
+				Aliases:  aliases[pid],
+			})
+		}
+		return team
+	}
+
+	roster := LobbyRoster{
+		TeamA: buildTeam(lobbyMatch.TeamAIDs),
+		TeamB: buildTeam(lobbyMatch.TeamBIDs),
+	}
+
+	expectedNames := make([]string, 0, len(allIDs))
+	for _, pid := range allIDs {
+		if n := names[pid]; n != "" {
+			expectedNames = append(expectedNames, n)
+		}
+	}
+
+	parsed, err := s.ai.ParseImageWithPlayers(ctx, data, expectedNames)
+	if err != nil {
+		return nil, err
+	}
+
+	matched := MatchScoreboardToLobby(roster, parsed)
+	return &PendingScoreboard{
+		FileHash:     fileHash,
+		LobbyMatchID: lobbyMatch.ID,
+		Roster:       roster,
+		Result:       matched,
+	}, nil
+}
+
+// CommitLobbyScoreboard persists a referee-confirmed scoreboard linked to a
+// lobby match and best-effort records newly learned aliases.
+func (s *MatchServiceImpl) CommitLobbyScoreboard(ctx context.Context, req CommitScoreboardRequest) (*models.MatchResult, error) {
+	if req.LobbyMatchID <= 0 {
+		return nil, fmt.Errorf("commit scoreboard: invalid lobby match id %d", req.LobbyMatchID)
+	}
+	if len(req.Rows) == 0 {
+		return nil, fmt.Errorf("commit scoreboard: empty scoreboard rows")
+	}
+
+	players := make([]models.PlayerResult, 0, len(req.Rows))
+	var mvpName, svpName string
+	for idx, row := range req.Rows {
+		if row.PlayerID <= 0 || strings.TrimSpace(row.PlayerName) == "" {
+			return nil, fmt.Errorf("commit scoreboard: row %d is unresolved", idx+1)
+		}
+		side := "LOSE"
+		if strings.EqualFold(strings.TrimSpace(row.Result), "WIN") {
+			side = "WIN"
+		}
+		players = append(players, models.PlayerResult{
+			PlayerID:   row.PlayerID,
+			PlayerName: row.PlayerName,
+			Result:     side,
+			Kills:      max(row.Kills, 0),
+			Deaths:     max(row.Deaths, 0),
+			Assists:    max(row.Assists, 0),
+			Rating:     row.Rating,
+			Confidence: row.Confidence,
+		})
+		if req.MVPPlayerID > 0 && row.PlayerID == req.MVPPlayerID && side == "WIN" {
+			mvpName = row.PlayerName
+		}
+		if req.SVPPlayerID > 0 && row.PlayerID == req.SVPPlayerID && side == "LOSE" {
+			svpName = row.PlayerName
+		}
+	}
+
+	lobbyMatchID := req.LobbyMatchID
+	match := models.Match{
+		LobbyMatchID: &lobbyMatchID,
+		FileHash:     req.FileHash,
+		Players:      players,
+		MVP:          mvpName,
+		SVP:          svpName,
+	}
+	match.MatchSignature = generateSignature(&match)
+
+	exists, err := s.repo.Exists(ctx, req.FileHash, match.MatchSignature)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return nil, fmt.Errorf("match #%d: %w", req.LobbyMatchID, domain.ErrDuplicateMatch)
+	}
+
+	matchID, err := s.repo.Create(ctx, match)
+	if err != nil {
+		return nil, err
+	}
+
+	s.statsCache.Invalidate()
+
+	for _, alias := range req.LearnedAliases {
+		if err := s.repo.LearnAlias(ctx, alias.PlayerID, alias.Alias, alias.Source); err != nil {
+			s.logger.Warn("alias: failed to store %q for player %d: %v", alias.Alias, alias.PlayerID, err)
+		}
+	}
+
+	if match.MVP != "" || match.SVP != "" {
+		s.logger.Info("match #%d (lobby #%d) medals — MVP: %q, SVP: %q", matchID, req.LobbyMatchID, match.MVP, match.SVP)
+	}
+
+	s.triggerBackgroundSheetSync()
+
+	return &models.MatchResult{MatchID: matchID, MVP: mvpName, SVP: svpName}, nil
+}
+
+func (s *MatchServiceImpl) downloadImage(ctx context.Context, url string) ([]byte, error) {
 	client := &http.Client{
 		Timeout: s.httpTimeout,
 	}
@@ -148,6 +340,10 @@ func (s *MatchServiceImpl) ProcessImageFromURLWithPlayers(ctx context.Context, u
 	}
 	defer resp.Body.Close() //nolint:errcheck // best-effort cleanup
 
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("failed to download image: status %d", resp.StatusCode)
+	}
+
 	if resp.ContentLength > 0 && resp.ContentLength > maxImageDownloadSize {
 		return nil, fmt.Errorf("image too large: %d bytes exceeds maximum %d bytes",
 			resp.ContentLength, maxImageDownloadSize)
@@ -162,7 +358,7 @@ func (s *MatchServiceImpl) ProcessImageFromURLWithPlayers(ctx context.Context, u
 		return nil, fmt.Errorf("image size exceeds maximum allowed size of %d bytes", maxImageDownloadSize)
 	}
 
-	return s.ProcessImageWithPlayers(ctx, data, expectedPlayers)
+	return data, nil
 }
 
 // GetLeaderboard returns the season standings. sortBy selects the ordering:

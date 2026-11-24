@@ -12,7 +12,8 @@ func validConfig() *Config {
 	return &Config{
 		DiscordToken:    "token",
 		GuildID:         "123",
-		GeminiKey:       "key",
+		AIProvider:      "ocr",
+		OCRServiceURL:   "http://ocr:8000",
 		HTTPTimeoutSec:  10,
 		PlayerCacheSize: 1000,
 		AdminUserIDs:    []string{"42"},
@@ -69,7 +70,10 @@ func TestValidateRejectsEnabledSubsystemsWithNoSettings(t *testing.T) {
 	}{
 		{"no discord token", func(c *Config) { c.DiscordToken = "" }, "DISCORD_TOKEN"},
 		{"no guild", func(c *Config) { c.GuildID = "" }, "GUILD_ID"},
-		{"no gemini key", func(c *Config) { c.GeminiKey = "" }, "GEMINI_KEY"},
+		{"no ocr url when ai=ocr", func(c *Config) { c.OCRServiceURL = "" }, "OCR_SERVICE_URL"},
+		{"invalid ocr url when ai=ocr", func(c *Config) { c.OCRServiceURL = "not-a-url" }, "OCR_SERVICE_URL"},
+		{"no gemini key when ai=gemini", func(c *Config) { c.AIProvider = "gemini"; c.GeminiKey = "" }, "GEMINI_KEY"},
+		{"unknown ai provider", func(c *Config) { c.AIProvider = "magic" }, "AI_PROVIDER"},
 		{"zero http timeout", func(c *Config) { c.HTTPTimeoutSec = 0 }, "HTTP_TIMEOUT_SEC"},
 		{"zero cache size", func(c *Config) { c.PlayerCacheSize = 0 }, "PLAYER_CACHE_SIZE"},
 		{"clan tag on, no role", func(c *Config) { c.ClanTagEnabled = true }, "CLAN_TAG_ROLE_ID"},
@@ -94,10 +98,20 @@ func TestValidateReportsEveryProblemAtOnce(t *testing.T) {
 	if err == nil {
 		t.Fatal("an empty configuration was accepted")
 	}
-	for _, want := range []string{"DISCORD_TOKEN", "GUILD_ID", "GEMINI_KEY", "ADMIN_USER_IDS"} {
+	for _, want := range []string{"DISCORD_TOKEN", "GUILD_ID", "OCR_SERVICE_URL", "ADMIN_USER_IDS"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("Validate() did not mention %s:\n%v", want, err)
 		}
+	}
+}
+
+func TestValidateAcceptsGeminiModeWithKey(t *testing.T) {
+	c := validConfig()
+	c.AIProvider = "gemini"
+	c.OCRServiceURL = ""
+	c.GeminiKey = "secret-gemini-key"
+	if err := c.Validate(); err != nil {
+		t.Errorf("Validate() rejected valid gemini config: %v", err)
 	}
 }
 

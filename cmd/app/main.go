@@ -70,10 +70,19 @@ func main() {
 		return
 	}
 
-	gemini, err := ai.NewGeminiClient(cfg.GeminiKey)
-	if err != nil {
-		log.Error("failed to init gemini: %s", err.Error())
-		return
+	var aiProvider application.AIProvider
+	switch cfg.EffectiveAIProvider() {
+	case "gemini":
+		aiProvider, err = ai.NewGeminiClient(cfg.GeminiKey)
+		if err != nil {
+			log.Error("failed to init gemini: %s", err.Error())
+			return
+		}
+		log.Info("Scoreboard AI provider: Gemini")
+	default:
+		ocrTimeout := max(30*time.Second, time.Duration(cfg.HTTPTimeoutSec)*time.Second)
+		aiProvider = ai.NewOCRClient(cfg.OCRServiceURL, ocrTimeout)
+		log.Info("Scoreboard AI provider: RapidOCR (%s)", cfg.OCRServiceURL)
 	}
 
 	var sheetsClient sheets.Client
@@ -93,7 +102,7 @@ func main() {
 		log.Warn("%s not found, sheets integration disabled", cfg.GoogleCredentialsPath)
 	}
 
-	services := application.NewService(repos, gemini, sheetsClient, cfg.GoogleOwnerEmail, cfg.SpreadsheetID, cfg.HTTPTimeoutSec, log)
+	services := application.NewService(repos, aiProvider, sheetsClient, cfg.GoogleOwnerEmail, cfg.SpreadsheetID, cfg.HTTPTimeoutSec, log)
 	if cfg.BracketEnabled() {
 		walkoverWin, walkoverLose, _ := config.ParseWalkoverScore(cfg.BracketWalkoverScore)
 		challongeHTTP := &http.Client{Timeout: time.Duration(cfg.HTTPTimeoutSec) * time.Second}

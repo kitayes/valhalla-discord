@@ -82,15 +82,21 @@ func (r *MatchPostgres) Create(ctx context.Context, match models.Match) (int, er
 	defer tx.Rollback() //nolint:errcheck // best-effort cleanup
 
 	var matchID int
-	query := "INSERT INTO matches (file_hash, match_signature) VALUES ($1, $2) RETURNING id"
-	err = tx.QueryRowContext(ctx, query, match.FileHash, match.MatchSignature).Scan(&matchID)
+	query := "INSERT INTO matches (file_hash, match_signature, lobby_match_id) VALUES ($1, $2, $3) RETURNING id"
+	err = tx.QueryRowContext(ctx, query, match.FileHash, match.MatchSignature, nullableIntPtr(match.LobbyMatchID)).Scan(&matchID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to insert match: %w", err)
 	}
 
-	// Collect all player IDs (using cache for fast lookups)
+	// Collect all player IDs. When the caller already resolved PlayerID (e.g., via
+	// roster-linked lobby matching), trust it directly so we never spawn phantom
+	// player rows from OCR typos.
 	playerIDs := make([]int, len(match.Players))
 	for i, p := range match.Players {
+		if p.PlayerID > 0 {
+			playerIDs[i] = p.PlayerID
+			continue
+		}
 		playerID, err := r.EnsurePlayerExists(ctx, p.PlayerName)
 		if err != nil {
 			return 0, fmt.Errorf("failed to ensure player exists: %w", err)
@@ -154,10 +160,19 @@ func (r *MatchPostgres) recordMedals(ctx context.Context, tx *sql.Tx, matchID in
 // resolveMedalPlayerID maps a medal name onto one of the match's own players.
 // Returns 0 when the name is empty or does not belong to this scoreboard.
 func resolveMedalPlayerID(medalName string, players []models.PlayerResult, playerIDs []int) int {
-	if strings.TrimSpace(medalName) == "" || len(playerIDs) != len(players) {
+	cleanMedal := strings.TrimSpace(medalName)
+	if cleanMedal == "" || len(playerIDs) != len(players) {
 		return 0
 	}
-	normalized := normalizeForComparison(medalName)
+	for i, p := range players {
+		if strings.EqualFold(strings.TrimSpace(p.PlayerName), cleanMedal) {
+			return playerIDs[i]
+		}
+	}
+	normalized := normalizeForComparison(cleanMedal)
+	if normalized == "" {
+		return 0
+	}
 	for i, p := range players {
 		if normalizeForComparison(p.PlayerName) == normalized {
 			return playerIDs[i]
@@ -171,6 +186,13 @@ func nullableID(id int) interface{} {
 		return nil
 	}
 	return id
+}
+
+func nullableIntPtr(id *int) interface{} {
+	if id == nil || *id <= 0 {
+		return nil
+	}
+	return *id
 }
 
 // GetMedalCountsAfter returns per-player medal tallies for matches played since
@@ -1019,4 +1041,71 @@ func (r *MatchPostgres) GetPlayerByDiscordID(ctx context.Context, discordID stri
 		return 0, "", fmt.Errorf("failed to get player by discord_id %s: %w", discordID, err)
 	}
 	return id, name, nil
+}
+
+// GetAliasesForPlayers loads known scoreboard aliases for the given player IDs.
+func (r *MatchPostgres) GetAliasesForPlayers(ctx context.Context, playerIDs []int) (map[int][]string, error) {
+	aliases := make(map[int][]string, len(playerIDs))
+	if len(playerIDs) == 0 {
+		return aliases, nil
+	}
+
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT player_id, alias
+		   FROM player_aliases
+		  WHERE player_id = ANY($1)
+		  ORDER BY id`,
+		pq.Array(playerIDs),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query player aliases: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // best-effort cleanup
+
+	for rows.Next() {
+		var pid int
+		var alias string
+		if err := rows.Scan(&pid, &alias); err != nil {
+			return nil, fmt.Errorf("failed to scan player alias: %w", err)
+		}
+		aliases[pid] = append(aliases[pid], alias)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read player aliases: %w", err)
+	}
+	return aliases, nil
+}
+
+// LearnAlias stores a newly discovered in-game nickname for playerID unless
+// that nickname already belongs to an active player or another player's alias.
+func (r *MatchPostgres) LearnAlias(ctx context.Context, playerID int, alias, source string) error {
+	clean := strings.TrimSpace(alias)
+	if playerID <= 0 || clean == "" {
+		return nil
+	}
+
+	var exists bool
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT EXISTS(
+			SELECT 1 FROM players
+			 WHERE LOWER(TRIM(name)) = LOWER(TRIM($1))
+			   AND is_deleted = FALSE
+		)`,
+		clean,
+	).Scan(&exists); err != nil {
+		return fmt.Errorf("failed to verify canonical name before learning alias %q: %w", clean, err)
+	}
+	if exists {
+		return nil
+	}
+
+	if _, err := r.db.ExecContext(ctx,
+		`INSERT INTO player_aliases (player_id, alias, source)
+		 VALUES ($1, $2, $3)
+		 ON CONFLICT DO NOTHING`,
+		playerID, clean, source,
+	); err != nil {
+		return fmt.Errorf("failed to learn alias %q for player %d: %w", clean, playerID, err)
+	}
+	return nil
 }

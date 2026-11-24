@@ -43,6 +43,9 @@ type Match interface {
 	WipePlayerByID(ctx context.Context, id int) error
 	RestorePlayer(ctx context.Context, id int) error
 	RenamePlayer(ctx context.Context, id int, newName string) error
+
+	GetAliasesForPlayers(ctx context.Context, playerIDs []int) (map[int][]string, error)
+	LearnAlias(ctx context.Context, playerID int, alias, source string) error
 }
 
 type ProfileLink interface {

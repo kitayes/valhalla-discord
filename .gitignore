@@ -3,3 +3,5 @@
 *.exe
 google-credentials.json
 .claude
+__pycache__/
+*.py[cod]

@@ -26,6 +26,8 @@ type MatchService interface {
 	ProcessImageWithPlayers(ctx context.Context, data []byte, expectedPlayers []string) (*models.MatchResult, error)
 	ProcessImageFromURL(ctx context.Context, url string) (*models.MatchResult, error)
 	ProcessImageFromURLWithPlayers(ctx context.Context, url string, expectedPlayers []string) (*models.MatchResult, error)
+	ParseScreenshotForLobby(ctx context.Context, url string, lobbyMatch *models.LobbyMatch) (*PendingScoreboard, error)
+	CommitLobbyScoreboard(ctx context.Context, req CommitScoreboardRequest) (*models.MatchResult, error)
 	GetExcelReport(ctx context.Context) ([]byte, error)
 	SyncToGoogleSheet(ctx context.Context) (string, error)
 	SetTimer(ctx context.Context, dateStr string) error

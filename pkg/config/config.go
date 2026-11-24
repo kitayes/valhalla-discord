@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,6 +19,8 @@ type Config struct {
 	Repo          repository.Config `envPrefix:"REPO_"`
 	DiscordToken  string            `env:"DISCORD_TOKEN" envDefault:""`
 	TelegramToken string            `env:"TELEGRAM_TOKEN" envDefault:""`
+	AIProvider    string            `env:"AI_PROVIDER" envDefault:"ocr"`
+	OCRServiceURL string            `env:"OCR_SERVICE_URL" envDefault:"http://ocr:8000"`
 	GeminiKey     string            `env:"GEMINI_KEY" envDefault:""`
 	LogLevel      string            `env:"LOGGER_LEVEL" envDefault:"debug"`
 
@@ -153,6 +156,16 @@ func (c *Config) WebAdminEnabled() bool {
 	return c.WebAdminKey != ""
 }
 
+// EffectiveAIProvider returns the configured scoreboard parser backend
+// ("ocr" or "gemini"), defaulting to "ocr" when empty.
+func (c *Config) EffectiveAIProvider() string {
+	p := strings.ToLower(strings.TrimSpace(c.AIProvider))
+	if p == "" {
+		return "ocr"
+	}
+	return p
+}
+
 // Validate rejects a configuration the process cannot run correctly with.
 //
 // These checks used to be scattered through main as ad-hoc `if x == ""` guards,
@@ -168,8 +181,18 @@ func (c *Config) Validate() error {
 	if c.GuildID == "" {
 		errs = append(errs, errors.New("GUILD_ID is required: slash commands are registered per guild"))
 	}
-	if c.GeminiKey == "" {
-		errs = append(errs, errors.New("GEMINI_KEY is required: screenshot parsing does not work without it"))
+	switch c.EffectiveAIProvider() {
+	case "ocr":
+		u, err := url.ParseRequestURI(strings.TrimSpace(c.OCRServiceURL))
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			errs = append(errs, errors.New("OCR_SERVICE_URL must be a valid http/https URL when AI_PROVIDER=ocr"))
+		}
+	case "gemini":
+		if c.GeminiKey == "" {
+			errs = append(errs, errors.New("GEMINI_KEY is required when AI_PROVIDER=gemini"))
+		}
+	default:
+		errs = append(errs, fmt.Errorf("AI_PROVIDER must be \"ocr\" or \"gemini\", got %q", c.AIProvider))
 	}
 	if c.HTTPTimeoutSec <= 0 {
 		errs = append(errs, fmt.Errorf("HTTP_TIMEOUT_SEC must be positive, got %d", c.HTTPTimeoutSec))

@@ -74,6 +74,10 @@ func (b *Bot) onBindButton(s *discordgo.Session, i *discordgo.InteractionCreate)
 // where every non-component interaction lands.
 func (b *Bot) onModalSubmit(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	data := i.ModalSubmitData()
+	if strings.HasPrefix(data.CustomID, sbModalKDAPrefix) {
+		b.handleScoreboardKDAModal(s, i)
+		return
+	}
 	if data.CustomID != modalBind {
 		return
 	}

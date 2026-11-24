@@ -522,6 +522,15 @@ func (b *Bot) handleScreenshots(ctx context.Context, s *discordgo.Session, m *di
 		taken++
 	}
 
+	lobbyMatch, lobbyErr := b.services.Lobby.GetMatchByThreadID(ctx, m.ChannelID)
+	if lobbyErr != nil && !errors.Is(lobbyErr, domain.ErrMatchNotFound) {
+		b.logger.Warn("discord: failed to resolve lobby match for thread %s: %v", m.ChannelID, lobbyErr)
+	}
+	if lobbyMatch != nil && lobbyMatch.Status == models.LobbyMatchStatusActive {
+		b.handleLobbyMatchScreenshot(ctx, s, m, lobbyMatch, imageAttachments)
+		return
+	}
+
 	b.startTyping(s, m.ChannelID)
 	msg := b.sendChannelMessage(s, m.ChannelID,
 		fmt.Sprintf("Анализирую %d скриншот(ов)...", len(imageAttachments)))

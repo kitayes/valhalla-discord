@@ -7,18 +7,30 @@ import (
 	"strings"
 
 	"blackwatch/internal/domain"
+	"blackwatch/internal/models"
 
 	"github.com/bwmarrin/discordgo"
 )
 
 const (
 	// mvpBonusMMR is extra MMR for the MVP — the best player on the winning team.
-	mvpBonusMMR = 5
+	mvpBonusMMR = domain.MVPBonusMMR
 	// svpMitigationMMR softens the loss for the SVPG — the best player on the
 	// losing team. It is a mitigation, so it is always positive: the previous
 	// -5 on Team A punished the medal instead of rewarding it.
-	svpMitigationMMR = 10
+	svpMitigationMMR = domain.SVPMitigationMMR
 )
+
+// MatchMMRBreakdown shows each player's rating transition for a match.
+type MatchMMRBreakdown struct {
+	PlayerID   int
+	OldMMR     int
+	BaseDelta  int
+	KDAMod     int
+	MedalBonus int
+	TotalDelta int
+	NewMMR     int
+}
 
 // EloService handles Elo-MMR calculations and tier role updates.
 type EloService struct {
@@ -47,6 +59,55 @@ func NewEloService(logger Logger, matchSvc MatchService, lobbyMatch LobbyMatchRe
 // ProcessMatchResult calculates Elo-MMR shifts (including MVP/SVP bonuses) and updates all players.
 // Returns new MMRs map and any tier changes.
 func (s *EloService) ProcessMatchResult(ctx context.Context, matchID int, winner string, mvpName, svpName string) (map[int]int, []TierChange, error) {
+	return s.ProcessMatchResultWithKDA(ctx, matchID, winner, 0, 0, mvpName, svpName, nil)
+}
+
+// PreviewMatchDeltas calculates read-only per-player MMR breakdowns without writing
+// anything to the database, for showing the referee confirmation preview.
+func (s *EloService) PreviewMatchDeltas(
+	ctx context.Context,
+	match *models.LobbyMatch,
+	winner string,
+	mvpPlayerID, svpPlayerID int,
+	kdaByPlayer map[int]domain.PlayerKDA,
+) (map[int]MatchMMRBreakdown, error) {
+	if match == nil {
+		return nil, fmt.Errorf("elo: match is nil")
+	}
+
+	allPlayerIDs := make([]int, 0, len(match.TeamAIDs)+len(match.TeamBIDs))
+	allPlayerIDs = append(allPlayerIDs, match.TeamAIDs...)
+	allPlayerIDs = append(allPlayerIDs, match.TeamBIDs...)
+
+	mmrs, err := s.lobbyMatch.GetPlayerMMRsBatch(ctx, allPlayerIDs)
+	if err != nil {
+		return nil, fmt.Errorf("elo: failed to get MMRs: %w", err)
+	}
+	for _, pid := range allPlayerIDs {
+		if _, ok := mmrs[pid]; !ok {
+			mmrs[pid] = domain.BaseMMR
+		}
+	}
+
+	names, err := s.matchSvc.GetPlayerNamesByIDs(ctx, allPlayerIDs)
+	if err != nil {
+		return nil, fmt.Errorf("elo: failed to get player names: %w", err)
+	}
+
+	breakdowns, _, _, _ := computeMatchBreakdowns(match, mmrs, names, winner, mvpPlayerID, svpPlayerID, match.MVP, match.SVP, kdaByPlayer, nil)
+	return breakdowns, nil
+}
+
+// ProcessMatchResultWithKDA calculates Elo-MMR shifts with optional KDA modifiers
+// and MVP/SVP bonuses, persists the new MMRs, and returns updated MMRs and tier changes.
+func (s *EloService) ProcessMatchResultWithKDA(
+	ctx context.Context,
+	matchID int,
+	winner string,
+	mvpPlayerID, svpPlayerID int,
+	mvpName, svpName string,
+	kdaByPlayer map[int]domain.PlayerKDA,
+) (map[int]int, []TierChange, error) {
 	match, err := s.lobbyMatch.GetByID(ctx, matchID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("elo: failed to get match %d: %w", matchID, err)
@@ -73,14 +134,6 @@ func (s *EloService) ProcessMatchResult(ctx context.Context, matchID int, winner
 		}
 	}
 
-	teamAMMRs := extractMMRs(match.TeamAIDs, mmrs)
-	teamBMMRs := extractMMRs(match.TeamBIDs, mmrs)
-
-	avgMMRTeamA := domain.CalculateAverageMMR(teamAMMRs)
-	avgMMRTeamB := domain.CalculateAverageMMR(teamBMMRs)
-
-	delta := domain.CalculateEloShift(avgMMRTeamA, avgMMRTeamB, winner)
-
 	// Medals come off the match screenshot; fall back to whatever was stored on
 	// the match when the caller has nothing more specific.
 	if mvpName == "" {
@@ -90,9 +143,6 @@ func (s *EloService) ProcessMatchResult(ctx context.Context, matchID int, winner
 		svpName = match.SVP
 	}
 
-	s.logger.Info("elo: match #%d | Team A avg: %.0f | Team B avg: %.0f | winner: %s | delta: %.0f | MVP: %q | SVP: %q",
-		matchID, avgMMRTeamA, avgMMRTeamB, winner, delta, mvpName, svpName)
-
 	// One query for every participant instead of one per participant inside the
 	// update loop.
 	names, err := s.matchSvc.GetPlayerNamesByIDs(ctx, allPlayerIDs)
@@ -100,59 +150,36 @@ func (s *EloService) ProcessMatchResult(ctx context.Context, matchID int, winner
 		return nil, nil, fmt.Errorf("elo: failed to get player names: %w", err)
 	}
 
-	newMMRs := make(map[int]int)
-	deltaA, deltaB := teamDeltas(delta)
+	breakdowns, avgMMRTeamA, avgMMRTeamB, delta := computeMatchBreakdowns(
+		match, mmrs, names, winner, mvpPlayerID, svpPlayerID, mvpName, svpName, kdaByPlayer, s.logger,
+	)
 
-	// Apply MMR with MVP/SVP bonuses.
-	//
-	// Each medal is only offered to the side that can hold it: the MVP is the
-	// best player on the winning team, the SVPG the best on the losing one. The
-	// names come out of the screenshot parser, so an unscoped match on the name
-	// alone handed the MVP bonus to whoever happened to carry that nick — a
-	// misread, or a namesake on the other side.
-	teams := []struct {
-		playerIDs []int
-		delta     int
-		won       bool
-	}{
-		{playerIDs: match.TeamAIDs, delta: deltaA, won: winner == domain.TeamA},
-		{playerIDs: match.TeamBIDs, delta: deltaB, won: winner == domain.TeamB},
-	}
+	s.logger.Info("elo: match #%d | Team A avg: %.0f | Team B avg: %.0f | winner: %s | delta: %.0f | MVP: %q (id=%d) | SVP: %q (id=%d)",
+		matchID, avgMMRTeamA, avgMMRTeamB, winner, delta, mvpName, mvpPlayerID, svpName, svpPlayerID)
+
+	newMMRs := make(map[int]int, len(allPlayerIDs))
 
 	// A failed update is not survivable by skipping the player: the match is
 	// already closed by the time we get here, so half-applied ratings can never
 	// be replayed. Collect every failure and report it instead of returning nil.
 	var updateErrs []error
 
-	for _, team := range teams {
-		awarded := 0
-		for _, pid := range team.playerIDs {
-			name := names[pid]
-			bonus := sideMedalBonus(name, team.won, mvpName, svpName)
-			if bonus != 0 {
-				// One medal per side. Two players sharing a nick would otherwise
-				// both collect it, and the pair of them would quietly out-earn
-				// the actual awardee.
-				if awarded > 0 {
-					s.logger.Warn("elo: match #%d — %q matches an already awarded medal, skipping the duplicate",
-						matchID, name)
-					bonus = 0
-				} else {
-					awarded++
-					s.logger.Info("elo: medal bonus %+d for %s (ID: %d)", bonus, name, pid)
-				}
-			}
-
-			newMMR := domain.ClampMMR(mmrs[pid] + team.delta + bonus)
-			// matchID goes with the change so a player can see which match cost
-			// or earned them the points, and so a replay is recognised as one.
-			if err := s.lobbyMatch.UpdatePlayerMMR(ctx, pid, newMMR, matchID); err != nil {
-				s.logger.Error("elo: failed to update MMR for player %d: %v", pid, err)
-				updateErrs = append(updateErrs, fmt.Errorf("player %d: %w", pid, err))
-				continue
-			}
-			newMMRs[pid] = newMMR
+	for _, pid := range allPlayerIDs {
+		bd, ok := breakdowns[pid]
+		if !ok {
+			continue
 		}
+		if bd.MedalBonus != 0 {
+			s.logger.Info("elo: medal bonus %+d for %s (ID: %d)", bd.MedalBonus, names[pid], pid)
+		}
+		// matchID goes with the change so a player can see which match cost
+		// or earned them the points, and so a replay is recognised as one.
+		if err := s.lobbyMatch.UpdatePlayerMMR(ctx, pid, bd.NewMMR, matchID); err != nil {
+			s.logger.Error("elo: failed to update MMR for player %d: %v", pid, err)
+			updateErrs = append(updateErrs, fmt.Errorf("player %d: %w", pid, err))
+			continue
+		}
+		newMMRs[pid] = bd.NewMMR
 	}
 
 	// Detect tier changes
@@ -177,6 +204,106 @@ func (s *EloService) ProcessMatchResult(ctx context.Context, matchID int, winner
 			matchID, len(newMMRs), len(allPlayerIDs), errors.Join(updateErrs...))
 	}
 	return newMMRs, tierChanges, nil
+}
+
+func computeMatchBreakdowns(
+	match *models.LobbyMatch,
+	mmrs map[int]int,
+	names map[int]string,
+	winner string,
+	mvpPlayerID, svpPlayerID int,
+	mvpName, svpName string,
+	kdaByPlayer map[int]domain.PlayerKDA,
+	logger Logger,
+) (map[int]MatchMMRBreakdown, float64, float64, float64) {
+	teamAMMRs := extractMMRs(match.TeamAIDs, mmrs)
+	teamBMMRs := extractMMRs(match.TeamBIDs, mmrs)
+
+	avgMMRTeamA := domain.CalculateAverageMMR(teamAMMRs)
+	avgMMRTeamB := domain.CalculateAverageMMR(teamBMMRs)
+
+	delta := domain.CalculateEloShift(avgMMRTeamA, avgMMRTeamB, winner)
+	deltaA, deltaB := teamDeltas(delta)
+
+	teams := []struct {
+		playerIDs []int
+		delta     int
+		won       bool
+	}{
+		{playerIDs: match.TeamAIDs, delta: deltaA, won: winner == domain.TeamA},
+		{playerIDs: match.TeamBIDs, delta: deltaB, won: winner == domain.TeamB},
+	}
+
+	breakdowns := make(map[int]MatchMMRBreakdown, len(match.TeamAIDs)+len(match.TeamBIDs))
+
+	for _, team := range teams {
+		var kdaMods map[int]int
+		if len(kdaByPlayer) > 0 && team.delta != 0 {
+			teamKDAs := make([]domain.PlayerKDA, 0, len(team.playerIDs))
+			for _, pid := range team.playerIDs {
+				if k, ok := kdaByPlayer[pid]; ok {
+					k.PlayerID = pid
+					teamKDAs = append(teamKDAs, k)
+				} else {
+					teamKDAs = append(teamKDAs, domain.PlayerKDA{PlayerID: pid})
+				}
+			}
+			kdaMods = domain.CalculateTeamKDAModifiers(teamKDAs, team.delta)
+		}
+
+		awarded := 0
+		for _, pid := range team.playerIDs {
+			name := names[pid]
+			bonus := 0
+			if winner == domain.TeamA || winner == domain.TeamB {
+				switch {
+				case team.won && mvpPlayerID > 0:
+					if pid == mvpPlayerID && awarded == 0 {
+						bonus = mvpBonusMMR
+						awarded++
+					}
+				case !team.won && svpPlayerID > 0:
+					if pid == svpPlayerID && awarded == 0 {
+						bonus = svpMitigationMMR
+						awarded++
+					}
+				default:
+					b := sideMedalBonus(name, team.won, mvpName, svpName)
+					if b != 0 {
+						if awarded > 0 {
+							if logger != nil {
+								logger.Warn("elo: match #%d — %q matches an already awarded medal, skipping the duplicate",
+									match.ID, name)
+							}
+						} else {
+							bonus = b
+							awarded++
+						}
+					}
+				}
+			}
+
+			kdaMod := kdaMods[pid]
+			totalDelta := 0
+			if team.delta != 0 {
+				totalDelta = domain.ApplyMatchDelta(team.delta, kdaMod, bonus, team.won)
+			}
+			oldMMR := mmrs[pid]
+			newMMR := domain.ClampMMR(oldMMR + totalDelta)
+
+			breakdowns[pid] = MatchMMRBreakdown{
+				PlayerID:   pid,
+				OldMMR:     oldMMR,
+				BaseDelta:  team.delta,
+				KDAMod:     kdaMod,
+				MedalBonus: bonus,
+				TotalDelta: totalDelta,
+				NewMMR:     newMMR,
+			}
+		}
+	}
+
+	return breakdowns, avgMMRTeamA, avgMMRTeamB, delta
 }
 
 // SyncTierRoles updates Discord tier roles for all players affected by an MMR

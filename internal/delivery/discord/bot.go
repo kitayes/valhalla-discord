@@ -58,9 +58,10 @@ type Bot struct {
 
 	// discordgo dispatches handlers concurrently, so the caches are guarded.
 	cacheMu           sync.RWMutex
-	threadPlayerCache map[string]cachedThread // threadID -> player names
-	matchPlayerCache  map[int]cachedMatch     // matchID -> player IDs (for requeue)
-	clanCheckCache    map[string]clanVerdict  // userID -> last applied clan verdict
+	threadPlayerCache map[string]cachedThread          // threadID -> player names
+	matchPlayerCache  map[int]cachedMatch              // matchID -> player IDs (for requeue)
+	clanCheckCache    map[string]clanVerdict           // userID -> last applied clan verdict
+	pendingReviews    map[int]*pendingScoreboardReview // matchID -> awaiting referee confirmation
 }
 
 // cachedThread and cachedMatch carry an insertion time so entries can be evicted
@@ -102,6 +103,7 @@ func NewBot(cfg *config.Config, services *application.Service, logger applicatio
 		threadPlayerCache: make(map[string]cachedThread),
 		matchPlayerCache:  make(map[int]cachedMatch),
 		clanCheckCache:    make(map[string]clanVerdict),
+		pendingReviews:    make(map[int]*pendingScoreboardReview),
 	}
 }
 
@@ -207,6 +209,9 @@ func (b *Bot) Init() error {
 
 	// Register match button handlers (Team A WIN / Team B WIN)
 	b.RegisterMatchHandlers()
+
+	// Register scoreboard screenshot review handlers (Confirm / Flip / Edit / Assign)
+	b.RegisterScoreboardReviewHandlers()
 
 	// Register requeue button handler (Встать в очередь лобби)
 	b.RegisterRequeueHandler()
@@ -584,6 +589,11 @@ func (b *Bot) evictStaleCachesLocked(now time.Time) {
 	for id, entry := range b.matchPlayerCache {
 		if now.Sub(entry.at) > matchCacheTTL {
 			delete(b.matchPlayerCache, id)
+		}
+	}
+	for id, entry := range b.pendingReviews {
+		if now.Sub(entry.at) > matchCacheTTL {
+			delete(b.pendingReviews, id)
 		}
 	}
 }
