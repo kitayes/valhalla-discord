@@ -5,7 +5,7 @@ from typing import Optional
 
 import cv2
 import numpy as np
-from rapidocr_onnxruntime import RapidOCR
+from rapidocr import LangRec, ModelType, OCRVersion, RapidOCR
 
 from app.parser import Box, kda_crop_box, parse_scoreboard
 
@@ -18,7 +18,14 @@ def get_ocr() -> RapidOCR:
     if _ocr_instance is None:
         with _ocr_lock:
             if _ocr_instance is None:
-                _ocr_instance = RapidOCR()
+                _ocr_instance = RapidOCR(
+                    params={
+                        "Rec.ocr_version": OCRVersion.PPOCRV5,
+                        "Rec.lang_type": LangRec.ESLAV,
+                        "Rec.model_type": ModelType.MOBILE,
+                        "Det.unclip_ratio": 1.35,
+                    }
+                )
     return _ocr_instance
 
 
@@ -50,14 +57,18 @@ def detect_header_winner_hint(img_bgr: np.ndarray) -> Optional[str]:
     return None
 
 
-def _rapidocr_to_boxes(raw_result, offset_x: float = 0.0, offset_y: float = 0.0, scale: float = 1.0) -> list[Box]:
+def _rapidocr_to_boxes(
+    ocr_output, offset_x: float = 0.0, offset_y: float = 0.0, scale: float = 1.0
+) -> list[Box]:
     boxes: list[Box] = []
-    if not raw_result:
+    if (
+        ocr_output is None
+        or ocr_output.boxes is None
+        or ocr_output.txts is None
+        or ocr_output.scores is None
+    ):
         return boxes
-    for item in raw_result:
-        if not item or len(item) < 3:
-            continue
-        quad, text, score = item[0], item[1], float(item[2])
+    for quad, text, score in zip(ocr_output.boxes, ocr_output.txts, ocr_output.scores):
         xs = [float(pt[0]) / scale + offset_x for pt in quad]
         ys = [float(pt[1]) / scale + offset_y for pt in quad]
         boxes.append(
@@ -67,7 +78,7 @@ def _rapidocr_to_boxes(raw_result, offset_x: float = 0.0, offset_y: float = 0.0,
                 x2=max(xs),
                 y2=max(ys),
                 text=str(text),
-                score=score,
+                score=float(score),
             )
         )
     return boxes
@@ -86,7 +97,7 @@ def analyze_image(
     height, width = img_bgr.shape[:2]
     ocr = get_ocr()
 
-    pass1_raw, _ = ocr(img_bgr)
+    pass1_raw = ocr(img_bgr)
     boxes = _rapidocr_to_boxes(pass1_raw)
     hint = detect_header_winner_hint(img_bgr)
     parsed = parse_scoreboard(
@@ -103,7 +114,7 @@ def analyze_image(
     re_ocr_needed = [
         meta
         for meta in parsed.get("_row_meta", [])
-        if not meta["kda_found"] or meta["kda_min_score"] < 0.80
+        if not meta["kda_found"] or meta["kda_min_score"] < 0.78
     ]
     if re_ocr_needed:
         for meta in re_ocr_needed:
@@ -114,7 +125,7 @@ def analyze_image(
             if crop.size == 0:
                 continue
             enhanced = preprocess_kda_crop(crop)
-            pass2_raw, _ = ocr(enhanced)
+            pass2_raw = ocr(enhanced)
             crop_boxes = _rapidocr_to_boxes(
                 pass2_raw, offset_x=float(cx1), offset_y=float(cy1), scale=3.0
             )
@@ -124,10 +135,6 @@ def analyze_image(
 
         if extra_boxes:
             def in_reocr_crop(b: Box) -> bool:
-                txt = b.text.strip()
-                looks_numeric = any(ch.isdigit() for ch in txt) and len(txt) <= 10
-                if not looks_numeric:
-                    return False
                 return any(
                     rx1 <= b.cx <= rx2 and ry1 <= b.cy <= ry2
                     for rx1, ry1, rx2, ry2 in crop_rects
@@ -141,6 +148,13 @@ def analyze_image(
                 expected_players=expected_players,
                 header_side_hint=hint,
             )
+            # Keep Pass-1 player_name if Pass-2 accidentally clipped or dropped it.
+            orig_players = parsed.get("players", [])
+            new_players = reparsed.get("players", [])
+            if len(orig_players) == len(new_players):
+                for orig_p, new_p in zip(orig_players, new_players):
+                    if not new_p.get("player_name") and orig_p.get("player_name"):
+                        new_p["player_name"] = orig_p["player_name"]
             if len(reparsed.get("warnings", [])) <= len(parsed.get("warnings", [])):
                 parsed = reparsed
 

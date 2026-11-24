@@ -43,6 +43,7 @@ func TestIntegrationMigrationsFromScratch(t *testing.T) {
 		"telegram_match_reports",
 		"telegram_bracket_matches",
 		"telegram_match_desks",
+		"player_aliases",
 	} {
 		var exists bool
 		if err := db.QueryRow(`SELECT to_regclass('public.' || $1) IS NOT NULL`, table).Scan(&exists); err != nil {
@@ -57,6 +58,8 @@ func TestIntegrationMigrationsFromScratch(t *testing.T) {
 		"telegram_teams":           {"status", "challonge_participant_id"},
 		"telegram_match_reports":   {"bracket_match_id", "synced_at"},
 		"telegram_bracket_matches": {"challonge_match_id", "both_notified"},
+		"matches":                  {"lobby_match_id"},
+		"player_aliases":           {"player_id", "alias", "source"},
 	} {
 		for _, column := range columns {
 			var exists bool

@@ -1492,3 +1492,128 @@ func TestIntegrationIsInActiveMatch(t *testing.T) {
 		t.Errorf("after the match finished: IsInActiveMatch = (%v, %v), want (false, nil)", got, err)
 	}
 }
+
+func TestIntegrationRosterScoreboardAndAliases(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	matchRepo := newMatchRepo(t, db)
+	lobby := NewLobbyMatchPostgres(db)
+
+	pA, _ := seedBettor(t, db, matchRepo, 0)
+	pB, _ := seedBettor(t, db, matchRepo, 0)
+
+	pAName, err := matchRepo.GetPlayerNameByID(ctx, pA)
+	if err != nil {
+		t.Fatalf("GetPlayerNameByID(pA): %v", err)
+	}
+	pBName, err := matchRepo.GetPlayerNameByID(ctx, pB)
+	if err != nil {
+		t.Fatalf("GetPlayerNameByID(pB): %v", err)
+	}
+
+	lobbyMatchID, err := lobby.Create(ctx, models.CreateLobbyMatchRequest{
+		GuildID:    "itest-roster",
+		CaptainAID: pA,
+		CaptainBID: pB,
+		TeamAIDs:   []int{pA},
+		TeamBIDs:   []int{pB},
+	})
+	if err != nil {
+		t.Fatalf("lobby.Create: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM lobby_matches WHERE id = $1`, lobbyMatchID) })
+
+	smurfName := uniqueName(t, "smurf-ghost")
+	hash1 := fmt.Sprintf("hash-r1-%d", time.Now().UnixNano())
+	sig1 := fmt.Sprintf("sig-r1-%d", time.Now().UnixNano())
+
+	firstMatchID, err := matchRepo.Create(ctx, models.Match{
+		LobbyMatchID:   &lobbyMatchID,
+		FileHash:       hash1,
+		MatchSignature: sig1,
+		MVP:            pAName,
+		SVP:            pBName,
+		Players: []models.PlayerResult{
+			{PlayerID: pA, PlayerName: smurfName, Result: "WIN", Kills: 10, Deaths: 1, Assists: 4},
+			{PlayerID: pB, PlayerName: pBName, Result: "LOSE", Kills: 1, Deaths: 10, Assists: 0},
+		},
+	})
+	if err != nil {
+		t.Fatalf("matchRepo.Create: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM matches WHERE id = $1`, firstMatchID) })
+
+	var storedLobbyID sql.NullInt64
+	if err := db.QueryRow(`SELECT lobby_match_id FROM matches WHERE id = $1`, firstMatchID).Scan(&storedLobbyID); err != nil {
+		t.Fatalf("select lobby_match_id: %v", err)
+	}
+	if !storedLobbyID.Valid || int(storedLobbyID.Int64) != lobbyMatchID {
+		t.Errorf("stored lobby_match_id = %+v, want %d", storedLobbyID, lobbyMatchID)
+	}
+
+	// Pre-resolved PlayerID must prevent EnsurePlayerExists from spawning a phantom player row.
+	if _, _, err := matchRepo.FindPlayerByExactName(ctx, smurfName); !errors.Is(err, domain.ErrPlayerNotFound) {
+		t.Errorf("FindPlayerByExactName(%q) = %v, want ErrPlayerNotFound (no phantom player)", smurfName, err)
+	}
+
+	// Unique partial index idx_matches_lobby_match_id blocks duplicate active scoreboards for the same lobby match.
+	hash2 := fmt.Sprintf("hash-r2-%d", time.Now().UnixNano())
+	sig2 := fmt.Sprintf("sig-r2-%d", time.Now().UnixNano())
+	if dupID, err := matchRepo.Create(ctx, models.Match{
+		LobbyMatchID:   &lobbyMatchID,
+		FileHash:       hash2,
+		MatchSignature: sig2,
+		Players: []models.PlayerResult{
+			{PlayerID: pA, PlayerName: pAName, Result: "WIN", Kills: 8, Deaths: 2, Assists: 3},
+			{PlayerID: pB, PlayerName: pBName, Result: "LOSE", Kills: 2, Deaths: 8, Assists: 1},
+		},
+	}); err == nil {
+		t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM matches WHERE id = $1`, dupID) })
+		t.Fatal("duplicate Create with same active lobby_match_id succeeded, want unique constraint error")
+	}
+
+	// Soft-deleting the first match frees the partial unique index for a replacement scoreboard.
+	if err := matchRepo.Delete(ctx, firstMatchID); err != nil {
+		t.Fatalf("Delete(firstMatchID): %v", err)
+	}
+	hash3 := fmt.Sprintf("hash-r3-%d", time.Now().UnixNano())
+	sig3 := fmt.Sprintf("sig-r3-%d", time.Now().UnixNano())
+	secondMatchID, err := matchRepo.Create(ctx, models.Match{
+		LobbyMatchID:   &lobbyMatchID,
+		FileHash:       hash3,
+		MatchSignature: sig3,
+		Players: []models.PlayerResult{
+			{PlayerID: pA, PlayerName: pAName, Result: "WIN", Kills: 9, Deaths: 1, Assists: 5},
+			{PlayerID: pB, PlayerName: pBName, Result: "LOSE", Kills: 1, Deaths: 9, Assists: 0},
+		},
+	})
+	if err != nil {
+		t.Fatalf("replacement Create after soft delete failed: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM matches WHERE id = $1`, secondMatchID) })
+
+	// Alias learning and poisoning protection.
+	freeAlias := uniqueName(t, "free-alias")
+	if err := matchRepo.LearnAlias(ctx, pA, freeAlias, "elimination"); err != nil {
+		t.Fatalf("LearnAlias(freeAlias): %v", err)
+	}
+	// Poisoning guard 1: cannot learn pB's canonical players.name as an alias for pA (even with case/spaces).
+	if err := matchRepo.LearnAlias(ctx, pA, "  "+strings.ToUpper(pBName)+"  ", "referee"); err != nil {
+		t.Fatalf("LearnAlias(canonical of pB): %v", err)
+	}
+	// Poisoning guard 2: pB cannot steal pA's already-learned alias (case/whitespace normalized unique index).
+	if err := matchRepo.LearnAlias(ctx, pB, "  "+strings.ToUpper(freeAlias)+"  ", "referee"); err != nil {
+		t.Fatalf("LearnAlias(steal freeAlias): %v", err)
+	}
+
+	aliases, err := matchRepo.GetAliasesForPlayers(ctx, []int{pA, pB})
+	if err != nil {
+		t.Fatalf("GetAliasesForPlayers: %v", err)
+	}
+	if len(aliases[pA]) != 1 || aliases[pA][0] != freeAlias {
+		t.Errorf("aliases[pA] = %v, want [%q]", aliases[pA], freeAlias)
+	}
+	if len(aliases[pB]) != 0 {
+		t.Errorf("aliases[pB] = %v, want empty (stolen alias must be ignored)", aliases[pB])
+	}
+}

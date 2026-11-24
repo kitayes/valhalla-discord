@@ -304,6 +304,7 @@ func TestSyntheticTournamentBotStartup(t *testing.T) {
 		cfg := config.Config{
 			DiscordToken:    "dummy-dc",
 			GuildID:         "dummy-guild",
+			OCRServiceURL:   "http://ocr:8000",
 			GeminiKey:       "dummy-gemini",
 			AdminUserIDs:    []string{"admin1"},
 			TelegramToken:   "dummy-tg",

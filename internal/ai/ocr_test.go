@@ -6,6 +6,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -102,4 +105,48 @@ func TestOCRClientErrors(t *testing.T) {
 			t.Errorf("err = %v, want json error", err)
 		}
 	})
+}
+
+func TestOCRClientLiveContainer(t *testing.T) {
+	ocrURL := os.Getenv("OCR_E2E_URL")
+	if ocrURL == "" {
+		t.Skip("OCR_E2E_URL is not set")
+	}
+
+	tmpPNG := filepath.Join(t.TempDir(), "en_victory.png")
+	cmd := exec.CommandContext(context.Background(), "python3", "../../ocr/tests/e2e_synthetic_render.py", "--save-en", tmpPNG)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("render synthetic PNG failed: %v\n%s", err, string(out))
+	}
+
+	imgBytes, err := os.ReadFile(tmpPNG)
+	if err != nil {
+		t.Fatalf("read rendered PNG: %v", err)
+	}
+
+	expected := []string{"Bjorn", "Thorin", "Freya", "Arthas", "Kael", "Gunnar", "Loki", "Astrid", "Soren", "Ragnar"}
+	client := NewOCRClient(ocrURL, 60*time.Second)
+	match, err := client.ParseImageWithPlayers(context.Background(), imgBytes, expected)
+	if err != nil {
+		t.Fatalf("ParseImageWithPlayers against live container: %v", err)
+	}
+
+	if len(match.Players) != 10 {
+		t.Fatalf("len(Players) = %d, want 10 (warnings=%v)", len(match.Players), match.Warnings)
+	}
+	if match.HeaderWinKills == nil || *match.HeaderWinKills != 20 {
+		t.Errorf("HeaderWinKills = %v, want 20", match.HeaderWinKills)
+	}
+	if match.HeaderLoseKills == nil || *match.HeaderLoseKills != 12 {
+		t.Errorf("HeaderLoseKills = %v, want 12", match.HeaderLoseKills)
+	}
+	if !strings.EqualFold(match.MVP, "Bjorn") {
+		t.Errorf("MVP = %q, want Bjorn", match.MVP)
+	}
+	if !strings.EqualFold(match.SVP, "Gunnar") {
+		t.Errorf("SVP = %q, want Gunnar", match.SVP)
+	}
+	if len(match.Warnings) != 0 {
+		t.Errorf("expected 0 warnings on clean synthetic scoreboard, got: %v", match.Warnings)
+	}
 }

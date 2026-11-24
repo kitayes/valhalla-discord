@@ -38,4 +38,19 @@ func TestSimilarityScoreRunesAndCyrillic(t *testing.T) {
 	if got := SimilarityScore("", "abc"); got != 0.0 {
 		t.Errorf("empty vs non-empty = %v, want 0.0", got)
 	}
+
+	for _, pair := range [][2]string{
+		{"Егор", "Erop"},
+		{"Тор", "Top"},
+		{"Виктор", "BuKTop"},
+		{"Глеб", "rne6"},
+	} {
+		sim := SimilarityScore(pair[0], pair[1])
+		if sim < 0.90 || sim >= 1.0 {
+			t.Errorf("homoglyph similarity(%q, %q) = %v, want in [0.90, 1.0)", pair[0], pair[1], sim)
+		}
+	}
+	if sim := SimilarityScore("Алиса", "Annca"); sim < 0.72 {
+		t.Errorf("homoglyph+1typo similarity(Алиса, Annca) = %v, want >= 0.72", sim)
+	}
 }

@@ -59,7 +59,57 @@ func SimilarityScore(a, b string) float64 {
 		maxLen = len(rb)
 	}
 
-	return 1.0 - float64(distance)/float64(maxLen)
+	rawSim := 1.0 - float64(distance)/float64(maxLen)
+
+	ha := foldOCRHomoglyphs(ra)
+	hb := foldOCRHomoglyphs(rb)
+	homoglyphSim := (1.0 - float64(levenshteinDistanceRunes(ha, hb))/float64(maxLen)) * 0.95
+
+	if homoglyphSim > rawSim {
+		return homoglyphSim
+	}
+	return rawSim
+}
+
+var ocrHomoglyphs = map[rune]rune{
+	'а': 'a',
+	'б': 'b',
+	'6': 'b',
+	'в': 'b',
+	'г': 'r',
+	'д': 'd',
+	'е': 'e',
+	'ё': 'e',
+	'и': 'u',
+	'й': 'u',
+	'к': 'k',
+	'л': 'n',
+	'м': 'm',
+	'н': 'h',
+	'о': 'o',
+	'п': 'n',
+	'р': 'p',
+	'с': 'c',
+	'т': 't',
+	'у': 'y',
+	'ф': 'o',
+	'х': 'x',
+	'ь': 'b',
+	'ъ': 'b',
+	'ы': 'b',
+	'я': 'r',
+}
+
+func foldOCRHomoglyphs(in []rune) []rune {
+	out := make([]rune, len(in))
+	for i, r := range in {
+		if mapped, ok := ocrHomoglyphs[r]; ok {
+			out[i] = mapped
+		} else {
+			out[i] = r
+		}
+	}
+	return out
 }
 
 func levenshteinDistanceRunes(a, b []rune) int {

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import re
 from statistics import median
 from typing import Iterable, Optional
+import unicodedata
 
 VICTORY_KEYWORDS = ("VICTORY", "ПОБЕДА")
 DEFEAT_KEYWORDS = ("DEFEAT", "ПОРАЖЕНИЕ")
@@ -37,8 +38,14 @@ _GOLD_LONG_RE = re.compile(r"^\s*\d{1,2}[.,]\d{3}\s*$")
 _LEVEL_RE = re.compile(r"^(?:lv\.?\s*|ур\.?\s*)?\d{1,2}$", re.IGNORECASE)
 _RATING_RE = re.compile(r"^\s*(\d{1,2})[.,](\d)\s*$")
 _INT_RE = re.compile(r"^\s*(\d{1,4})\s*$")
-_MEDAL_MVP_RE = re.compile(r"\bMVP\b", re.IGNORECASE)
-_MEDAL_SVP_RE = re.compile(r"\bSVPG?\b", re.IGNORECASE)
+_MEDAL_MVP_RE = re.compile(r"(?<![A-Za-zА-Яа-яЁё])MVP(?![A-Za-zА-Яа-яЁё])", re.IGNORECASE)
+_MEDAL_SVP_RE = re.compile(r"(?<![A-Za-zА-Яа-яЁё])SVPG?(?![A-Za-zА-Яа-яЁё])", re.IGNORECASE)
+_GLUED_RATING_GOLD_RE = re.compile(r"(\d{1,2}[.,]\d)(?=\d+(?:[.,]\d+)?[kк])", re.IGNORECASE)
+_GLUED_BADGE_RE = re.compile(r"(?<=\d)(SVPG?|MVP)|(SVPG?|MVP)(?=\d)", re.IGNORECASE)
+_STAT_HINT_TOKEN_RE = re.compile(
+    r"^(?:\d{1,4}|\d{1,2}[.,]\d|\d+(?:[.,]\d+)?[kк]|\d{1,2}[.,]\d{3}|\d{1,2}/\d{1,2}/\d{1,2}|MVP|SVPG?)$",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -67,7 +74,12 @@ def parse_scoreboard(
     header_side_hint: Optional[str] = None,
 ) -> dict:
     """Parse RapidOCR boxes from an MLBB scoreboard into structured match data."""
-    box_list = [b for b in boxes if b.text and b.text.strip()]
+    box_list: list[Box] = []
+    for b in boxes:
+        norm_text = unicodedata.normalize("NFKC", b.text or "").strip()
+        if norm_text:
+            box_list.append(Box(b.x1, b.y1, b.x2, b.y2, norm_text, b.score))
+
     warnings: list[str] = []
 
     if width <= 0 or height <= 0:
@@ -107,10 +119,8 @@ def parse_scoreboard(
 
     def process_side(rows: list[list[Box]], is_left: bool) -> None:
         side_result = "WIN" if (is_left == left_won) else "LOSE"
-        for idx, row_boxes in enumerate(rows):
+        for row_boxes in rows:
             row_data, meta = _parse_row(row_boxes, is_left, width, height, side_result)
-            row_data["_row_idx"] = len(parsed_rows)
-            meta["row_idx"] = len(parsed_rows)
             parsed_rows.append(row_data)
             row_meta.append(meta)
 
@@ -124,9 +134,6 @@ def parse_scoreboard(
 
     mvp_name = _pick_medal_winner(parsed_rows, "WIN", mvp_candidates)
     svp_name = _pick_medal_winner(parsed_rows, "LOSE", svp_candidates)
-
-    for r in parsed_rows:
-        r.pop("_row_idx", None)
 
     if len(parsed_rows) != 10:
         warnings.append(f"распознано {len(parsed_rows)} строк игроков вместо 10")
@@ -161,11 +168,11 @@ def kda_crop_box(is_left: bool, y1: float, y2: float, width: int, height: int) -
     if cy2 <= cy1:
         cy2 = min(height, cy1 + max(16, int(0.06 * height)))
     if is_left:
-        cx1 = int(0.14 * width)
-        cx2 = int(0.49 * width)
+        cx1 = int(0.13 * width)
+        cx2 = int(0.495 * width)
     else:
-        cx1 = int(0.51 * width)
-        cx2 = int(0.86 * width)
+        cx1 = int(0.505 * width)
+        cx2 = int(0.87 * width)
     return (cx1, cy1, cx2, cy2)
 
 
@@ -274,7 +281,6 @@ def _cluster_five_rows(boxes: list[Box], height: int) -> list[list[Box]]:
         else:
             clusters.append([b])
 
-    # Merge overly close clusters when more than 5 exist.
     while len(clusters) > 5:
         centers = [median(item.cy for item in cl) for cl in clusters]
         min_gap = float("inf")
@@ -285,7 +291,6 @@ def _cluster_five_rows(boxes: list[Box], height: int) -> list[list[Box]]:
                 min_gap = gap
                 merge_idx = idx
         if min_gap > 0.08 * height and len(clusters) > 5:
-            # Drop the sparsest outlier cluster (e.g. footer noise)
             drop_idx = min(
                 range(len(clusters)),
                 key=lambda i: (len(clusters[i]), sum(x.score for x in clusters[i])),
@@ -314,9 +319,56 @@ def _cluster_five_rows(boxes: list[Box], height: int) -> list[list[Box]]:
     return clusters[:5]
 
 
+def _expand_row_boxes(row_boxes: list[Box]) -> list[Box]:
+    """Split boxes where OCR glued stats/gold/badges together, and rejoin split decimals."""
+    rejoined: list[Box] = []
+    i = 0
+    while i < len(row_boxes):
+        cur = row_boxes[i]
+        if (
+            i + 1 < len(row_boxes)
+            and re.match(r"^\d{1,2}\.$", cur.text)
+            and re.match(r"^\.?\d$", row_boxes[i + 1].text)
+        ):
+            nxt = row_boxes[i + 1]
+            combined = cur.text + nxt.text.lstrip(".")
+            rejoined.append(
+                Box(cur.x1, min(cur.y1, nxt.y1), nxt.x2, max(cur.y2, nxt.y2), combined, min(cur.score, nxt.score))
+            )
+            i += 2
+            continue
+        rejoined.append(cur)
+        i += 1
+
+    expanded: list[Box] = []
+    for b in rejoined:
+        txt = _GLUED_BADGE_RE.sub(lambda m: f" {m.group(0)} ", b.text)
+        txt = _GLUED_RATING_GOLD_RE.sub(r"\1 ", txt)
+        parts = [p for p in txt.split() if p]
+        if len(parts) <= 1:
+            expanded.append(Box(b.x1, b.y1, b.x2, b.y2, txt.strip() or b.text, b.score))
+            continue
+
+        if not any(_STAT_HINT_TOKEN_RE.match(p) for p in parts):
+            expanded.append(b)
+            continue
+
+        span = max(b.x2 - b.x1, float(len(parts)))
+        total_chars = max(sum(len(p) for p in parts), 1)
+        cursor = b.x1
+        for p in parts:
+            w = span * (len(p) / total_chars)
+            expanded.append(Box(cursor, b.y1, cursor + w, b.y2, p, b.score))
+            cursor += w
+
+    return expanded
+
+
 def _parse_row(
-    row_boxes: list[Box], is_left: bool, width: int, height: int, side_result: str
+    raw_row_boxes: list[Box], is_left: bool, width: int, height: int, side_result: str
 ) -> tuple[dict, dict]:
+    row_boxes = _expand_row_boxes(raw_row_boxes)
+
     has_mvp = False
     has_svp = False
     rating = 0.0
@@ -370,7 +422,6 @@ def _parse_row(
                 consumed_indices.add(idx)
                 break
 
-    # Filter gold and hero-level portrait badges before looking for split integer K/D/A boxes.
     int_candidates: list[tuple[int, int, Box]] = []
     for idx, b in enumerate(row_boxes):
         if idx in consumed_indices:
@@ -383,7 +434,6 @@ def _parse_row(
             consumed_indices.add(idx)
             continue
 
-        # Rating float like "10.4" or "8,7"
         m_rat = _RATING_RE.match(txt)
         if m_rat and rating == 0.0:
             val = float(f"{m_rat.group(1)}.{m_rat.group(2)}")
@@ -392,7 +442,6 @@ def _parse_row(
                 consumed_indices.add(idx)
                 continue
 
-        # Explicit Lv.15 / Ур.15
         if _LEVEL_RE.match(txt) and not _INT_RE.match(txt):
             consumed_indices.add(idx)
             continue
@@ -401,9 +450,8 @@ def _parse_row(
         if m_int:
             val = int(m_int.group(1))
             if val >= 100:
-                consumed_indices.add(idx)  # Gold without 'k'
+                consumed_indices.add(idx)
                 continue
-            # Hero level inside outer portrait edge (<=15)
             in_portrait = (b.cx < 0.14 * width) if is_left else (b.cx > 0.86 * width)
             if in_portrait and val <= 15:
                 consumed_indices.add(idx)
@@ -412,7 +460,6 @@ def _parse_row(
                 int_candidates.append((idx, val, b))
 
     if not kda_found and len(int_candidates) >= 3:
-        # Take the 3 closest-grouped integers in x-order.
         best_triplet = int_candidates[:3]
         if len(int_candidates) > 3:
             best_span = float("inf")
@@ -429,7 +476,6 @@ def _parse_row(
             kda_scores.append(b.score)
 
     name_parts: list[str] = []
-    name_scores: list[float] = []
     for idx, b in enumerate(row_boxes):
         if idx in consumed_indices:
             continue
@@ -437,18 +483,17 @@ def _parse_row(
         if not txt:
             continue
         name_parts.append(txt)
-        name_scores.append(b.score)
 
     player_name = " ".join(name_parts).strip()
-    all_scores = [b.score for b in row_boxes] if row_boxes else [0.0]
+    all_scores = [b.score for b in raw_row_boxes] if raw_row_boxes else [0.0]
     row_conf = sum(all_scores) / len(all_scores)
     if not kda_found:
         row_conf = min(row_conf, 0.4)
     elif kda_scores:
         row_conf = min(row_conf, min(kda_scores))
 
-    y1 = min((b.y1 for b in row_boxes), default=0.0)
-    y2 = max((b.y2 for b in row_boxes), default=float(height))
+    y1 = min((b.y1 for b in raw_row_boxes), default=0.0)
+    y2 = max((b.y2 for b in raw_row_boxes), default=float(height))
 
     row_dict = {
         "player_name": player_name,

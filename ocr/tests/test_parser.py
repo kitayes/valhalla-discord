@@ -154,6 +154,58 @@ class ParserTests(unittest.TestCase):
         self.assertTrue(0 <= cx1 < cx2 <= w)
         self.assertTrue(0 <= cy1 < cy2 <= h)
 
+    def test_glued_rapidocr_tokens_fullwidth_and_split_decimals(self):
+        w, h = 1920, 1080
+        boxes = [
+            Box(0.44 * w, 0.04 * h, 0.56 * w, 0.10 * h, "VICTORY", 0.99),
+            Box(0.42 * w, 0.12 * h, 0.45 * w, 0.16 * h, "16", 0.99),
+            Box(0.55 * w, 0.12 * h, 0.58 * w, 0.16 * h, "10", 0.99),
+            # Left row 0: glued gold+rating+MVP
+            Box(0.16 * w, 0.24 * h, 0.23 * w, 0.28 * h, "Bjorn", 0.99),
+            Box(0.27 * w, 0.24 * h, 0.29 * w, 0.28 * h, "8", 0.99),
+            Box(0.31 * w, 0.24 * h, 0.33 * w, 0.28 * h, "2", 0.99),
+            Box(0.35 * w, 0.24 * h, 0.37 * w, 0.28 * h, "6", 0.99),
+            Box(0.38 * w, 0.24 * h, 0.48 * w, 0.28 * h, "11.2k 11.4MVP", 0.97),
+            # Left row 1..4
+            *_make_row_boxes(0.38 * h, w, True, "Dark Knight", "split", 2, 2, 4, 8.2),
+            *_make_row_boxes(0.50 * h, w, True, "Freya", "split", 2, 3, 5, 7.9),
+            *_make_row_boxes(0.62 * h, w, True, "Arthas", "split", 2, 2, 6, 7.4),
+            *_make_row_boxes(0.74 * h, w, True, "Kael", "split", 2, 1, 7, 7.1),
+            # Right row 0: glued SVPG + rating + gold + K + D, plus separate A
+            Box(0.52 * w, 0.24 * h, 0.72 * w, 0.28 * h, "SVPG 8.9  10.1k   6  3", 0.87),
+            Box(0.73 * w, 0.24 * h, 0.75 * w, 0.28 * h, "4", 0.99),
+            Box(0.78 * w, 0.24 * h, 0.84 * w, 0.28 * h, "Gunnar", 0.99),
+            # Right row 1: fullwidth NFKC digit '２'
+            Box(0.54 * w, 0.36 * h, 0.63 * w, 0.40 * h, "5.87.4k", 0.99),
+            Box(0.65 * w, 0.36 * h, 0.67 * w, 0.40 * h, "２", 0.95),
+            Box(0.69 * w, 0.36 * h, 0.71 * w, 0.40 * h, "4", 0.98),
+            Box(0.73 * w, 0.36 * h, 0.75 * w, 0.40 * h, "5", 0.99),
+            Box(0.78 * w, 0.36 * h, 0.84 * w, 0.40 * h, "Loki", 0.99),
+            # Right row 2..4 (row 4 has split decimal rating "4." + ".9")
+            *_make_row_boxes(0.50 * h, w, False, "Astrid", "split", 1, 4, 3, 5.5),
+            *_make_row_boxes(0.62 * h, w, False, "Soren", "split", 1, 3, 2, 5.1),
+            Box(0.54 * w, 0.72 * h, 0.56 * w, 0.76 * h, "4.", 0.98),
+            Box(0.56 * w, 0.72 * h, 0.57 * w, 0.76 * h, ".9", 0.87),
+            Box(0.59 * w, 0.72 * h, 0.63 * w, 0.76 * h, "6.5k", 0.99),
+            Box(0.65 * w, 0.72 * h, 0.74 * w, 0.76 * h, "0/2/3", 0.99),
+            Box(0.78 * w, 0.72 * h, 0.84 * w, 0.76 * h, "Ragnar", 0.99),
+        ]
+
+        out = parse_scoreboard(boxes, w, h)
+        self.assertEqual(len(out["players"]), 10)
+        self.assertEqual(out["mvp"], "Bjorn")
+        self.assertEqual(out["svp"], "Gunnar")
+        self.assertEqual(out["players"][0]["player_name"], "Bjorn")
+        self.assertEqual(out["players"][0]["rating"], 11.4)
+        self.assertEqual(out["players"][1]["player_name"], "Dark Knight")
+        self.assertEqual(out["players"][5]["player_name"], "Gunnar")
+        self.assertEqual((out["players"][5]["kills"], out["players"][5]["deaths"], out["players"][5]["assists"]), (6, 3, 4))
+        self.assertEqual(out["players"][5]["rating"], 8.9)
+        self.assertEqual(out["players"][6]["kills"], 2)
+        self.assertEqual(out["players"][6]["rating"], 5.8)
+        self.assertEqual(out["players"][9]["rating"], 4.9)
+        self.assertEqual(out["warnings"], [])
+
 
 if __name__ == "__main__":
     unittest.main()
