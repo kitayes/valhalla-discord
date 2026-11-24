@@ -189,8 +189,15 @@ func TestOCRClientLiveRealDir(t *testing.T) {
 		if len(match.Warnings) != 0 {
 			t.Errorf("%s: unexpected warnings: %v", entry.Name(), match.Warnings)
 		}
-		t.Logf("%s: score=%v:%v mvp=%q svp=%q warnings=%v",
-			entry.Name(), match.HeaderWinKills, match.HeaderLoseKills, match.MVP, match.SVP, match.Warnings)
+		hw, hl := -1, -1
+		if match.HeaderWinKills != nil {
+			hw = *match.HeaderWinKills
+		}
+		if match.HeaderLoseKills != nil {
+			hl = *match.HeaderLoseKills
+		}
+		t.Logf("%s: score=%d:%d mvp=%q svp=%q warnings=%v",
+			entry.Name(), hw, hl, match.MVP, match.SVP, match.Warnings)
 	}
 	if checked == 0 {
 		t.Fatalf("no images found in %s", realDir)

@@ -63,12 +63,37 @@ func SimilarityScore(a, b string) float64 {
 
 	ha := foldOCRHomoglyphs(ra)
 	hb := foldOCRHomoglyphs(rb)
-	homoglyphSim := (1.0 - float64(levenshteinDistanceRunes(ha, hb))/float64(maxLen)) * 0.95
-
-	if homoglyphSim > rawSim {
-		return homoglyphSim
+	best := rawSim
+	if homoglyphSim := (1.0 - float64(levenshteinDistanceRunes(ha, hb))/float64(maxLen)) * 0.97; homoglyphSim > best {
+		best = homoglyphSim
 	}
-	return rawSim
+
+	// Squad tags and stylized spaced nicks ("APEX MIKAELO" vs "APEXMIKAELO",
+	// "E L I Z A" vs "OELIZA") often lose spaces in OCR.
+	sa := stripSpaceRunes(ha)
+	sb := stripSpaceRunes(hb)
+	if len(sa) > 0 && len(sb) > 0 && (len(sa) != len(ha) || len(sb) != len(hb)) {
+		sMax := max(len(sa), len(sb))
+		if spacelessSim := (1.0 - float64(levenshteinDistanceRunes(sa, sb))/float64(sMax)) * 0.94; spacelessSim > best {
+			best = spacelessSim
+		}
+	}
+
+	// Mixed CJK + Latin/Cyrillic nicks ("Fumetsu 不滅" vs "Fumetsu", "中國 Lens" vs "Lens"):
+	// ESLAV OCR reads only the Latin/Cyrillic part, so compare non-CJK runes when
+	// one side contains CJK and the remaining token has at least 3 runes.
+	if hasCJKRunes(ra) != hasCJKRunes(rb) {
+		ca := stripSpaceRunes(stripCJKRunes(ha))
+		cb := stripSpaceRunes(stripCJKRunes(hb))
+		if len(ca) >= 3 && len(cb) >= 3 {
+			cMax := max(len(ca), len(cb))
+			if cjkSim := (1.0 - float64(levenshteinDistanceRunes(ca, cb))/float64(cMax)) * 0.90; cjkSim > best {
+				best = cjkSim
+			}
+		}
+	}
+
+	return best
 }
 
 var ocrHomoglyphs = map[rune]rune{
@@ -94,6 +119,7 @@ var ocrHomoglyphs = map[rune]rune{
 	'у': 'y',
 	'ф': 'o',
 	'х': 'x',
+	'ч': '4',
 	'ь': 'b',
 	'ъ': 'b',
 	'ы': 'b',
@@ -116,6 +142,42 @@ var ocrHomoglyphs = map[rune]rune{
 	'і': 'i',
 	'ї': 'i',
 	'қ': 'k',
+}
+
+func stripSpaceRunes(in []rune) []rune {
+	out := make([]rune, 0, len(in))
+	for _, r := range in {
+		if !unicode.IsSpace(r) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func isCJKRune(r rune) bool {
+	return unicode.Is(unicode.Han, r) ||
+		unicode.Is(unicode.Hiragana, r) ||
+		unicode.Is(unicode.Katakana, r) ||
+		unicode.Is(unicode.Hangul, r)
+}
+
+func hasCJKRunes(in []rune) bool {
+	for _, r := range in {
+		if isCJKRune(r) {
+			return true
+		}
+	}
+	return false
+}
+
+func stripCJKRunes(in []rune) []rune {
+	out := make([]rune, 0, len(in))
+	for _, r := range in {
+		if !isCJKRune(r) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func foldOCRHomoglyphs(in []rune) []rune {

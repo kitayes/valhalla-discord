@@ -121,6 +121,26 @@ func (b *Bot) handleLobbyMatchScreenshot(
 		return
 	}
 
+	if prev := b.getPendingReview(lobbyMatch.ID); prev != nil {
+		prev.mu.Lock()
+		prevCh, prevMsg := prev.ChannelID, prev.MessageID
+		prev.mu.Unlock()
+		if prevCh != "" && prevMsg != "" {
+			superseded := "Превью заменено новым скриншотом."
+			emptyEmbeds := []*discordgo.MessageEmbed{}
+			emptyComps := []discordgo.MessageComponent{}
+			if _, editErr := s.ChannelMessageEditComplex(&discordgo.MessageEdit{
+				Channel:    prevCh,
+				ID:         prevMsg,
+				Content:    &superseded,
+				Embeds:     &emptyEmbeds,
+				Components: &emptyComps,
+			}); editErr != nil {
+				b.logger.Warn("scoreboard review: failed to supersede old preview %s in %s: %v", prevMsg, prevCh, editErr)
+			}
+		}
+	}
+
 	b.setPendingReview(lobbyMatch.ID, &pendingScoreboardReview{
 		LobbyMatch: lobbyMatch,
 		Pending:    pending,
@@ -309,6 +329,7 @@ func (b *Bot) handleScoreboardAssign(
 		})
 	}
 
+	application.ResolveRemainingEliminations(roster, res)
 	refreshMissingMedals(res)
 	application.RevalidateReview(roster, res)
 	breakdowns := b.previewBreakdowns(ctx, review.LobbyMatch, res)

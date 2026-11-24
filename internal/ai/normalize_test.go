@@ -63,10 +63,28 @@ func TestSimilarityScoreRunesAndCyrillic(t *testing.T) {
 		{"SHŌYA", "SHOYA"},
 		{"ковил emperor.", "ковил етрегог."},
 		{"LAVA GϟRL", "LAVA G4RL"},
+		{"Пучина", "Пу4иHa"},
+		{"APEX MIKAELO", "APEXMIKAELO"},
+		{"USNU Прекрасна.", "USNUПрекрасна."},
+		{"SK Ka1nTzy", "SKKa1nTzy"},
+		{"Fumetsu 不滅", "Fumetsu"},
+		{"GOA 簒奪者", "GOA"},
+		{"中國 Lens", "Lens"},
 	} {
 		sim := SimilarityScore(pair[0], pair[1])
 		if sim < 0.85 {
 			t.Errorf("stylized MLBB homoglyph similarity(%q, %q) = %v, want >= 0.85", pair[0], pair[1], sim)
+		}
+	}
+
+	for _, pair := range [][2]string{
+		{"ØMΞN", "OMN"},
+		{"♾️ E L I Z A", "OELIZA"},
+		{"Kz | cuce4ka", "%Kzcuce4ka"},
+	} {
+		sim := SimilarityScore(pair[0], pair[1])
+		if sim < 0.72 {
+			t.Errorf("noisy MLBB OCR similarity(%q, %q) = %v, want >= 0.72", pair[0], pair[1], sim)
 		}
 	}
 }

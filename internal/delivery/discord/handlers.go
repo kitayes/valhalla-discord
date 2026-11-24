@@ -497,7 +497,8 @@ func (b *Bot) handleScreenshots(ctx context.Context, s *discordgo.Session, m *di
 		filename := strings.ToLower(att.Filename)
 		if strings.HasSuffix(filename, ".png") ||
 			strings.HasSuffix(filename, ".jpg") ||
-			strings.HasSuffix(filename, ".jpeg") {
+			strings.HasSuffix(filename, ".jpeg") ||
+			strings.HasSuffix(filename, ".webp") {
 			imageAttachments = append(imageAttachments, att)
 		}
 	}

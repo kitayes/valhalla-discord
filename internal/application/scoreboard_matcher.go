@@ -194,6 +194,72 @@ func FlipReviewWinner(roster LobbyRoster, res *ScoreboardMatchResult) {
 	RevalidateReview(roster, res)
 }
 
+// ResolveRemainingEliminations binds any side that now has exactly one
+// unresolved row and one unassigned lobby player (for example, right after a
+// referee manually resolves the first of two unknown players on a team).
+func ResolveRemainingEliminations(roster LobbyRoster, res *ScoreboardMatchResult) {
+	if res == nil || res.Winner == "" {
+		return
+	}
+
+	var winTeam, loseTeam []RosterPlayer
+	if res.Winner == domain.TeamA {
+		winTeam = roster.TeamA
+		loseTeam = roster.TeamB
+	} else {
+		winTeam = roster.TeamB
+		loseTeam = roster.TeamA
+	}
+
+	allRoster := make([]RosterPlayer, 0, len(roster.TeamA)+len(roster.TeamB))
+	allRoster = append(allRoster, roster.TeamA...)
+	allRoster = append(allRoster, roster.TeamB...)
+
+	assignedIDs := make(map[int]bool, len(res.Rows))
+	for _, r := range res.Rows {
+		if r.PlayerID > 0 {
+			assignedIDs[r.PlayerID] = true
+		}
+	}
+
+	resolveSide := func(side string, team []RosterPlayer) {
+		var freeRowIndices []int
+		for idx, r := range res.Rows {
+			if r.Result == side && r.PlayerID <= 0 {
+				freeRowIndices = append(freeRowIndices, idx)
+			}
+		}
+		freePlayers := filterUnassigned(team, assignedIDs)
+		if len(freeRowIndices) != 1 || len(freePlayers) != 1 {
+			return
+		}
+		row := &res.Rows[freeRowIndices[0]]
+		player := freePlayers[0]
+		bindRow(row, player, "elimination")
+		assignedIDs[player.PlayerID] = true
+		if CanLearnAlias(row.OCRName, allRoster) {
+			alias := strings.TrimSpace(row.OCRName)
+			dup := false
+			for _, existing := range res.LearnedAliases {
+				if existing.PlayerID == player.PlayerID && strings.EqualFold(existing.Alias, alias) {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				res.LearnedAliases = append(res.LearnedAliases, LearnedAlias{
+					PlayerID: player.PlayerID,
+					Alias:    alias,
+					Source:   "elimination",
+				})
+			}
+		}
+	}
+
+	resolveSide("WIN", winTeam)
+	resolveSide("LOSE", loseTeam)
+}
+
 // RevalidateReview recomputes unresolved rows, unassigned players, and all
 // scoreboard + matching warnings after any referee edit.
 func RevalidateReview(roster LobbyRoster, res *ScoreboardMatchResult) {

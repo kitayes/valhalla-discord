@@ -226,3 +226,79 @@ func TestFlipReviewWinnerPreservesNameAlignmentWhenHeaderInverted(t *testing.T) 
 		t.Errorf("Bjorn row after flip = (id=%d, result=%s), want (1, WIN)", res.Rows[5].PlayerID, res.Rows[5].Result)
 	}
 }
+
+func TestResolveRemainingEliminationsAfterRefereeAssign(t *testing.T) {
+	roster := sampleRoster()
+	parsed := makeTenRowMatch(
+		[]string{"", "NewSmurf", "Freya", "Бьорн", "Kael"},
+		[]string{"Gunnar", "Loki", "Astrid", "Soren", "Ragnar"},
+	)
+
+	res := MatchScoreboardToLobby(roster, parsed)
+	if len(res.UnresolvedRows) != 2 {
+		t.Fatalf("initial UnresolvedRows = %v, want 2", res.UnresolvedRows)
+	}
+
+	// Referee manually assigns row 0 ("") -> Bjorn (ID 1).
+	res.Rows[0].PlayerID = 1
+	res.Rows[0].PlayerName = "Bjorn"
+	res.Rows[0].MatchMethod = "referee"
+
+	ResolveRemainingEliminations(roster, res)
+	RevalidateReview(roster, res)
+
+	if len(res.UnresolvedRows) != 0 {
+		t.Fatalf("after cascading elimination UnresolvedRows = %v, want empty", res.UnresolvedRows)
+	}
+	if res.Rows[1].PlayerID != 2 || res.Rows[1].MatchMethod != "elimination" {
+		t.Errorf("row 1 = (id=%d, method=%q), want (2/Thorin, elimination)", res.Rows[1].PlayerID, res.Rows[1].MatchMethod)
+	}
+	if len(res.LearnedAliases) != 1 || res.LearnedAliases[0].PlayerID != 2 || res.LearnedAliases[0].Alias != "NewSmurf" {
+		t.Errorf("LearnedAliases = %+v, want [{PlayerID:2 Alias:NewSmurf Source:elimination}]", res.LearnedAliases)
+	}
+}
+
+func TestMatchScoreboardToLobbyRealMLBBOCRNames(t *testing.T) {
+	// Real MLBB roster nicknames vs observed RapidOCR output (CJK, squashed tags, homoglyphs, empty symbols).
+	roster := LobbyRoster{
+		TeamA: []RosterPlayer{
+			{PlayerID: 1, Name: "★★★★★"},
+			{PlayerID: 2, Name: "APEX MIKAELO"},
+			{PlayerID: 3, Name: "Пучина"},
+			{PlayerID: 4, Name: "ковил emperor."},
+			{PlayerID: 5, Name: "Hɪᴋᴋᴀcent."},
+		},
+		TeamB: []RosterPlayer{
+			{PlayerID: 6, Name: "ØMΞN"},
+			{PlayerID: 7, Name: "Fumetsu 不滅"},
+			{PlayerID: 8, Name: "中國 Lens"},
+			{PlayerID: 9, Name: "USNU Прекрасна."},
+			{PlayerID: 10, Name: "♾️ E L I Z A"},
+		},
+	}
+
+	parsed := makeTenRowMatch(
+		[]string{"", "APEXMIKAELO", "Пу4иHa", "ковил етрегог.", "HIKKACent."},
+		[]string{"OMN", "Fumetsu", "Lens", "USNUПрекрасна.", "OELIZA"},
+	)
+
+	res := MatchScoreboardToLobby(roster, parsed)
+	if res.Winner != domain.TeamA {
+		t.Fatalf("Winner = %q, want Team A", res.Winner)
+	}
+	if len(res.UnresolvedRows) != 0 {
+		t.Fatalf("UnresolvedRows = %v, want 0 (rows=%+v)", res.UnresolvedRows, res.Rows)
+	}
+	for idx, wantID := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10} {
+		if res.Rows[idx].PlayerID != wantID {
+			t.Errorf("row %d (%q) -> PlayerID %d, want %d", idx, res.Rows[idx].OCRName, res.Rows[idx].PlayerID, wantID)
+		}
+	}
+	// Row 0 ("") was resolved via 1+1 elimination without poisoning aliases.
+	if res.Rows[0].MatchMethod != "elimination" {
+		t.Errorf("row 0 MatchMethod = %q, want elimination", res.Rows[0].MatchMethod)
+	}
+	if len(res.LearnedAliases) != 0 {
+		t.Errorf("empty OCRName must not be learned as alias, got %+v", res.LearnedAliases)
+	}
+}
