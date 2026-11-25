@@ -1,1 +1,0 @@
-DROP TABLE IF EXISTS player_nickname_history;

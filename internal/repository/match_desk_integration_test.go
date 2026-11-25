@@ -20,36 +20,25 @@ func TestMatchDeskPostgresPersistenceRollbackAndReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _, _ = db.Exec(`DROP SCHEMA ` + schema + ` CASCADE`) })
-	if _, err := db.Exec(`SET search_path TO ` + schema); err != nil {
+	if _, err := db.Exec(`SET search_path TO ` + schema + `, public`); err != nil {
 		t.Fatal(err)
 	}
-	_, err := db.Exec(`
- CREATE TABLE telegram_settings (key TEXT PRIMARY KEY,value TEXT NOT NULL);
- CREATE TABLE telegram_teams (id INT PRIMARY KEY,name TEXT NOT NULL,status TEXT NOT NULL);
- CREATE TABLE telegram_players (id INT PRIMARY KEY,telegram_id BIGINT,telegram_username TEXT,game_nickname TEXT,game_id TEXT,zone_id TEXT,team_id INT,is_captain BOOLEAN);
- CREATE TABLE telegram_tournaments (id INT PRIMARY KEY,name TEXT NOT NULL,slug TEXT,status TEXT NOT NULL,tournament_time TIMESTAMPTZ,challonge_id BIGINT,challonge_url TEXT NOT NULL DEFAULT '',challonge_for TIMESTAMPTZ,
-   winner_team_id INT,winner_team_name TEXT NOT NULL DEFAULT '',is_active BOOLEAN NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-   tournament_type TEXT,hold_third_place BOOLEAN,seeding_type TEXT,stage TEXT NOT NULL DEFAULT 'standalone',advance_count INT NOT NULL DEFAULT 0,
-   format_rounds INT NOT NULL DEFAULT 1,format_semifinal INT NOT NULL DEFAULT 3,format_final INT NOT NULL DEFAULT 3,bracket_size INT NOT NULL DEFAULT 0);
- CREATE TABLE telegram_bracket_matches (id INT PRIMARY KEY,tournament_id INT,challonge_match_id BIGINT,round INT NOT NULL DEFAULT 1,play_order INT,team1_id INT,team2_id INT,winner_id INT,state TEXT,scores_csv TEXT NOT NULL DEFAULT '');
- INSERT INTO telegram_settings VALUES ('challonge_tournament_id','123'),('challonge_tournament_for','2026-09-16T12:00:00Z');
- INSERT INTO telegram_tournaments (id,name,status,is_active,format_final) VALUES (1,'Old','completed',false,3),(2,'Current','active',true,5);
- INSERT INTO telegram_teams VALUES (1,'Alpha','active'),(2,'Beta','active');
- INSERT INTO telegram_players (id,telegram_id,team_id,is_captain) VALUES (1,100,1,true),(2,200,2,true);
- INSERT INTO telegram_bracket_matches (id,tournament_id,challonge_match_id,play_order,team1_id,team2_id,state) VALUES (1,2,111,12,1,2,'open'),(2,1,99,3,1,2,'open');
- `)
-	if err != nil {
-		t.Fatal(err)
-	}
-	migration, err := os.ReadFile("../../migrations/000028_match_desk.up.sql")
+	migration, err := os.ReadFile("../../migrations/000001_init.up.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err = db.Exec(string(migration)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = db.Exec(`CREATE TABLE telegram_match_games (id SERIAL PRIMARY KEY,bracket_match_id INT NOT NULL,match_revision BIGINT NOT NULL,
-   game_no INT NOT NULL,status TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),resolved_at TIMESTAMPTZ)`); err != nil {
+	_, err = db.Exec(`
+ DELETE FROM telegram_tournaments;
+ INSERT INTO telegram_settings VALUES ('challonge_tournament_id','123'),('challonge_tournament_for','2026-09-16T12:00:00Z');
+ INSERT INTO telegram_tournaments (id,name,status,is_active,format_final) VALUES (1,'Old','completed',false,3),(2,'Current','active',true,5);
+ INSERT INTO telegram_teams (id,name,status) VALUES (1,'Alpha','active'),(2,'Beta','active');
+ INSERT INTO telegram_players (id,telegram_id,team_id,is_captain) VALUES (1,100,1,true),(2,200,2,true);
+ INSERT INTO telegram_bracket_matches (id,tournament_id,challonge_match_id,round,play_order,team1_id,team2_id,state) VALUES (1,2,111,1,12,1,2,'open'),(2,1,99,1,3,1,2,'open');
+ `)
+	if err != nil {
 		t.Fatal(err)
 	}
 	repo := NewTelegramPostgres(db)
@@ -83,10 +72,10 @@ func TestMatchDeskPostgresPersistenceRollbackAndReopen(t *testing.T) {
 	// Games of the reopened match: one from before the reopen (revision 1)
 	// that no longer counts, a confirmed game 1 and a disputed game 2.
 	disputedAt := time.Date(2026, 9, 16, 12, 40, 0, 0, time.UTC)
-	if _, err = db.Exec(`INSERT INTO telegram_match_games (bracket_match_id,match_revision,game_no,status,created_at,resolved_at) VALUES
-   (1,1,1,'confirmed','2026-09-16T13:30:00Z','2026-09-16T13:31:00Z'),
-   (1,2,1,'confirmed','2026-09-16T12:20:00Z','2026-09-16T12:22:00Z'),
-   (1,2,2,'disputed','2026-09-16T12:38:00Z',$1)`, disputedAt); err != nil {
+	if _, err = db.Exec(`INSERT INTO telegram_match_games (bracket_match_id,match_revision,game_no,winner_team_id,reporter_telegram_id,status,created_at,resolved_at) VALUES
+   (1,1,1,1,100,'confirmed','2026-09-16T13:30:00Z','2026-09-16T13:31:00Z'),
+   (1,2,1,1,100,'confirmed','2026-09-16T12:20:00Z','2026-09-16T12:22:00Z'),
+   (1,2,2,2,200,'disputed','2026-09-16T12:38:00Z',$1)`, disputedAt); err != nil {
 		t.Fatal(err)
 	}
 	err = repo.UpdateMatchDesk(ctx, func(d *models.MatchDesk, c models.DeskContext) error {
@@ -125,7 +114,7 @@ func TestMatchDeskPostgresPersistenceRollbackAndReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	down, err := os.ReadFile("../../migrations/000028_match_desk.down.sql")
+	down, err := os.ReadFile("../../migrations/000001_init.down.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
