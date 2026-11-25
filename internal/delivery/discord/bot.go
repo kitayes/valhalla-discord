@@ -189,14 +189,10 @@ func (b *Bot) Init() error {
 		b.newWhoamiCommand(),
 		b.newBindPlayerCommand(),
 		b.newUnbindPlayerCommand(),
-		b.newUnlinkPlayerCommand(),
 		b.newPlayersCommand(),
 		b.newTopCommand(),
 		b.newProfileCommand(),
 		b.newHistoryCommand(),
-		b.newLinkCommand(),
-		b.newUnlinkCommand(),
-		b.newTelegramProfileCommand(),
 		b.newUpdateNickCommand(),
 		b.newLobbyCommand(),
 		b.newCreateMixCommand(),
@@ -471,15 +467,6 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 	case "history":
 		b.handleHistory(ctx, s, i.Interaction)
 		return
-	case "link":
-		b.handleLink(ctx, s, i.Interaction)
-		return
-	case "unlink":
-		b.handleUnlink(ctx, s, i.Interaction)
-		return
-	case "telegram_profile":
-		b.handleTelegramProfile(ctx, s, i.Interaction)
-		return
 	case "faq":
 		b.handleFAQ(ctx, s, i.Interaction)
 		return
@@ -583,8 +570,6 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 		b.handleLobbyStatus(ctx, s, i.Interaction)
 	case "bind_player":
 		b.handleBindPlayer(ctx, s, i.Interaction)
-	case "unlink_player":
-		b.handleUnlinkPlayer(ctx, s, i.Interaction)
 	case "unbind_player":
 		b.handleUnbindPlayer(ctx, s, i.Interaction)
 	case "coins_admin":

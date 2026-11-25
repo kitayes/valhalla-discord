@@ -172,7 +172,7 @@ func (b *Bot) handleMixPick(ctx context.Context, s *discordgo.Session, i *discor
 
 // completeDraft turns a fully picked draft into a rated match. The draft
 // message itself becomes the match card; from there the match runs the same
-// path as /balance — thread, betting window, Telegram announcement.
+// path as /balance — thread and Discord betting window.
 func (b *Bot) completeDraft(ctx context.Context, s *discordgo.Session, i *discordgo.Interaction, view application.DraftView) {
 	teamAIDs, teamANames := sideRoster(view.Sides[0])
 	teamBIDs, teamBNames := sideRoster(view.Sides[1])

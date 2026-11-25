@@ -306,47 +306,6 @@ func (r *LobbyMatchPostgres) SaveThreadID(ctx context.Context, matchID int, thre
 	return nil
 }
 
-// SaveBetPost records where the Telegram betting post for a match lives, so it
-// can be edited later — after each bet, and once more when the window closes.
-//
-// Held in the database rather than in memory because a restart during the
-// betting window would otherwise strand the post: bets keep landing, but the
-// numbers on it freeze and its buttons keep inviting taps long after the market
-// is closed.
-func (r *LobbyMatchPostgres) SaveBetPost(ctx context.Context, matchID int, chatID, messageID int64) error {
-	_, err := r.db.ExecContext(ctx,
-		`UPDATE lobby_matches SET tg_bet_chat_id = $1, tg_bet_message_id = $2 WHERE id = $3`,
-		chatID, messageID, matchID,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to save bet post for match %d: %w", matchID, err)
-	}
-	return nil
-}
-
-// GetBetPost returns the Telegram chat and message of a match's betting post.
-//
-// A match with no post yet is not an error — Telegram may be unconfigured, or
-// the post may have failed to send — so it comes back as ok=false and the
-// caller simply skips the edit.
-func (r *LobbyMatchPostgres) GetBetPost(ctx context.Context, matchID int) (chatID, messageID int64, ok bool, err error) {
-	var chat, msg sql.NullInt64
-	err = r.db.QueryRowContext(ctx,
-		`SELECT tg_bet_chat_id, tg_bet_message_id FROM lobby_matches WHERE id = $1`,
-		matchID,
-	).Scan(&chat, &msg)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, 0, false, fmt.Errorf("match %d: %w", matchID, domain.ErrMatchNotFound)
-	}
-	if err != nil {
-		return 0, 0, false, fmt.Errorf("failed to read bet post for match %d: %w", matchID, err)
-	}
-	if !chat.Valid || !msg.Valid {
-		return 0, 0, false, nil
-	}
-	return chat.Int64, msg.Int64, true, nil
-}
-
 // GetByThreadID retrieves a lobby match by its Discord thread ID.
 func (r *LobbyMatchPostgres) GetByThreadID(ctx context.Context, threadID string) (*models.LobbyMatch, error) {
 	var m models.LobbyMatch

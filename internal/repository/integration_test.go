@@ -78,7 +78,6 @@ func TestIntegrationIdentityBinding(t *testing.T) {
 	})
 
 	discordID := fmt.Sprintf("dc-%d", playerID)
-	telegramID := int64(900000000 + playerID)
 
 	t.Run("discord round trip", func(t *testing.T) {
 		if err := repo.SetDiscordID(ctx, playerID, discordID); err != nil {
@@ -93,46 +92,31 @@ func TestIntegrationIdentityBinding(t *testing.T) {
 		}
 	})
 
-	t.Run("telegram round trip", func(t *testing.T) {
-		// The column the betting code resolves a bettor through. Nothing wrote
-		// to it before, so this path has never run.
-		if err := repo.SetTelegramID(ctx, playerID, telegramID); err != nil {
-			t.Fatalf("SetTelegramID: %v", err)
-		}
-		gotID, gotName, err := repo.GetPlayerByTelegramID(ctx, telegramID)
-		if err != nil {
-			t.Fatalf("GetPlayerByTelegramID: %v", err)
-		}
-		if gotID != playerID || gotName != name {
-			t.Errorf("got (%d, %q), want (%d, %q)", gotID, gotName, playerID, name)
-		}
-	})
-
-	t.Run("second profile cannot take the same telegram account", func(t *testing.T) {
+	t.Run("second profile cannot take the same discord account", func(t *testing.T) {
 		otherID, err := repo.EnsurePlayerExists(ctx, uniqueName(t, "ident-other"))
 		if err != nil {
 			t.Fatalf("EnsurePlayerExists: %v", err)
 		}
 		t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM players WHERE id = $1`, otherID) })
 
-		err = repo.SetTelegramID(ctx, otherID, telegramID)
-		if !errors.Is(err, ErrTelegramIDTaken) {
-			t.Errorf("SetTelegramID on a taken account = %v, want ErrTelegramIDTaken", err)
+		err = repo.SetDiscordID(ctx, otherID, discordID)
+		if !errors.Is(err, ErrDiscordIDTaken) {
+			t.Errorf("SetDiscordID on a taken account = %v, want ErrDiscordIDTaken", err)
 		}
 	})
 
 	t.Run("clearing releases the account", func(t *testing.T) {
-		if err := repo.ClearTelegramID(ctx, playerID); err != nil {
-			t.Fatalf("ClearTelegramID: %v", err)
+		if err := repo.ClearDiscordID(ctx, playerID); err != nil {
+			t.Fatalf("ClearDiscordID: %v", err)
 		}
-		if _, _, err := repo.GetPlayerByTelegramID(ctx, telegramID); !errors.Is(err, domain.ErrPlayerNotFound) {
+		if _, _, err := repo.GetPlayerByDiscordID(ctx, discordID); !errors.Is(err, domain.ErrPlayerNotFound) {
 			t.Errorf("lookup after clear = %v, want ErrPlayerNotFound", err)
 		}
 	})
 }
 
-// seedBettor creates a player with points and a Telegram binding.
-func seedBettor(t *testing.T, db *sql.DB, repo *MatchPostgres, points int) (playerID int, tgID int64) {
+// seedPlayer creates a player with the given points balance.
+func seedPlayer(t *testing.T, db *sql.DB, repo *MatchPostgres, points int) int {
 	t.Helper()
 	ctx := context.Background()
 	id, err := repo.EnsurePlayerExists(ctx, uniqueName(t, "bettor"))
@@ -141,14 +125,10 @@ func seedBettor(t *testing.T, db *sql.DB, repo *MatchPostgres, points int) (play
 	}
 	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM players WHERE id = $1`, id) })
 
-	tg := int64(910000000 + id)
-	if err := repo.SetTelegramID(ctx, id, tg); err != nil {
-		t.Fatalf("SetTelegramID: %v", err)
-	}
 	if _, err := db.Exec(`UPDATE players SET points = $1 WHERE id = $2`, points, id); err != nil {
 		t.Fatalf("seed points: %v", err)
 	}
-	return id, tg
+	return id
 }
 
 func TestIntegrationBettingLifecycle(t *testing.T) {
@@ -159,12 +139,11 @@ func TestIntegrationBettingLifecycle(t *testing.T) {
 	bets := NewBetPostgres(db)
 
 	// The bettors are deliberately not on the roster: staking on a match you
-	// are playing in is refused, so a test that seeds one of the players as the
-	// bettor is testing a bet that can no longer be placed.
-	rosterA, _ := seedBettor(t, db, matchRepo, 0)
-	rosterB, _ := seedBettor(t, db, matchRepo, 0)
-	_, winnerTG := seedBettor(t, db, matchRepo, 100)
-	_, loserTG := seedBettor(t, db, matchRepo, 100)
+	// are playing in is refused.
+	rosterA := seedPlayer(t, db, matchRepo, 0)
+	rosterB := seedPlayer(t, db, matchRepo, 0)
+	winnerID := seedPlayer(t, db, matchRepo, 100)
+	loserID := seedPlayer(t, db, matchRepo, 100)
 
 	matchID, err := lobby.Create(ctx, models.CreateLobbyMatchRequest{
 		GuildID:    "itest",
@@ -179,11 +158,11 @@ func TestIntegrationBettingLifecycle(t *testing.T) {
 	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM lobby_matches WHERE id = $1`, matchID) })
 
 	t.Run("bets are refused while the window is shut", func(t *testing.T) {
-		err := bets.PlaceBet(ctx, models.PlaceBetRequest{
-			MatchID: matchID, TgUserID: winnerTG, TeamChosen: domain.TeamA, Amount: 10,
+		_, _, err := bets.PlaceDiscordBet(ctx, models.PlaceDiscordBetRequest{
+			MatchID: matchID, PlayerID: winnerID, TeamChosen: domain.TeamA, Amount: 10,
 		})
 		if !errors.Is(err, domain.ErrBettingClosed) {
-			t.Errorf("PlaceBet before OpenBetting = %v, want ErrBettingClosed", err)
+			t.Errorf("PlaceDiscordBet before OpenBetting = %v, want ErrBettingClosed", err)
 		}
 	})
 
@@ -193,24 +172,24 @@ func TestIntegrationBettingLifecycle(t *testing.T) {
 
 	t.Run("bets land once the window is open", func(t *testing.T) {
 		for _, b := range []struct {
-			tg   int64
+			pid  int
 			team string
 			amt  int
 		}{
-			{winnerTG, domain.TeamA, 40},
-			{loserTG, domain.TeamB, 60},
+			{winnerID, domain.TeamA, 40},
+			{loserID, domain.TeamB, 60},
 		} {
-			if err := bets.PlaceBet(ctx, models.PlaceBetRequest{
-				MatchID: matchID, TgUserID: b.tg, TeamChosen: b.team, Amount: b.amt,
+			if _, _, err := bets.PlaceDiscordBet(ctx, models.PlaceDiscordBetRequest{
+				MatchID: matchID, PlayerID: b.pid, TeamChosen: b.team, Amount: b.amt,
 			}); err != nil {
-				t.Fatalf("PlaceBet(%d): %v", b.tg, err)
+				t.Fatalf("PlaceDiscordBet(%d): %v", b.pid, err)
 			}
 		}
 	})
 
 	t.Run("one bet per user per match", func(t *testing.T) {
-		err := bets.PlaceBet(ctx, models.PlaceBetRequest{
-			MatchID: matchID, TgUserID: winnerTG, TeamChosen: domain.TeamB, Amount: 5,
+		_, _, err := bets.PlaceDiscordBet(ctx, models.PlaceDiscordBetRequest{
+			MatchID: matchID, PlayerID: winnerID, TeamChosen: domain.TeamB, Amount: 5,
 		})
 		if !errors.Is(err, domain.ErrAlreadyBet) {
 			t.Errorf("second bet = %v, want ErrAlreadyBet", err)
@@ -218,9 +197,9 @@ func TestIntegrationBettingLifecycle(t *testing.T) {
 	})
 
 	t.Run("stake is deducted", func(t *testing.T) {
-		got, err := bets.GetPlayerPoints(ctx, winnerTG)
+		got, err := bets.GetPlayerPointsByID(ctx, winnerID)
 		if err != nil {
-			t.Fatalf("GetPlayerPoints: %v", err)
+			t.Fatalf("GetPlayerPointsByID: %v", err)
 		}
 		if got != 60 {
 			t.Errorf("points after a 40 stake = %d, want 60", got)
@@ -245,16 +224,16 @@ func TestIntegrationBettingLifecycle(t *testing.T) {
 	})
 
 	t.Run("the pool goes to the winner", func(t *testing.T) {
-		payouts, err := bets.PayoutWinners(ctx, matchID, domain.TeamA)
+		summary, err := bets.PayoutWinnersDetailed(ctx, matchID, domain.TeamA)
 		if err != nil {
-			t.Fatalf("PayoutWinners: %v", err)
+			t.Fatalf("PayoutWinnersDetailed: %v", err)
 		}
-		if got, want := payouts[winnerTG], 100; got != want {
+		if got, want := summary.PlayerPayouts[winnerID], 100; got != want {
 			t.Errorf("winner was paid %d, want the whole %d pool", got, want)
 		}
-		points, err := bets.GetPlayerPoints(ctx, winnerTG)
+		points, err := bets.GetPlayerPointsByID(ctx, winnerID)
 		if err != nil {
-			t.Fatalf("GetPlayerPoints: %v", err)
+			t.Fatalf("GetPlayerPointsByID: %v", err)
 		}
 		if points != 160 {
 			t.Errorf("winner holds %d points, want 160 (60 left + 100 pool)", points)
@@ -262,16 +241,16 @@ func TestIntegrationBettingLifecycle(t *testing.T) {
 	})
 
 	t.Run("payout is idempotent", func(t *testing.T) {
-		payouts, err := bets.PayoutWinners(ctx, matchID, domain.TeamA)
+		summary, err := bets.PayoutWinnersDetailed(ctx, matchID, domain.TeamA)
 		if err != nil {
-			t.Fatalf("PayoutWinners (replay): %v", err)
+			t.Fatalf("PayoutWinnersDetailed (replay): %v", err)
 		}
-		if len(payouts) != 0 {
-			t.Errorf("a settled match paid out again: %v", payouts)
+		if len(summary.PlayerPayouts) != 0 {
+			t.Errorf("a settled match paid out again: %v", summary.PlayerPayouts)
 		}
-		points, err := bets.GetPlayerPoints(ctx, winnerTG)
+		points, err := bets.GetPlayerPointsByID(ctx, winnerID)
 		if err != nil {
-			t.Fatalf("GetPlayerPoints: %v", err)
+			t.Fatalf("GetPlayerPointsByID: %v", err)
 		}
 		if points != 160 {
 			t.Errorf("replay moved points to %d, want 160", points)
@@ -298,11 +277,10 @@ func TestIntegrationCancelRefundsEveryStake(t *testing.T) {
 	lobby := NewLobbyMatchPostgres(db)
 	bets := NewBetPostgres(db)
 
-	// Bettors sit outside the roster — see TestIntegrationBettingLifecycle.
-	rosterA, _ := seedBettor(t, db, matchRepo, 0)
-	rosterB, _ := seedBettor(t, db, matchRepo, 0)
-	_, aTG := seedBettor(t, db, matchRepo, 100)
-	_, bTG := seedBettor(t, db, matchRepo, 100)
+	rosterA := seedPlayer(t, db, matchRepo, 0)
+	rosterB := seedPlayer(t, db, matchRepo, 0)
+	aID := seedPlayer(t, db, matchRepo, 100)
+	bID := seedPlayer(t, db, matchRepo, 100)
 
 	matchID, err := lobby.Create(ctx, models.CreateLobbyMatchRequest{
 		GuildID: "itest", CaptainAID: rosterA, CaptainBID: rosterB,
@@ -317,13 +295,13 @@ func TestIntegrationCancelRefundsEveryStake(t *testing.T) {
 		t.Fatalf("OpenBetting: %v", err)
 	}
 	for _, b := range []struct {
-		tg  int64
+		pid int
 		amt int
-	}{{aTG, 25}, {bTG, 35}} {
-		if err := bets.PlaceBet(ctx, models.PlaceBetRequest{
-			MatchID: matchID, TgUserID: b.tg, TeamChosen: domain.TeamA, Amount: b.amt,
+	}{{aID, 25}, {bID, 35}} {
+		if _, _, err := bets.PlaceDiscordBet(ctx, models.PlaceDiscordBetRequest{
+			MatchID: matchID, PlayerID: b.pid, TeamChosen: domain.TeamA, Amount: b.amt,
 		}); err != nil {
-			t.Fatalf("PlaceBet: %v", err)
+			t.Fatalf("PlaceDiscordBet: %v", err)
 		}
 	}
 
@@ -361,13 +339,13 @@ func TestIntegrationCancelRefundsEveryStake(t *testing.T) {
 	if n != 2 {
 		t.Errorf("refunded %d bets, want 2", n)
 	}
-	for tg, want := range map[int64]int{aTG: 100, bTG: 100} {
-		got, err := bets.GetPlayerPoints(ctx, tg)
+	for pid, want := range map[int]int{aID: 100, bID: 100} {
+		got, err := bets.GetPlayerPointsByID(ctx, pid)
 		if err != nil {
-			t.Fatalf("GetPlayerPoints(%d): %v", tg, err)
+			t.Fatalf("GetPlayerPointsByID(%d): %v", pid, err)
 		}
 		if got != want {
-			t.Errorf("telegram %d holds %d points after refund, want %d", tg, got, want)
+			t.Errorf("player %d holds %d points after refund, want %d", pid, got, want)
 		}
 	}
 
@@ -383,7 +361,7 @@ func TestIntegrationBettingDeadlineSweep(t *testing.T) {
 	lobby := NewLobbyMatchPostgres(db)
 	bets := NewBetPostgres(db)
 
-	pID, pTG := seedBettor(t, db, matchRepo, 100)
+	pID := seedPlayer(t, db, matchRepo, 100)
 	matchID, err := lobby.Create(ctx, models.CreateLobbyMatchRequest{
 		GuildID: "itest", CaptainAID: pID, CaptainBID: pID,
 		TeamAIDs: []int{pID}, TeamBIDs: []int{pID},
@@ -399,8 +377,8 @@ func TestIntegrationBettingDeadlineSweep(t *testing.T) {
 		t.Fatalf("OpenBetting: %v", err)
 	}
 
-	err = bets.PlaceBet(ctx, models.PlaceBetRequest{
-		MatchID: matchID, TgUserID: pTG, TeamChosen: domain.TeamA, Amount: 10,
+	_, _, err = bets.PlaceDiscordBet(ctx, models.PlaceDiscordBetRequest{
+		MatchID: matchID, PlayerID: pID, TeamChosen: domain.TeamA, Amount: 10,
 	})
 	if !errors.Is(err, domain.ErrBettingClosed) {
 		t.Errorf("bet past the deadline = %v, want ErrBettingClosed", err)
@@ -474,8 +452,8 @@ func TestIntegrationLobbyMatchReads(t *testing.T) {
 	matchRepo := newMatchRepo(t, db)
 	lobby := NewLobbyMatchPostgres(db)
 
-	aID, _ := seedBettor(t, db, matchRepo, 0)
-	bID, _ := seedBettor(t, db, matchRepo, 0)
+	aID := seedPlayer(t, db, matchRepo, 0)
+	bID := seedPlayer(t, db, matchRepo, 0)
 
 	matchID, err := lobby.Create(ctx, models.CreateLobbyMatchRequest{
 		GuildID: "itest-reads", CaptainAID: aID, CaptainBID: bID,
@@ -671,88 +649,6 @@ func TestIntegrationMatchRecording(t *testing.T) {
 	})
 }
 
-func TestIntegrationProfileLinkFlow(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-	matchRepo := newMatchRepo(t, db)
-	links := NewProfileLinkPostgres(db)
-
-	name := uniqueName(t, "link")
-	playerID, err := matchRepo.EnsurePlayerExists(ctx, name)
-	if err != nil {
-		t.Fatalf("EnsurePlayerExists: %v", err)
-	}
-	tgID := int64(920000000 + playerID)
-	t.Cleanup(func() {
-		_, _ = db.Exec(`DELETE FROM profile_links WHERE discord_player_id = $1`, playerID)
-		_, _ = db.Exec(`DELETE FROM players WHERE id = $1`, playerID)
-	})
-
-	code, err := links.CreateLinkCode(ctx, playerID)
-	if err != nil {
-		t.Fatalf("CreateLinkCode: %v", err)
-	}
-	if code == "" {
-		t.Fatal("CreateLinkCode returned an empty code")
-	}
-
-	gotID, err := links.ValidateLinkCode(ctx, code)
-	if err != nil {
-		t.Fatalf("ValidateLinkCode: %v", err)
-	}
-	if gotID != playerID {
-		t.Fatalf("code resolved to player %d, want %d", gotID, playerID)
-	}
-
-	if err := links.CreateProfileLink(ctx, &models.ProfileLink{
-		DiscordPlayerID:  playerID,
-		TelegramID:       &tgID,
-		TelegramUsername: "tester",
-	}); err != nil {
-		t.Fatalf("CreateProfileLink: %v", err)
-	}
-
-	t.Run("both lookup directions agree", func(t *testing.T) {
-		byPlayer, err := links.GetLinkByDiscordPlayer(ctx, playerID)
-		if err != nil || byPlayer == nil {
-			t.Fatalf("GetLinkByDiscordPlayer = (%v, %v)", byPlayer, err)
-		}
-		byTG, err := links.GetLinkByTelegramID(ctx, tgID)
-		if err != nil || byTG == nil {
-			t.Fatalf("GetLinkByTelegramID = (%v, %v)", byTG, err)
-		}
-		if byPlayer.DiscordPlayerID != byTG.DiscordPlayerID {
-			t.Errorf("the two directions disagree: %d vs %d", byPlayer.DiscordPlayerID, byTG.DiscordPlayerID)
-		}
-	})
-
-	t.Run("telegram profile data updates", func(t *testing.T) {
-		if err := links.UpdateTelegramProfile(ctx, tgID, "ник", "gid", "zid", 5, "mid"); err != nil {
-			t.Fatalf("UpdateTelegramProfile: %v", err)
-		}
-		got, err := links.GetLinkByTelegramID(ctx, tgID)
-		if err != nil {
-			t.Fatalf("GetLinkByTelegramID: %v", err)
-		}
-		if got.GameNickname != "ник" || got.Stars != 5 {
-			t.Errorf("profile = (%q, %d stars), want (ник, 5)", got.GameNickname, got.Stars)
-		}
-	})
-
-	t.Run("unlink clears the row", func(t *testing.T) {
-		if err := links.DeleteLinkByDiscordPlayer(ctx, playerID); err != nil {
-			t.Fatalf("DeleteLinkByDiscordPlayer: %v", err)
-		}
-		got, err := links.GetLinkByDiscordPlayer(ctx, playerID)
-		if err != nil {
-			t.Fatalf("GetLinkByDiscordPlayer after delete: %v", err)
-		}
-		if got != nil {
-			t.Error("the link survived deletion")
-		}
-	})
-}
-
 func TestIntegrationRegisterByNickname(t *testing.T) {
 	// A newcomer could never register: a players row was only ever created by
 	// parsing a match screenshot, joining the lobby needed a bound profile, and
@@ -826,8 +722,8 @@ func TestIntegrationBettingOnOwnMatchIsRefused(t *testing.T) {
 	lobby := NewLobbyMatchPostgres(db)
 	bets := NewBetPostgres(db)
 
-	playerID, playerTG := seedBettor(t, db, matchRepo, 100)
-	outsiderID, outsiderTG := seedBettor(t, db, matchRepo, 100)
+	playerID := seedPlayer(t, db, matchRepo, 100)
+	outsiderID := seedPlayer(t, db, matchRepo, 100)
 
 	matchID, err := lobby.Create(ctx, models.CreateLobbyMatchRequest{
 		GuildID: "itest", CaptainAID: playerID, CaptainBID: playerID,
@@ -843,16 +739,16 @@ func TestIntegrationBettingOnOwnMatchIsRefused(t *testing.T) {
 	}
 
 	t.Run("a player in the match is refused", func(t *testing.T) {
-		err := bets.PlaceBet(ctx, models.PlaceBetRequest{
-			MatchID: matchID, TgUserID: playerTG, TeamChosen: domain.TeamB, Amount: 10,
+		_, _, err := bets.PlaceDiscordBet(ctx, models.PlaceDiscordBetRequest{
+			MatchID: matchID, PlayerID: playerID, TeamChosen: domain.TeamB, Amount: 10,
 		})
 		if !errors.Is(err, domain.ErrBettingOnOwnMatch) {
-			t.Errorf("PlaceBet by a participant = %v, want ErrBettingOnOwnMatch", err)
+			t.Errorf("PlaceDiscordBet by a participant = %v, want ErrBettingOnOwnMatch", err)
 		}
 		// The refusal must not have moved anything.
-		points, err := bets.GetPlayerPoints(ctx, playerTG)
+		points, err := bets.GetPlayerPointsByID(ctx, playerID)
 		if err != nil {
-			t.Fatalf("GetPlayerPoints: %v", err)
+			t.Fatalf("GetPlayerPointsByID: %v", err)
 		}
 		if points != 100 {
 			t.Errorf("a refused bet changed the balance to %d, want 100", points)
@@ -860,12 +756,11 @@ func TestIntegrationBettingOnOwnMatchIsRefused(t *testing.T) {
 	})
 
 	t.Run("somebody outside the match may bet", func(t *testing.T) {
-		if err := bets.PlaceBet(ctx, models.PlaceBetRequest{
-			MatchID: matchID, TgUserID: outsiderTG, TeamChosen: domain.TeamA, Amount: 10,
+		if _, _, err := bets.PlaceDiscordBet(ctx, models.PlaceDiscordBetRequest{
+			MatchID: matchID, PlayerID: outsiderID, TeamChosen: domain.TeamA, Amount: 10,
 		}); err != nil {
-			t.Errorf("PlaceBet by a non-participant: %v", err)
+			t.Errorf("PlaceDiscordBet by a non-participant: %v", err)
 		}
-		_ = outsiderID
 	})
 }
 
@@ -954,9 +849,9 @@ func TestIntegrationMMRHistory(t *testing.T) {
 	})
 }
 
-// The coefficients shown in Telegram are computed from BetPool, and the money
-// is moved by PayoutWinners. This pins the two together: whatever BetPool
-// reports must be the pool settlement actually distributes.
+// The coefficients shown in Discord are computed from BetPool, and the money
+// is moved by PayoutWinnersDetailed. This pins the two together: whatever
+// BetPool reports must be the pool settlement actually distributes.
 func TestIntegrationBetPoolTracksTheLiveMarket(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
@@ -964,11 +859,10 @@ func TestIntegrationBetPoolTracksTheLiveMarket(t *testing.T) {
 	lobby := NewLobbyMatchPostgres(db)
 	bets := NewBetPostgres(db)
 
-	// Bettors sit outside the roster — see TestIntegrationBettingLifecycle.
-	rosterA, _ := seedBettor(t, db, matchRepo, 0)
-	rosterB, _ := seedBettor(t, db, matchRepo, 0)
-	_, backerA := seedBettor(t, db, matchRepo, 100)
-	_, backerB := seedBettor(t, db, matchRepo, 100)
+	rosterA := seedPlayer(t, db, matchRepo, 0)
+	rosterB := seedPlayer(t, db, matchRepo, 0)
+	backerA := seedPlayer(t, db, matchRepo, 100)
+	backerB := seedPlayer(t, db, matchRepo, 100)
 
 	matchID, err := lobby.Create(ctx, models.CreateLobbyMatchRequest{
 		GuildID: "itest", CaptainAID: rosterA, CaptainBID: rosterB,
@@ -993,17 +887,17 @@ func TestIntegrationBetPoolTracksTheLiveMarket(t *testing.T) {
 		t.Fatalf("OpenBetting: %v", err)
 	}
 	for _, b := range []struct {
-		tg     int64
+		pid    int
 		team   string
 		amount int
 	}{
 		{backerA, domain.TeamA, 40},
 		{backerB, domain.TeamB, 10},
 	} {
-		if err := bets.PlaceBet(ctx, models.PlaceBetRequest{
-			MatchID: matchID, TgUserID: b.tg, TeamChosen: b.team, Amount: b.amount,
+		if _, _, err := bets.PlaceDiscordBet(ctx, models.PlaceDiscordBetRequest{
+			MatchID: matchID, PlayerID: b.pid, TeamChosen: b.team, Amount: b.amount,
 		}); err != nil {
-			t.Fatalf("PlaceBet %d on %s: %v", b.amount, b.team, err)
+			t.Fatalf("PlaceDiscordBet %d on %s: %v", b.amount, b.team, err)
 		}
 	}
 
@@ -1030,17 +924,15 @@ func TestIntegrationBetPoolTracksTheLiveMarket(t *testing.T) {
 		}
 		quoted := int(40 * pool.Odds(domain.TeamA))
 
-		payouts, err := bets.PayoutWinners(ctx, matchID, domain.TeamA)
+		summary, err := bets.PayoutWinnersDetailed(ctx, matchID, domain.TeamA)
 		if err != nil {
-			t.Fatalf("PayoutWinners: %v", err)
+			t.Fatalf("PayoutWinnersDetailed: %v", err)
 		}
-		if payouts[backerA] != quoted {
-			t.Errorf("paid %d but the post advertised %d", payouts[backerA], quoted)
+		if summary.PlayerPayouts[backerA] != quoted {
+			t.Errorf("paid %d but the post advertised %d", summary.PlayerPayouts[backerA], quoted)
 		}
 	})
 
-	// closePost relies on this: a settled match must stop reporting a market, or
-	// the post would keep quoting odds on money that has already moved.
 	t.Run("settled bets leave the market", func(t *testing.T) {
 		pool, err := bets.BetPool(ctx, matchID)
 		if err != nil {
@@ -1052,400 +944,6 @@ func TestIntegrationBetPoolTracksTheLiveMarket(t *testing.T) {
 	})
 }
 
-// The betting post is edited after every bet and closed out at settlement, which
-// can land after a restart — so where it lives has to outlive the process.
-func TestIntegrationBetPostReferenceSurvives(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-	matchRepo := newMatchRepo(t, db)
-	lobby := NewLobbyMatchPostgres(db)
-
-	rosterA, _ := seedBettor(t, db, matchRepo, 0)
-	rosterB, _ := seedBettor(t, db, matchRepo, 0)
-
-	matchID, err := lobby.Create(ctx, models.CreateLobbyMatchRequest{
-		GuildID: "itest", CaptainAID: rosterA, CaptainBID: rosterB,
-		TeamAIDs: []int{rosterA}, TeamBIDs: []int{rosterB},
-	})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM lobby_matches WHERE id = $1`, matchID) })
-
-	t.Run("a match with no post is not an error", func(t *testing.T) {
-		_, _, ok, err := lobby.GetBetPost(ctx, matchID)
-		if err != nil {
-			t.Fatalf("GetBetPost before publishing: %v", err)
-		}
-		if ok {
-			t.Error("reported a post for a match that has none")
-		}
-	})
-
-	if err := lobby.SaveBetPost(ctx, matchID, -1001234567890, 4242); err != nil {
-		t.Fatalf("SaveBetPost: %v", err)
-	}
-
-	t.Run("the reference round-trips", func(t *testing.T) {
-		chatID, messageID, ok, err := lobby.GetBetPost(ctx, matchID)
-		if err != nil {
-			t.Fatalf("GetBetPost: %v", err)
-		}
-		if !ok {
-			t.Fatal("saved post not reported")
-		}
-		// Channel ids are negative and outside int32 — a narrower column would
-		// silently mangle them.
-		if chatID != -1001234567890 || messageID != 4242 {
-			t.Errorf("GetBetPost = (%d, %d), want (-1001234567890, 4242)", chatID, messageID)
-		}
-	})
-
-	t.Run("an unknown match is refused, not answered with zeros", func(t *testing.T) {
-		_, _, _, err := lobby.GetBetPost(ctx, -1)
-		if !errors.Is(err, domain.ErrMatchNotFound) {
-			t.Errorf("GetBetPost on a missing match = %v, want ErrMatchNotFound", err)
-		}
-	})
-}
-
-// Disbanding a team must leave nothing behind: the captain used to keep
-// is_captain = TRUE (and so kept receiving captain broadcasts), their FSM state
-// was left mid-registration, and the roster rows — which have no telegram_id —
-// were merely detached and then surfaced in the solo-players list.
-func TestIntegrationDisbandTeamCleansUpRoster(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-	repo := NewTelegramPostgres(db)
-
-	captainTG := int64(930000000 + os.Getpid()%100000)
-	t.Cleanup(func() {
-		_, _ = db.Exec(`DELETE FROM telegram_players WHERE telegram_id = $1`, captainTG)
-	})
-
-	team, err := repo.CreateTeam(ctx, uniqueName(t, "disband"))
-	if err != nil {
-		t.Fatalf("CreateTeam: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = db.Exec(`DELETE FROM telegram_players WHERE team_id = $1`, team.ID)
-		_, _ = db.Exec(`DELETE FROM telegram_teams WHERE id = $1`, team.ID)
-	})
-
-	if err := repo.CreateOrUpdatePlayer(ctx, &models.TelegramPlayer{TelegramID: &captainTG, TelegramUsername: "cap", FirstName: "Cap"}); err != nil {
-		t.Fatalf("CreateOrUpdatePlayer: %v", err)
-	}
-	for col, val := range map[string]interface{}{"team_id": team.ID, "is_captain": true, "fsm_state": "team_reg_nick_3", "main_role": "Mid"} {
-		if err := repo.UpdatePlayerField(ctx, captainTG, col, val); err != nil {
-			t.Fatalf("UpdatePlayerField(%s): %v", col, err)
-		}
-	}
-	mateNick := uniqueName(t, "mate")
-	for i := 0; i < 2; i++ {
-		if err := repo.CreateTeammate(ctx, &models.TelegramPlayer{TeamID: &team.ID, GameNickname: mateNick, MainRole: "Gold"}); err != nil {
-			t.Fatalf("CreateTeammate: %v", err)
-		}
-	}
-
-	if err := repo.ReleaseTeamMembers(ctx, team.ID); err != nil {
-		t.Fatalf("ReleaseTeamMembers: %v", err)
-	}
-	if err := repo.DeleteTeam(ctx, team.ID); err != nil {
-		t.Fatalf("DeleteTeam: %v", err)
-	}
-
-	cap, err := repo.GetPlayerByTelegramID(ctx, captainTG)
-	if err != nil || cap == nil {
-		t.Fatalf("GetPlayerByTelegramID = (%v, %v)", cap, err)
-	}
-	if cap.TeamID != nil || cap.IsCaptain || cap.FSMState != models.StateIdle {
-		t.Errorf("captain after disband: team=%v captain=%v state=%q, want detached/idle", cap.TeamID, cap.IsCaptain, cap.FSMState)
-	}
-
-	captains, err := repo.GetAllCaptains(ctx)
-	if err != nil {
-		t.Fatalf("GetAllCaptains: %v", err)
-	}
-	for _, c := range captains {
-		if c.TelegramID != nil && *c.TelegramID == captainTG {
-			t.Error("former captain still listed in the broadcast list")
-		}
-	}
-
-	solo, err := repo.GetSoloPlayers(ctx)
-	if err != nil {
-		t.Fatalf("GetSoloPlayers: %v", err)
-	}
-	for _, p := range solo {
-		if p.GameNickname == mateNick {
-			t.Error("orphaned roster row surfaced as a solo player")
-		}
-	}
-
-	var orphans int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM telegram_players WHERE game_nickname = $1`, mateNick).Scan(&orphans); err != nil {
-		t.Fatalf("count orphans: %v", err)
-	}
-	if orphans != 0 {
-		t.Errorf("%d roster rows without a telegram account survived the disband, want 0", orphans)
-	}
-}
-
-// Roster rows are now written in one insert from the parsed line; the old
-// insert stored only the nickname and relied on a chain of updates.
-func TestIntegrationCreateTeammateStoresEveryField(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-	repo := NewTelegramPostgres(db)
-
-	team, err := repo.CreateTeam(ctx, uniqueName(t, "full"))
-	if err != nil {
-		t.Fatalf("CreateTeam: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = db.Exec(`DELETE FROM telegram_players WHERE team_id = $1`, team.ID)
-		_, _ = db.Exec(`DELETE FROM telegram_teams WHERE id = $1`, team.ID)
-	})
-
-	want := &models.TelegramPlayer{
-		TeamID: &team.ID, GameNickname: "Mate", GameID: "123456789", ZoneID: "1234",
-		Stars: 25, TelegramUsername: "@mate", IsSubstitute: true,
-	}
-	if err := repo.CreateTeammate(ctx, want); err != nil {
-		t.Fatalf("CreateTeammate: %v", err)
-	}
-	got, err := repo.GetTeamMembers(ctx, team.ID)
-	if err != nil || len(got) != 1 {
-		t.Fatalf("GetTeamMembers = (%d rows, %v)", len(got), err)
-	}
-	g := got[0]
-	if g.GameNickname != want.GameNickname || g.GameID != want.GameID || g.ZoneID != want.ZoneID ||
-		g.Stars != want.Stars || g.TelegramUsername != want.TelegramUsername || !g.IsSubstitute {
-		t.Errorf("stored %+v, want %+v", g, *want)
-	}
-}
-
-func TestIntegrationFindByGameID(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-	repo := NewTelegramPostgres(db)
-
-	team, err := repo.CreateTeam(ctx, uniqueName(t, "dup"))
-	if err != nil {
-		t.Fatalf("CreateTeam: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = db.Exec(`DELETE FROM telegram_players WHERE team_id = $1`, team.ID)
-		_, _ = db.Exec(`DELETE FROM telegram_teams WHERE id = $1`, team.ID)
-	})
-	gameID := uniqueName(t, "9")[:12]
-	if err := repo.CreateTeammate(ctx, &models.TelegramPlayer{TeamID: &team.ID, GameNickname: "A", GameID: gameID}); err != nil {
-		t.Fatalf("CreateTeammate: %v", err)
-	}
-	if err := repo.CreateTeammate(ctx, &models.TelegramPlayer{TeamID: &team.ID, GameNickname: "B", GameID: gameID + "x"}); err != nil {
-		t.Fatalf("CreateTeammate: %v", err)
-	}
-
-	got, err := repo.FindByGameID(ctx, gameID)
-	if err != nil {
-		t.Fatalf("FindByGameID: %v", err)
-	}
-	if len(got) != 1 || got[0].GameNickname != "A" || got[0].TeamID == nil || *got[0].TeamID != team.ID {
-		t.Errorf("FindByGameID = %+v, want exactly the row A in team %d", got, team.ID)
-	}
-	if none, err := repo.FindByGameID(ctx, "no-such-id"); err != nil || len(none) != 0 {
-		t.Errorf("unknown id = (%v, %v), want empty", none, err)
-	}
-}
-
-func TestIntegrationTeamStatusRoundTrip(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-	repo := NewTelegramPostgres(db)
-
-	team, err := repo.CreateTeam(ctx, uniqueName(t, "status"))
-	if err != nil {
-		t.Fatalf("CreateTeam: %v", err)
-	}
-	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM telegram_teams WHERE id = $1`, team.ID) })
-
-	got, err := repo.GetTeamByID(ctx, team.ID)
-	if err != nil || got.Status != models.TeamStatusActive {
-		t.Fatalf("fresh team status = (%q, %v), want active", got.Status, err)
-	}
-	if err := repo.SetTeamStatus(ctx, team.ID, models.TeamStatusDisqualified); err != nil {
-		t.Fatalf("SetTeamStatus: %v", err)
-	}
-	byName, err := repo.GetTeamByName(ctx, team.Name)
-	if err != nil || byName.Status != models.TeamStatusDisqualified {
-		t.Errorf("GetTeamByName status = (%q, %v)", byName.Status, err)
-	}
-	all, err := repo.GetAllTeams(ctx)
-	if err != nil {
-		t.Fatalf("GetAllTeams: %v", err)
-	}
-	found := false
-	for _, tm := range all {
-		if tm.ID == team.ID {
-			found = true
-			if tm.Status != models.TeamStatusDisqualified {
-				t.Errorf("GetAllTeams status = %q", tm.Status)
-			}
-		}
-	}
-	if !found {
-		t.Error("team missing from GetAllTeams")
-	}
-}
-
-func TestIntegrationNullableTelegramPlayer(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-	repo := NewTelegramPostgres(db)
-
-	tgID := int64(999888777)
-	t.Cleanup(func() {
-		_, _ = db.Exec(`DELETE FROM telegram_players WHERE telegram_id = $1`, tgID)
-	})
-
-	// Create fresh player just like /start does - game_nickname, game_id, zone_id, etc. are NULL
-	p := &models.TelegramPlayer{
-		TelegramID:       &tgID,
-		TelegramUsername: "test_null_scan",
-		FirstName:        "TestNull",
-	}
-	if err := repo.CreateOrUpdatePlayer(ctx, p); err != nil {
-		t.Fatalf("CreateOrUpdatePlayer: %v", err)
-	}
-
-	got, err := repo.GetPlayerByTelegramID(ctx, tgID)
-	if err != nil {
-		t.Fatalf("GetPlayerByTelegramID with NULL fields failed: %v", err)
-	}
-	if got == nil {
-		t.Fatal("GetPlayerByTelegramID returned nil player")
-	}
-	if got.GameNickname != "" || got.GameID != "" || got.ZoneID != "" || got.Stars != 0 || got.MainRole != "" {
-		t.Errorf("expected zero values for unset fields, got nick=%q id=%q zone=%q stars=%d role=%q",
-			got.GameNickname, got.GameID, got.ZoneID, got.Stars, got.MainRole)
-	}
-}
-
-// The bracket cache is rewritten after every Challonge write; both_notified
-// is ours, not Challonge's, and must survive the rewrite.
-func TestIntegrationBracketCacheKeepsNotified(t *testing.T) {
-	db := testDB(t)
-	ctx := context.Background()
-	repo := NewTelegramPostgres(db)
-
-	a, err := repo.CreateTeam(ctx, uniqueName(t, "brA"))
-	if err != nil {
-		t.Fatalf("CreateTeam: %v", err)
-	}
-	b, err := repo.CreateTeam(ctx, uniqueName(t, "brB"))
-	if err != nil {
-		t.Fatalf("CreateTeam: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = db.Exec(`DELETE FROM telegram_bracket_matches WHERE challonge_match_id IN (9001, 9002)`)
-		_, _ = db.Exec(`DELETE FROM telegram_teams WHERE id IN ($1, $2)`, a.ID, b.ID)
-	})
-	if err := repo.SetTeamParticipantID(ctx, a.ID, 501); err != nil {
-		t.Fatalf("SetTeamParticipantID: %v", err)
-	}
-	gotA, _ := repo.GetTeamByID(ctx, a.ID)
-	if gotA.ChallongeParticipantID == nil || *gotA.ChallongeParticipantID != 501 {
-		t.Fatalf("participant id = %v, want 501", gotA.ChallongeParticipantID)
-	}
-
-	first := []models.BracketMatch{
-		{ChallongeMatchID: 9001, Round: 1, PlayOrder: 1, Team1ID: &a.ID, Team2ID: &b.ID, State: models.BracketOpen},
-		{ChallongeMatchID: 9002, Round: 2, PlayOrder: 2, State: models.BracketPending},
-	}
-	if err := repo.ReplaceBracketMatches(ctx, first); err != nil {
-		t.Fatalf("ReplaceBracketMatches: %v", err)
-	}
-	cached, err := repo.GetBracketMatches(ctx)
-	if err != nil {
-		t.Fatalf("GetBracketMatches: %v", err)
-	}
-	var m1 *models.BracketMatch
-	for i := range cached {
-		if cached[i].ChallongeMatchID == 9001 {
-			m1 = &cached[i]
-		}
-	}
-	if m1 == nil || m1.Team1Name != a.Name || m1.Team2Name != b.Name {
-		t.Fatalf("match 9001 = %+v, want names joined", m1)
-	}
-	if err := repo.MarkBracketNotified(ctx, []int{m1.ID}); err != nil {
-		t.Fatalf("MarkBracketNotified: %v", err)
-	}
-
-	second := []models.BracketMatch{
-		{ChallongeMatchID: 9001, Round: 1, PlayOrder: 1, Team1ID: &a.ID, Team2ID: &b.ID, WinnerID: &a.ID, State: models.BracketComplete, ScoresCSV: "2-0"},
-	}
-	if err := repo.ReplaceBracketMatches(ctx, second); err != nil {
-		t.Fatalf("ReplaceBracketMatches#2: %v", err)
-	}
-	cached, _ = repo.GetBracketMatches(ctx)
-	var seen9001, seen9002 bool
-	for _, m := range cached {
-		switch m.ChallongeMatchID {
-		case 9001:
-			seen9001 = true
-			if !m.BothNotified || m.State != models.BracketComplete || m.ID != m1.ID {
-				t.Errorf("9001 after rewrite = %+v, want notified, complete, same id", m)
-			}
-		case 9002:
-			seen9002 = true
-		}
-	}
-	if !seen9001 || seen9002 {
-		t.Errorf("after rewrite seen9001=%v seen9002=%v, want true/false", seen9001, seen9002)
-	}
-
-	// A rollback that puts a different pair into the match must re-arm the ping.
-	third := []models.BracketMatch{
-		{ChallongeMatchID: 9001, Round: 1, PlayOrder: 1, Team1ID: &a.ID, State: models.BracketOpen},
-	}
-	if err := repo.ReplaceBracketMatches(ctx, third); err != nil {
-		t.Fatalf("ReplaceBracketMatches#3: %v", err)
-	}
-	cached, _ = repo.GetBracketMatches(ctx)
-	for _, m := range cached {
-		if m.ChallongeMatchID == 9001 && m.BothNotified {
-			t.Error("both_notified survived a pair change")
-		}
-	}
-
-	// Queued report round trip.
-	rep := &models.TelegramMatchReport{ReporterTelegramID: 1, WinnerTeamID: a.ID, LoserTeamID: b.ID, Score: "2:0", PhotoFileIDs: []string{"f"}, BracketMatchID: &m1.ID}
-	if err := repo.CreateMatchReport(ctx, rep); err != nil {
-		t.Fatalf("CreateMatchReport: %v", err)
-	}
-	t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM telegram_match_reports WHERE id = $1`, rep.ID) })
-	queued, _ := repo.GetUnsyncedReports(ctx)
-	found := false
-	for _, q := range queued {
-		if q.ID == rep.ID && q.BracketMatchID != nil && *q.BracketMatchID == m1.ID {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("report %d missing from unsynced queue", rep.ID)
-	}
-	if err := repo.SetReportSynced(ctx, rep.ID); err != nil {
-		t.Fatalf("SetReportSynced: %v", err)
-	}
-	queued, _ = repo.GetUnsyncedReports(ctx)
-	for _, q := range queued {
-		if q.ID == rep.ID {
-			t.Error("report still queued after SetReportSynced")
-		}
-	}
-}
-
 // A player on either roster of an ACTIVE match may not queue again; once the
 // match leaves ACTIVE they may.
 func TestIntegrationIsInActiveMatch(t *testing.T) {
@@ -1454,9 +952,9 @@ func TestIntegrationIsInActiveMatch(t *testing.T) {
 	matchRepo := newMatchRepo(t, db)
 	lobby := NewLobbyMatchPostgres(db)
 
-	aID, _ := seedBettor(t, db, matchRepo, 0)
-	bID, _ := seedBettor(t, db, matchRepo, 0)
-	freeID, _ := seedBettor(t, db, matchRepo, 0)
+	aID := seedPlayer(t, db, matchRepo, 0)
+	bID := seedPlayer(t, db, matchRepo, 0)
+	freeID := seedPlayer(t, db, matchRepo, 0)
 
 	matchID, err := lobby.Create(ctx, models.CreateLobbyMatchRequest{
 		GuildID: "itest-active", CaptainAID: aID, CaptainBID: bID,
@@ -1499,8 +997,8 @@ func TestIntegrationRosterScoreboardAndAliases(t *testing.T) {
 	matchRepo := newMatchRepo(t, db)
 	lobby := NewLobbyMatchPostgres(db)
 
-	pA, _ := seedBettor(t, db, matchRepo, 0)
-	pB, _ := seedBettor(t, db, matchRepo, 0)
+	pA := seedPlayer(t, db, matchRepo, 0)
+	pB := seedPlayer(t, db, matchRepo, 0)
 
 	pAName, err := matchRepo.GetPlayerNameByID(ctx, pA)
 	if err != nil {

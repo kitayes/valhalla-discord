@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
-	"strconv"
 	"strings"
-	"time"
 
 	"blackwatch/internal/domain"
 	"blackwatch/internal/repository"
@@ -18,7 +16,6 @@ import (
 type Config struct {
 	Repo          repository.Config `envPrefix:"REPO_"`
 	DiscordToken  string            `env:"DISCORD_TOKEN" envDefault:""`
-	TelegramToken string            `env:"TELEGRAM_TOKEN" envDefault:""`
 	AIProvider    string            `env:"AI_PROVIDER" envDefault:"ocr"`
 	OCRServiceURL string            `env:"OCR_SERVICE_URL" envDefault:"http://ocr:8000"`
 	GeminiKey     string            `env:"GEMINI_KEY" envDefault:""`
@@ -27,92 +24,43 @@ type Config struct {
 	AllowedChannelID string   `env:"ALLOWED_CHANNEL_ID" envDefault:""`
 	AdminUserIDs     []string `env:"ADMIN_USER_IDS" envSeparator:"," envDefault:""`
 
-	TelegramAdminIDs []int64 `env:"TELEGRAM_ADMIN_IDS" envSeparator:"," envDefault:""`
-
-	GoogleOwnerEmail string `env:"GOOGLE_OWNER_EMAIL" envDefault:""`
-	// GoogleCredentialsPath used to be a bare literal in main. Where a file is
-	// read from is configuration, not a constant in the entrypoint.
+	GoogleOwnerEmail      string `env:"GOOGLE_OWNER_EMAIL" envDefault:""`
 	GoogleCredentialsPath string `env:"GOOGLE_CREDENTIALS_PATH" envDefault:"google-credentials.json"`
+	SpreadsheetID         string `env:"GOOGLE_SHEET_ID" envDefault:""`
 
 	PlayerCacheSize int `env:"PLAYER_CACHE_SIZE" envDefault:"100000"`
+	HTTPTimeoutSec  int `env:"HTTP_TIMEOUT_SEC" envDefault:"10"`
 
-	// SpreadsheetID is read from GOOGLE_SHEET_ID, which is what .env and the
-	// README have always used. The code used to read SPREADSHEET_ID instead, so
-	// the ID was empty and every sheet sync failed silently.
-	SpreadsheetID string `env:"GOOGLE_SHEET_ID" envDefault:""`
+	ClanTagRoleID  string `env:"CLAN_TAG_ROLE_ID" envDefault:""`
+	ClanTagEnabled bool   `env:"CLAN_TAG_ENABLED" envDefault:"false"`
+	GuildID        string `env:"GUILD_ID" envDefault:""`
+	RefereeRoleID  string `env:"REFEREE_ROLE_ID" envDefault:""`
 
-	HTTPTimeoutSec int `env:"HTTP_TIMEOUT_SEC" envDefault:"10"`
-
-	ClanTagRoleID            string `env:"CLAN_TAG_ROLE_ID" envDefault:""`
-	ClanTagEnabled           bool   `env:"CLAN_TAG_ENABLED" envDefault:"false"`
-	GuildID                  string `env:"GUILD_ID" envDefault:""`
-	RefereeRoleID            string `env:"REFEREE_ROLE_ID" envDefault:""`
-	TelegramChannelID        string `env:"TELEGRAM_CHANNEL_ID" envDefault:""`
-	TelegramTournamentChatID string `env:"TELEGRAM_TOURNAMENT_CHAT_ID" envDefault:""`
-	// TournamentTZ is the IANA zone /set_tourney reads its date in and the
-	// check-in schedule is printed in ("Asia/Almaty"). Empty means the
-	// server's local zone, which on a UTC host is five hours off for everyone.
-	TournamentTZ string `env:"TOURNAMENT_TZ" envDefault:""`
-	// ChallongeAPIKey turns the tournament bracket on. Empty means no bracket:
-	// /report keeps its free-form opponent picker and nothing calls Challonge.
-	ChallongeAPIKey string `env:"CHALLONGE_API_KEY" envDefault:""`
-	// ChallongeSubdomain is the Challonge community the tournaments are created
-	// under; empty creates them on the key owner's account.
-	ChallongeSubdomain string `env:"CHALLONGE_SUBDOMAIN" envDefault:""`
-	// BracketWalkoverScore is reported for a technical defeat, "<winner>-<loser>".
-	BracketWalkoverScore string `env:"BRACKET_WALKOVER_SCORE" envDefault:"1-0"`
 	// BetAmounts are the stake buttons drawn under a match's betting post.
-	// Sent to Telegram in ascending order with duplicates dropped; see
-	// StakeOptions.
 	BetAmounts []int `env:"BET_AMOUNTS" envSeparator:"," envDefault:"25,50,100"`
-	// BetMax caps a single stake, the "Макс" button included. It is enforced
-	// server-side on every bet: callback data is client-supplied and a modified
-	// client can send whatever number it likes.
-	BetMax       int    `env:"BET_MAX" envDefault:"250"`
+	// BetMax caps a single stake, the "Макс" button included.
+	BetMax int `env:"BET_MAX" envDefault:"250"`
+
 	DeepSeekKey  string `env:"DEEPSEEK_KEY" envDefault:""`
 	FAQChannelID string `env:"FAQ_CHANNEL_ID" envDefault:""`
 	FAQFilePath  string `env:"FAQ_FILE_PATH" envDefault:"assets/faq.md"`
-	WebAdminPort string `env:"WEB_ADMIN_PORT" envDefault:"8080"`
-	// WebAdminKey has no default on purpose. It used to fall back to a literal
-	// "blackwatch-admin", which meant the dashboard came up with a publicly
-	// known password on every deployment that never set the variable. Empty
-	// means the dashboard does not start at all.
-	WebAdminKey string `env:"WEB_ADMIN_KEY" envDefault:""`
-	// WebAdminTrustedProxies lists the reverse proxies (CIDRs or bare IPs)
-	// allowed to set X-Forwarded-For and X-Forwarded-Proto for the dashboard.
-	// Empty — the default — means the header is ignored and the direct peer
-	// address is used, because a caller who can reach the port directly would
-	// otherwise pick their own address and walk straight past the login throttle.
-	WebAdminTrustedProxies []string `env:"WEB_ADMIN_TRUSTED_PROXIES" envSeparator:"," envDefault:""`
-	// WebAppURL is the public HTTPS address where Telegram WebApp is hosted (e.g. "https://domain/app").
-	WebAppURL string `env:"WEB_APP_URL" envDefault:""`
 
-	// Rank roles granted automatically after each match. Leave a role empty to
-	// skip that tier; leave them all empty to disable role syncing entirely.
-	TierRoleObsidian string `env:"TIER_ROLE_OBSIDIAN" envDefault:""`
-	TierRoleOnyx     string `env:"TIER_ROLE_ONYX" envDefault:""`
-	TierRoleCarbon   string `env:"TIER_ROLE_CARBON" envDefault:""`
-	TierRoleGraphite string `env:"TIER_ROLE_GRAPHITE" envDefault:""`
-	// TierAnnounceChannelID receives promotion/demotion embeds. When empty, the
-	// channel the match was closed in is used.
+	WebAdminPort           string   `env:"WEB_ADMIN_PORT" envDefault:"8080"`
+	WebAdminKey            string   `env:"WEB_ADMIN_KEY" envDefault:""`
+	WebAdminTrustedProxies []string `env:"WEB_ADMIN_TRUSTED_PROXIES" envSeparator:"," envDefault:""`
+
+	// Rank roles granted automatically after each match.
+	TierRoleObsidian      string `env:"TIER_ROLE_OBSIDIAN" envDefault:""`
+	TierRoleOnyx          string `env:"TIER_ROLE_ONYX" envDefault:""`
+	TierRoleCarbon        string `env:"TIER_ROLE_CARBON" envDefault:""`
+	TierRoleGraphite      string `env:"TIER_ROLE_GRAPHITE" envDefault:""`
 	TierAnnounceChannelID string `env:"TIER_ANNOUNCE_CHANNEL_ID" envDefault:""`
 
-	// LevelAnnounceChannelID receives level-up announcements (for chat & voice XP).
-	// When empty, chat level-ups are announced in the channel the message was sent in.
+	// Economy & Activity channels.
 	LevelAnnounceChannelID string `env:"LEVEL_ANNOUNCE_CHANNEL_ID" envDefault:""`
-
-	// BettingChannelID is the dedicated Discord channel for match betting cards,
-	// live pools, match outcomes, player coin rewards, and bet payouts.
-	// When empty, betting buttons are attached directly to the match card.
-	BettingChannelID string `env:"BETTING_CHANNEL_ID" envDefault:""`
-
-	// ShopChannelID is the dedicated Discord channel for /shop and the pinned
-	// shop showcase (/shop_admin post). When empty, /shop works in any channel.
-	ShopChannelID string `env:"SHOP_CHANNEL_ID" envDefault:""`
-
-	// ShopAdminChannelID receives pending prize redemption requests from /shop
-	// with Approve/Cancel buttons. Falls back to the channel where /shop was used.
-	ShopAdminChannelID string `env:"SHOP_ADMIN_CHANNEL_ID" envDefault:""`
+	BettingChannelID       string `env:"BETTING_CHANNEL_ID" envDefault:""`
+	ShopChannelID          string `env:"SHOP_CHANNEL_ID" envDefault:""`
+	ShopAdminChannelID     string `env:"SHOP_ADMIN_CHANNEL_ID" envDefault:""`
 }
 
 // TierRoleIDs maps each configured tier to its Discord role ID, skipping tiers
@@ -134,10 +82,6 @@ func (c *Config) TierRoleIDs() map[domain.Tier]string {
 
 // StakeOptions returns the configured stake buttons in ascending order with
 // duplicates removed.
-//
-// The order is fixed here rather than left to the operator so the keyboard
-// cannot come out as "50 10 25": the buttons sit in one row and a bettor picks
-// by position as much as by reading.
 func (c *Config) StakeOptions() []int {
 	seen := make(map[int]struct{}, len(c.BetAmounts))
 	out := make([]int, 0, len(c.BetAmounts))
@@ -155,9 +99,6 @@ func (c *Config) StakeOptions() []int {
 	return out
 }
 
-// nonEmpty drops blank entries from a comma-separated list. An unset variable
-// parses to a slice holding one empty string, which len() alone reads as
-// "configured".
 func nonEmpty(values []string) []string {
 	out := make([]string, 0, len(values))
 	for _, v := range values {
@@ -168,7 +109,7 @@ func nonEmpty(values []string) []string {
 	return out
 }
 
-// WebAdminEnabled reports whether the dashboard should be started.
+// WebAdminEnabled reports whether the license admin dashboard should be started.
 func (c *Config) WebAdminEnabled() bool {
 	return c.WebAdminKey != ""
 }
@@ -184,11 +125,6 @@ func (c *Config) EffectiveAIProvider() string {
 }
 
 // Validate rejects a configuration the process cannot run correctly with.
-//
-// These checks used to be scattered through main as ad-hoc `if x == ""` guards,
-// each with its own idea of what to do about it, and GUILD_ID had no check at
-// all — a deployment that forgot it silently registered its slash commands into
-// a guild ID hardcoded in the Discord package.
 func (c *Config) Validate() error {
 	var errs []error
 
@@ -218,9 +154,6 @@ func (c *Config) Validate() error {
 		errs = append(errs, fmt.Errorf("PLAYER_CACHE_SIZE must be positive, got %d", c.PlayerCacheSize))
 	}
 
-	// A stake the bettor cannot afford to be offered is worse than no button:
-	// the tap is accepted by Telegram and refused by the database, which reads
-	// as a broken bot. Both bounds are checked here so that never ships.
 	if c.BetMax <= 0 {
 		errs = append(errs, fmt.Errorf("BET_MAX must be positive, got %d", c.BetMax))
 	}
@@ -234,46 +167,19 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// Nobody to administer the bot is a configuration error, not a deployment
-	// with no admins. Permission checks resolve through these two and nothing
-	// else, so with both empty every admin command and the entire match
-	// lifecycle — create, balance, cancel, and the WIN buttons — answers "У вас
-	// нет прав" to everyone, with nothing in the log to say why.
 	if len(nonEmpty(c.AdminUserIDs)) == 0 && c.RefereeRoleID == "" {
 		errs = append(errs, errors.New(
 			"ADMIN_USER_IDS or REFEREE_ROLE_ID is required: without either, nobody can run admin commands or manage matches"))
 	}
 
-	// An enabled subsystem with missing settings is a startup error, not a
-	// silent skip: the operator asked for it and would otherwise never find out
-	// it was not running.
 	if c.WebAdminEnabled() && c.WebAdminPort == "" {
 		errs = append(errs, errors.New("WEB_ADMIN_PORT must be set when WEB_ADMIN_KEY is configured"))
 	}
 	if c.ClanTagEnabled && c.ClanTagRoleID == "" {
 		errs = append(errs, errors.New("CLAN_TAG_ROLE_ID must be set when CLAN_TAG_ENABLED is true"))
 	}
-	if c.TelegramChannelID != "" && c.TelegramToken == "" {
-		errs = append(errs, errors.New("TELEGRAM_CHANNEL_ID is set but TELEGRAM_TOKEN is empty"))
-	}
-	if _, err := c.TournamentLocation(); err != nil {
-		errs = append(errs, fmt.Errorf("TOURNAMENT_TZ: %w", err))
-	}
-
-	if _, _, err := ParseWalkoverScore(c.BracketWalkoverScore); err != nil {
-		errs = append(errs, fmt.Errorf("BRACKET_WALKOVER_SCORE: %w", err))
-	}
 
 	return errors.Join(errs...)
-}
-
-// TournamentLocation resolves TOURNAMENT_TZ; empty falls back to the server's
-// local zone.
-func (c *Config) TournamentLocation() (*time.Location, error) {
-	if c.TournamentTZ == "" {
-		return time.Local, nil
-	}
-	return time.LoadLocation(c.TournamentTZ)
 }
 
 func ReadEnvConfig(cfg *Config) error {
@@ -281,23 +187,4 @@ func ReadEnvConfig(cfg *Config) error {
 		return err
 	}
 	return cfg.Validate()
-}
-
-// BracketEnabled reports whether the Challonge bracket is configured.
-func (c *Config) BracketEnabled() bool {
-	return c.ChallongeAPIKey != ""
-}
-
-// ParseWalkoverScore reads "W-L" into two non-negative ints with W > L.
-func ParseWalkoverScore(s string) (win, lose int, err error) {
-	parts := strings.Split(strings.TrimSpace(s), "-")
-	if len(parts) != 2 {
-		return 0, 0, fmt.Errorf("want W-L, got %q", s)
-	}
-	win, err1 := strconv.Atoi(parts[0])
-	lose, err2 := strconv.Atoi(parts[1])
-	if err1 != nil || err2 != nil || win < 0 || lose < 0 || win <= lose {
-		return 0, 0, fmt.Errorf("want W-L with W > L, got %q", s)
-	}
-	return win, lose, nil
 }

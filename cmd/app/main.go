@@ -1,7 +1,6 @@
 package main
 
 import (
-	"blackwatch/migrations"
 	"context"
 	"errors"
 	"net/http"
@@ -12,11 +11,10 @@ import (
 
 	"blackwatch/internal/ai"
 	"blackwatch/internal/application"
-	"blackwatch/internal/challonge"
 	"blackwatch/internal/delivery/discord"
-	"blackwatch/internal/delivery/telegram"
 	"blackwatch/internal/delivery/web"
 	"blackwatch/internal/repository"
+	"blackwatch/migrations"
 	"blackwatch/pkg/config"
 	"blackwatch/pkg/logger"
 	"blackwatch/pkg/sheets"
@@ -26,12 +24,10 @@ import (
 	_ "time/tzdata"
 )
 
-// shutdownTimeout bounds how long in-flight admin requests may finish.
-const shutdownTimeout = 10 * time.Second
-
-// startupTimeout bounds database connection, migrations and cache warm-up, so a
-// database that never answers fails the boot instead of hanging it.
-const startupTimeout = 60 * time.Second
+const (
+	shutdownTimeout = 10 * time.Second
+	startupTimeout  = 60 * time.Second
+)
 
 func main() {
 	_ = godotenv.Load()
@@ -91,8 +87,6 @@ func main() {
 		if err != nil {
 			log.Error("failed to init google sheets: %s", err.Error())
 		} else if cfg.SpreadsheetID == "" {
-			// Credentials without a target sheet make every sync fail at the API
-			// with an empty ID, which only ever showed up as a logged error.
 			sheetsClient = nil
 			log.Warn("GOOGLE_SHEET_ID is not set, sheets integration disabled")
 		} else {
@@ -103,15 +97,7 @@ func main() {
 	}
 
 	services := application.NewService(repos, aiProvider, sheetsClient, cfg.GoogleOwnerEmail, cfg.SpreadsheetID, cfg.HTTPTimeoutSec, log)
-	if cfg.BracketEnabled() {
-		walkoverWin, walkoverLose, _ := config.ParseWalkoverScore(cfg.BracketWalkoverScore)
-		challongeHTTP := &http.Client{Timeout: time.Duration(cfg.HTTPTimeoutSec) * time.Second}
-		provider := challonge.New(cfg.ChallongeAPIKey, cfg.ChallongeSubdomain, challongeHTTP)
-		services.SetBracketService(application.NewBracketService(repos.Telegram, provider, walkoverWin, walkoverLose, log))
-		log.Info("Challonge bracket service initialized")
-	}
 
-	// Initialize DeepSeek FAQ service if API key is configured
 	if cfg.DeepSeekKey != "" {
 		deepseek := ai.NewDeepSeekClient(cfg.DeepSeekKey)
 		faqService, err := application.NewFAQService(log, deepseek, cfg.FAQFilePath)
@@ -128,44 +114,6 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// The Telegram bot is built and its callbacks are installed BEFORE the
-	// Discord bot starts serving. Wiring them afterwards raced: discordgo
-	// dispatches handlers on its own goroutines, and those handlers read the
-	// very callback fields main was still assigning.
-	var telegramBot *telegram.Bot
-	if cfg.TelegramToken != "" {
-		// Validated at config load; a failure here is unreachable.
-		tournamentLoc, _ := cfg.TournamentLocation()
-		telegramBot, err = telegram.NewBot(cfg.TelegramToken, cfg.TelegramAdminIDs, services.TelegramService, services.ProfileLinkService, services.BettingService, cfg.TelegramChannelID, cfg.TelegramTournamentChatID, telegram.BetSettings{Stakes: cfg.StakeOptions(), Max: cfg.BetMax}, services.Bracket, tournamentLoc, log)
-		if err != nil {
-			log.Error("failed to init telegram bot: %s", err.Error())
-		} else if betting := telegramBot.BettingBot(); betting != nil {
-			services.Lobby.SetMatchLiveCallback(betting.NotifyMatchLive)
-			services.BettingService.SetPayoutCallback(betting.NotifyMatchResult)
-			services.BettingService.SetRefundCallback(betting.NotifyMatchCancelled)
-		}
-	} else {
-		log.Warn("TELEGRAM_TOKEN not set, telegram bot disabled")
-	}
-
-	location, _ := cfg.TournamentLocation()
-	matchDesk := application.NewMatchDeskService(repository.NewTelegramPostgres(db), cfg.TelegramAdminIDs, location)
-	if cfg.WebAppURL != "" {
-		matchDesk.WithWebAppURL(cfg.WebAppURL)
-	}
-	services.SetMatchDeskService(matchDesk)
-	if telegramBot != nil {
-		telegramBot.WithMatchDesk(matchDesk)
-		if cfg.WebAppURL != "" {
-			telegramBot.WithWebAppURL(cfg.WebAppURL)
-		}
-		if services.TelegramService != nil {
-			services.TelegramService.SetMatchNotifier(func(ctx context.Context, chatID int64, text string, hasWebAppBtn bool) {
-				telegramBot.SendMatchNotification(chatID, text, hasWebAppBtn)
-			})
-			services.TelegramService.SetBracketChangeNotifier(telegramBot.ApplyBracketChange)
-		}
-	}
 	discordBot := discord.NewBot(&cfg, services, log)
 	if err := discordBot.Init(); err != nil {
 		log.Error("failed to init discord bot: %s", err.Error())
@@ -178,45 +126,20 @@ func main() {
 		}
 	}()
 
-	if telegramBot != nil {
-		go telegramBot.Start(ctx)
-		log.Info("Telegram bot started")
-	}
-
 	var adminServer *web.AdminServer
-	if cfg.WebAdminPort != "" {
-		adminServer, err = web.NewAdminServer(services, log, cfg.WebAdminPort, cfg.WebAdminKey, cfg.WebAdminTrustedProxies, cfg.TelegramToken)
+	if cfg.WebAdminEnabled() {
+		adminServer, err = web.NewAdminServer(services, log, cfg.WebAdminPort, cfg.WebAdminKey, cfg.WebAdminTrustedProxies)
 		if err != nil {
-			log.Error("failed to init web server: %s", err.Error())
+			log.Error("failed to init web admin dashboard: %s", err.Error())
 			adminServer = nil
 		} else {
-			adminServer.WithAdminIDs(cfg.TelegramAdminIDs)
-			if telegramBot != nil {
-				adminServer.WithDebtorNotifier(func(ctx context.Context, adminChatID int64, msg string) error {
-					return telegramBot.PingDebtors(ctx, adminChatID, msg)
-				})
-				adminServer.WithPhotoUploader(telegramBot.UploadPhoto)
-				adminServer.WithBotUsername(telegramBot.Username())
-				adminServer.WithQualifierAnnouncer(telegramBot.AnnounceQualified)
-				adminServer.WithRegistrationAnnouncer(telegramBot.AnnounceRegistration)
-				adminServer.WithBracketBuilder(func(ctx context.Context, adminChatID int64) error {
-					_, err := telegramBot.BuildBracket(ctx, adminChatID)
-					return err
-				})
-			}
-			if services.TelegramService != nil {
-				services.TelegramService.SetEventHook(adminServer.Broadcast)
-			}
 			srv := adminServer
 			go func() {
 				if err := srv.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-					log.Error("web server error: %s", err.Error())
+					log.Error("web admin server error: %s", err.Error())
 				}
 			}()
-			log.Info("Web server (Mini App & API) started on :%s", cfg.WebAdminPort)
-			if cfg.WebAdminKey != "" {
-				log.Info("Web admin dashboard enabled on :%s", cfg.WebAdminPort)
-			}
+			log.Info("Web admin dashboard enabled on :%s", cfg.WebAdminPort)
 		}
 	}
 
@@ -227,9 +150,6 @@ func main() {
 	log.Info("Shutdown signal received, stopping...")
 	cancel()
 
-	// Each stage gets its own deadline. Sharing one budget meant a stuck admin
-	// connection could burn the whole window and hand the Sheets drain a context
-	// that had already expired — exactly the case the drain exists for.
 	if adminServer != nil {
 		adminCtx, adminCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		if err := adminServer.Shutdown(adminCtx); err != nil {
@@ -239,16 +159,12 @@ func main() {
 	}
 
 	discordBot.Stop()
-	if telegramBot != nil {
-		telegramBot.Stop()
-	}
 
-	// Wait for in-flight Google Sheets syncs before closing the DB.
 	syncCtx, syncCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer syncCancel()
 	if err := services.MatchService.Shutdown(syncCtx); err != nil {
 		log.Error("match service shutdown error: %s", err.Error())
 	}
 
-	log.Info("Bots Stopped")
+	log.Info("Shutdown complete")
 }

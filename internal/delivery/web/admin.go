@@ -21,45 +21,22 @@ var templateFS embed.FS
 
 const sessionCookieName = "bw_admin_session"
 
-// AdminServer is a lightweight web dashboard for server owners.
+// AdminServer is a lightweight web dashboard for server license management.
 type AdminServer struct {
-	services *application.Service
-	logger   application.Logger
-	port     string
-	apiKey   string
-	tmpl     *template.Template
-	sessions *sessionStore
-	throttle *loginThrottle
-	// trustedProxies are the peers whose X-Forwarded-For header may be believed.
-	// Empty means nobody: the direct peer address is used.
+	services       *application.Service
+	logger         application.Logger
+	port           string
+	apiKey         string
+	tmpl           *template.Template
+	sessions       *sessionStore
+	throttle       *loginThrottle
 	trustedProxies []netip.Prefix
-	adminIDs       map[int64]bool
-	debtorNotifier func(ctx context.Context, adminChatID int64, msg string) error
-	// photoUploader hands a screenshot to Telegram and returns the file ID it
-	// answers with. The mini app can only send raw bytes, while everything
-	// downstream addresses photos by file ID, so this is the bridge between
-	// the two.
-	photoUploader  func(ctx context.Context, data []byte, filename string) (string, error)
-	bracketBuilder func(ctx context.Context, adminChatID int64) error
-	// qualifierAnnouncer tells the Telegram chat and the qualified teams that
-	// a qualifier closed from the Mini App is over.
-	qualifierAnnouncer func(ctx context.Context, res *application.FinishResult)
-	// registrationAnnouncer tells the captains a tournament's registration is
-	// open and returns how many it messages.
-	registrationAnnouncer func(ctx context.Context, tournamentID int) (int, error)
-	sseBroker             *SSEBroker
-	srv                   *http.Server
-	startedAt             time.Time
-	// botUsername is the bot the mini app is served from; it turns an invite
-	// token into a t.me deep link. Empty means the app hands out bare tokens.
-	botUsername string
+	srv            *http.Server
+	startedAt      time.Time
 }
 
 // NewAdminServer creates a new web admin server.
-//
-// trustedProxyCIDRs lists the reverse proxies allowed to rewrite the client
-// address; see clientAddr for why an unconditional X-Forwarded-For is not safe.
-func NewAdminServer(services *application.Service, logger application.Logger, port, apiKey string, trustedProxyCIDRs []string, botToken string) (*AdminServer, error) {
+func NewAdminServer(services *application.Service, logger application.Logger, port, apiKey string, trustedProxyCIDRs []string) (*AdminServer, error) {
 	tmpl, err := template.ParseFS(templateFS, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("web: failed to parse templates: %w", err)
@@ -77,77 +54,18 @@ func NewAdminServer(services *application.Service, logger application.Logger, po
 		sessions:       newSessionStore(),
 		throttle:       newLoginThrottle(),
 		trustedProxies: proxies,
-		sseBroker:      NewSSEBroker(),
 		startedAt:      time.Now(),
 	}
 
-	// The server is built here, not in Start. Start runs on its own goroutine
-	// while main calls Shutdown from another: assigning s.srv inside Start was a
-	// data race, and a shutdown that won it read a nil srv, returned nil, and
-	// left the listener running while main went on to close the database.
 	mux := http.NewServeMux()
-	if apiKey != "" {
-		mux.HandleFunc("/", s.authMiddleware(s.handleDashboard))
-		mux.HandleFunc("/api/license", s.authMiddleware(s.handleLicenseAPI))
-		mux.HandleFunc("/login", s.handleLogin)
-		mux.HandleFunc("/logout", s.handleLogout)
-	}
-
-	// Telegram Mini App routes
-	mux.HandleFunc("/app", s.handleApp)
-
-	tmaAuth := func(h http.HandlerFunc) http.HandlerFunc {
-		return TMAAuthMiddleware(botToken, 24*time.Hour, h)
-	}
-
-	mux.HandleFunc("/api/events", tmaAuth(s.handleEventsSSE))
-	mux.HandleFunc("/api/me", tmaAuth(s.handleMe))
-	mux.HandleFunc("/api/bracket", s.handleBracket)
-	mux.HandleFunc("/api/bracket/match_details", s.handleBracketMatchDetails)
-	mux.HandleFunc("/api/team/details", s.handleTeamDetails)
-	mux.HandleFunc("/api/match/active", tmaAuth(s.handleActiveMatch))
-	mux.HandleFunc("/api/match/ready", tmaAuth(s.handleMatchReady))
-	mux.HandleFunc("/api/match/referee", tmaAuth(s.handleMatchReferee))
-	mux.HandleFunc("/api/match/report", tmaAuth(s.handleMatchReport))
-	mux.HandleFunc("/api/match/result/confirm", tmaAuth(s.handleReportConfirm))
-	mux.HandleFunc("/api/match/result/dispute", tmaAuth(s.handleReportDispute))
-	mux.HandleFunc("/api/team/checkin", tmaAuth(s.handleCheckIn))
-	mux.HandleFunc("/api/team/player", tmaAuth(s.handleUpdateTeamPlayer))
-	mux.HandleFunc("/api/team/player/add", tmaAuth(s.handleAddTeamPlayer))
-	mux.HandleFunc("/api/team/create", tmaAuth(s.handleCreateTeam))
-	mux.HandleFunc("/api/team/invite", tmaAuth(s.handleGenerateInvite))
-	mux.HandleFunc("/api/team/join", tmaAuth(s.handleJoinTeam))
-	mux.HandleFunc("/api/team/kick", tmaAuth(s.handleKickPlayer))
-	mux.HandleFunc("/api/team/transfer", tmaAuth(s.handleTransferCaptain))
-	mux.HandleFunc("/api/team/delete", tmaAuth(s.handleDeleteTeam))
-	mux.HandleFunc("/api/team/leave", tmaAuth(s.handleLeaveTeam))
-	mux.HandleFunc("/api/tournaments", tmaAuth(s.handleTournamentsList))
-	mux.HandleFunc("/api/tournament/register", tmaAuth(s.handleTournamentRegister))
-	mux.HandleFunc("/api/tournament/unregister", tmaAuth(s.handleTournamentUnregister))
-	mux.HandleFunc("/api/admin/desk", tmaAuth(s.handleAdminDesk))
-	mux.HandleFunc("/api/admin/match_action", tmaAuth(s.handleAdminMatchAction))
-	mux.HandleFunc("/api/admin/teams", tmaAuth(s.handleAdminTeams))
-	mux.HandleFunc("/api/admin/team/player", tmaAuth(s.handleAdminTeamPlayerUpdate))
-	mux.HandleFunc("/api/admin/team/kick", tmaAuth(s.handleAdminTeamPlayerKick))
-	mux.HandleFunc("/api/admin/team/captain", tmaAuth(s.handleAdminTeamCaptain))
-	mux.HandleFunc("/api/admin/team/action", tmaAuth(s.handleAdminTeamAction))
-	mux.HandleFunc("/api/admin/team/delete", tmaAuth(s.handleAdminTeamDelete))
-	mux.HandleFunc("/api/admin/ping_debtors", tmaAuth(s.handleAdminPingDebtors))
-	mux.HandleFunc("/api/admin/disqualify_uncheck", tmaAuth(s.handleAdminDisqualifyUncheck))
-	mux.HandleFunc("/api/admin/tournament/create", tmaAuth(s.handleAdminTournamentCreate))
-	mux.HandleFunc("/api/admin/tournament/start", tmaAuth(s.handleAdminTournamentStart))
-	mux.HandleFunc("/api/admin/tournament/time", tmaAuth(s.handleAdminTournamentSetTime))
-	mux.HandleFunc("/api/admin/tournament/activate", tmaAuth(s.handleAdminTournamentActivate))
-	mux.HandleFunc("/api/admin/tournament/finish", tmaAuth(s.handleAdminTournamentFinish))
-	mux.HandleFunc("/api/admin/tournament/update", tmaAuth(s.handleAdminTournamentUpdate))
-	mux.HandleFunc("/api/admin/tournament/import-qualified", tmaAuth(s.handleAdminTournamentImportQualified))
-	mux.HandleFunc("/api/admin/tournament/invite", tmaAuth(s.handleAdminTournamentInvite))
-	mux.HandleFunc("/api/admin/tournament/announce-registration", tmaAuth(s.handleAdminTournamentAnnounceRegistration))
+	mux.HandleFunc("/", s.authMiddleware(s.handleDashboard))
+	mux.HandleFunc("/api/license", s.authMiddleware(s.handleLicenseAPI))
+	mux.HandleFunc("/login", s.handleLogin)
+	mux.HandleFunc("/logout", s.handleLogout)
 
 	s.srv = &http.Server{
-		Addr:    ":" + port,
-		Handler: securityHeaders(mux),
-		// Without these an idle or slow client can hold a connection forever.
+		Addr:              ":" + port,
+		Handler:           securityHeaders(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -168,88 +86,12 @@ func (s *AdminServer) Shutdown(ctx context.Context) error {
 	return s.srv.Shutdown(ctx)
 }
 
-// WithBotUsername enables invite deep links of the form t.me/<bot>?start=join_<token>.
-func (s *AdminServer) WithBotUsername(name string) *AdminServer {
-	s.botUsername = strings.TrimPrefix(strings.TrimSpace(name), "@")
-	return s
-}
-
-// inviteLink is the one-tap join link for a token, or "" when the bot's
-// username is unknown.
-func (s *AdminServer) inviteLink(token string) string {
-	if s.botUsername == "" || token == "" {
-		return ""
-	}
-	return "https://t.me/" + s.botUsername + "?start=" + InviteStartPayload(token)
-}
-
-func (s *AdminServer) WithAdminIDs(adminIDs []int64) *AdminServer {
-	s.adminIDs = make(map[int64]bool, len(adminIDs))
-	for _, id := range adminIDs {
-		s.adminIDs[id] = true
-	}
-	return s
-}
-
-func (s *AdminServer) WithDebtorNotifier(fn func(ctx context.Context, adminChatID int64, msg string) error) *AdminServer {
-	s.debtorNotifier = fn
-	return s
-}
-
-// WithPhotoUploader supplies the function that turns screenshot bytes into a
-// Telegram file ID. Without it the mini app cannot accept match results,
-// because a report that reaches the referee without its proof is worse than
-// one that is refused outright.
-func (s *AdminServer) WithPhotoUploader(fn func(ctx context.Context, data []byte, filename string) (string, error)) *AdminServer {
-	s.photoUploader = fn
-	return s
-}
-
-// Broadcast publishes a live update to every open Mini App. The Telegram
-// service uses it so that changes made in the bot reach the app too.
-func (s *AdminServer) Broadcast(event string, payload map[string]any) {
-	s.sseBroker.Broadcast(event, payload)
-}
-
-// WithRegistrationAnnouncer installs the Telegram registration announcement.
-func (s *AdminServer) WithRegistrationAnnouncer(fn func(ctx context.Context, tournamentID int) (int, error)) *AdminServer {
-	s.registrationAnnouncer = fn
-	return s
-}
-
-// WithQualifierAnnouncer installs the Telegram announcement for a qualifier
-// finished from the Mini App.
-func (s *AdminServer) WithQualifierAnnouncer(fn func(ctx context.Context, res *application.FinishResult)) *AdminServer {
-	s.qualifierAnnouncer = fn
-	return s
-}
-
-func (s *AdminServer) WithBracketBuilder(fn func(ctx context.Context, adminChatID int64) error) *AdminServer {
-	s.bracketBuilder = fn
-	return s
-}
-
-func (s *AdminServer) isAdmin(tgID int64) bool {
-	return s.adminIDs != nil && s.adminIDs[tgID]
-}
-
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
-		if strings.HasPrefix(r.URL.Path, "/app") || strings.HasPrefix(r.URL.Path, "/api/") {
-			// Telegram Desktop (Linux/Windows/macOS) loads Mini Apps in a native
-			// webview — the parent frame origin is NOT https://telegram.org but a
-			// tg:// scheme or a null origin, so restricting frame-ancestors to
-			// *.telegram.org blocks the desktop client entirely.
-			// Using '*' satisfies every Telegram client variant while still
-			// preventing completely unrelated sites from embedding the app
-			// (they would need a valid Telegram initData to do anything useful).
-			h.Set("Content-Security-Policy", "frame-ancestors *;")
-		} else {
-			h.Set("X-Frame-Options", "DENY")
-			h.Set("Content-Security-Policy", "frame-ancestors 'none';")
-		}
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Content-Security-Policy", "frame-ancestors 'none';")
 		h.Set("Referrer-Policy", "no-referrer")
 		next.ServeHTTP(w, r)
 	})

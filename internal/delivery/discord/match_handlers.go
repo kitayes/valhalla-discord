@@ -99,7 +99,6 @@ func (b *Bot) publishCreatedMatch(
 			b.publishDiscordBetCard(bg, matchID, captainAName, captainBName, teamACopy, teamBCopy)
 		})
 	}
-	b.notifyTelegramMatchLive(matchID, captainAName, captainBName)
 }
 
 // openMatchThread hangs a thread off the published match card and records it on
@@ -691,16 +690,6 @@ func parseID(s string) int {
 		return 0
 	}
 	return id
-}
-
-// notifyTelegramMatchLive fires the Telegram announcement without blocking the
-// interaction. It runs through goBackground like every other detached call: a
-// bare `go` here meant a panic inside the Telegram callback took the process
-// down instead of one announcement.
-func (b *Bot) notifyTelegramMatchLive(matchID int, captainA, captainB string) {
-	b.goBackground("telegram-match-live", backgroundTimeout, func(context.Context) {
-		b.services.Lobby.NotifyMatchLive(matchID, captainA, captainB, bettingWindow)
-	})
 }
 
 // syncTierRoles grants each player the Discord role matching their new tier.

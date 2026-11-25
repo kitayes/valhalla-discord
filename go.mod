@@ -6,7 +6,6 @@ require (
 	github.com/bwmarrin/discordgo v0.29.0
 	github.com/caarlos0/env/v11 v11.3.1
 	github.com/disintegration/imaging v1.6.2
-	github.com/go-telegram-bot-api/telegram-bot-api/v5 v5.5.1
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/google/generative-ai-go v0.20.1
 	github.com/hashicorp/golang-lru/v2 v2.0.7

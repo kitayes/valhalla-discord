@@ -37,9 +37,6 @@ type Match interface {
 	CreatePlayerWithDiscord(ctx context.Context, name, discordID string) (int, error)
 	SetDiscordID(ctx context.Context, playerID int, discordID string) error
 	ClearDiscordID(ctx context.Context, playerID int) error
-	SetTelegramID(ctx context.Context, playerID int, telegramID int64) error
-	ClearTelegramID(ctx context.Context, playerID int) error
-	GetPlayerByTelegramID(ctx context.Context, telegramID int64) (int, string, error)
 	WipePlayerByID(ctx context.Context, id int) error
 	RestorePlayer(ctx context.Context, id int) error
 	RenamePlayer(ctx context.Context, id int, newName string) error
@@ -50,110 +47,6 @@ type Match interface {
 	AddManualAlias(ctx context.Context, playerID int, alias string) error
 	DeleteAlias(ctx context.Context, playerID int, alias string) (bool, error)
 	MergePlayers(ctx context.Context, sourceID, targetID int) (*models.PlayerMergeSummary, error)
-}
-
-type ProfileLink interface {
-	CreateLinkCode(ctx context.Context, playerID int) (string, error)
-	ValidateLinkCode(ctx context.Context, code string) (int, error)
-	CreateProfileLink(ctx context.Context, link *models.ProfileLink) error
-	GetLinkByDiscordPlayer(ctx context.Context, playerID int) (*models.ProfileLink, error)
-	GetLinkByTelegramID(ctx context.Context, telegramID int64) (*models.ProfileLink, error)
-	UpdateTelegramProfile(ctx context.Context, telegramID int64, nickname, gameID, zoneID string, stars int, role string) error
-	DeleteLinkByDiscordPlayer(ctx context.Context, playerID int) error
-	DeleteLinkByTelegramID(ctx context.Context, telegramID int64) error
-	GetPlayerIDByName(ctx context.Context, name string) (int, error)
-	GetDiscordStatsByPlayerID(ctx context.Context, playerID int) (wins, losses, kills, deaths, assists int, err error)
-}
-
-type Telegram interface {
-	CreateOrUpdatePlayer(ctx context.Context, p *models.TelegramPlayer) error
-	GetPlayerByTelegramID(ctx context.Context, tgID int64) (*models.TelegramPlayer, error)
-	GetPlayerByID(ctx context.Context, playerID int) (*models.TelegramPlayer, error)
-	UpdatePlayerState(ctx context.Context, tgID int64, state string) error
-	UpdatePlayerField(ctx context.Context, tgID int64, column string, value interface{}) error
-	UpdatePlayerFieldByID(ctx context.Context, playerID int, column string, value interface{}) error
-
-	CreateTeam(ctx context.Context, name string) (*models.TelegramTeam, error)
-	GetTeamByID(ctx context.Context, id int) (*models.TelegramTeam, error)
-	GetTeamByName(ctx context.Context, name string) (*models.TelegramTeam, error)
-	DeleteTeam(ctx context.Context, id int) error
-	GetAllTeams(ctx context.Context) ([]models.TelegramTeam, error)
-
-	GetTeamMembers(ctx context.Context, teamID int) ([]models.TelegramPlayer, error)
-	CreateTeammate(ctx context.Context, p *models.TelegramPlayer) error
-	DeleteTeammate(ctx context.Context, playerID int) error
-	ReleaseTeamMembers(ctx context.Context, teamID int) error
-	// FindByGameID returns every row registered under this in-game id.
-	FindByGameID(ctx context.Context, gameID string) ([]models.TelegramPlayer, error)
-	SetCheckIn(ctx context.Context, teamID int, status bool) error
-	SetTeamStatus(ctx context.Context, teamID int, status string) error
-
-	GetAllCaptains(ctx context.Context) ([]models.TelegramPlayer, error)
-	GetSoloPlayers(ctx context.Context) ([]models.TelegramPlayer, error)
-
-	GetSetting(ctx context.Context, key string) (string, error)
-	SetSetting(ctx context.Context, key, value string) error
-
-	CreateMatchReport(ctx context.Context, report *models.TelegramMatchReport) error
-	GetRecentMatchReports(ctx context.Context, limit int) ([]models.TelegramMatchReport, error)
-	GetMatchReport(ctx context.Context, id int) (*models.TelegramMatchReport, error)
-	// GetOpenReportForMatch returns the pending or disputed report on a bracket
-	// match, if any; at most one exists at a time.
-	GetOpenReportForMatch(ctx context.Context, bracketMatchID int) (*models.TelegramMatchReport, error)
-	// GetExpiredPendingReports lists pending reports whose expires_at is at or
-	// before now.
-	GetExpiredPendingReports(ctx context.Context, now time.Time) ([]models.TelegramMatchReport, error)
-	// SetReportStatus closes or reopens a report; anything but pending also
-	// stamps resolved_at.
-	SetReportStatus(ctx context.Context, id int, status string) error
-
-	// Bracket cache. ReplaceBracketMatches rewrites the table in one
-	// transaction; both_notified survives for rows whose team pair is unchanged.
-	ReplaceBracketMatches(ctx context.Context, matches []models.BracketMatch) error
-	ReplaceBracketMatchesForTournament(ctx context.Context, tournamentID int, matches []models.BracketMatch) error
-	GetBracketMatches(ctx context.Context) ([]models.BracketMatch, error)
-	GetBracketMatchesForTournament(ctx context.Context, tournamentID int) ([]models.BracketMatch, error)
-	MarkBracketNotified(ctx context.Context, ids []int) error
-	SetTeamParticipantID(ctx context.Context, teamID int, participantID int64) error
-	ClearTeamParticipantIDs(ctx context.Context) error
-	// Reports queued for Challonge: bracket_match_id set, synced_at NULL.
-	SetReportSynced(ctx context.Context, reportID int) error
-	GetUnsyncedReports(ctx context.Context) ([]models.TelegramMatchReport, error)
-
-	// League & Tournaments
-	CreateTournament(ctx context.Context, t *models.TelegramTournament) (*models.TelegramTournament, error)
-	GetActiveTournament(ctx context.Context) (*models.TelegramTournament, error)
-	GetTournamentByID(ctx context.Context, id int) (*models.TelegramTournament, error)
-	GetAllTournaments(ctx context.Context) ([]models.TelegramTournament, error)
-	SetActiveTournament(ctx context.Context, id int) error
-	UpdateTournament(ctx context.Context, t *models.TelegramTournament) error
-	UpdateTournamentStatus(ctx context.Context, id int, status string) error
-
-	// Tournament team participation
-	RegisterTeamForTournament(ctx context.Context, tournamentID, teamID int) error
-	UnregisterTeamFromTournament(ctx context.Context, tournamentID, teamID int) error
-	GetTournamentTeams(ctx context.Context, tournamentID int) ([]models.TelegramTeam, error)
-	GetTournamentTeam(ctx context.Context, tournamentID, teamID int) (*models.TournamentTeam, error)
-	// SetTournamentCheckIn records who changed the check-in: a telegram id, 0
-	// for an admin.
-	SetTournamentCheckIn(ctx context.Context, tournamentID, teamID int, status bool, by int64) error
-	GetTournamentEntries(ctx context.Context, tournamentID int) ([]models.TournamentTeam, error)
-	EnterTeam(ctx context.Context, tournamentID, teamID int, source string, qualifiedFrom *int) error
-	HasQualifiedEntry(ctx context.Context, teamID, exceptTournamentID int) (bool, error)
-	SetTournamentTeamStatus(ctx context.Context, tournamentID, teamID int, status string) error
-	SetTournamentTeamParticipantID(ctx context.Context, tournamentID, teamID int, participantID int64) error
-	ClearTournamentTeamParticipantIDs(ctx context.Context, tournamentID int) error
-	UpdateTournamentPlacements(ctx context.Context, tournamentID int, placements map[int]int, points map[int]int) error
-	ClearTournamentPlacements(ctx context.Context, tournamentID int) error
-
-	// Series games (telegram_match_games).
-	CreateMatchGame(ctx context.Context, g *models.TelegramMatchGame) error
-	GetMatchGame(ctx context.Context, id int) (*models.TelegramMatchGame, error)
-	ListMatchGames(ctx context.Context, bracketMatchID int, revision int64) ([]models.TelegramMatchGame, error)
-	ListGamesForMatches(ctx context.Context, bracketMatchIDs []int) ([]models.TelegramMatchGame, error)
-	SetMatchGameStatus(ctx context.Context, id int, status string) error
-	GetExpiredPendingGames(ctx context.Context, now time.Time) ([]models.TelegramMatchGame, error)
-	FinishTournamentRecord(ctx context.Context, tournamentID int, winnerTeamID *int, winnerTeamName string) error
 }
 
 type LobbyMatch interface {
@@ -167,13 +60,10 @@ type LobbyMatch interface {
 	UpdatePlayerMMRWithBreakdown(ctx context.Context, playerID, newMMR, matchID, baseDelta, kdaMod, medalBonus int) error
 	GetMMRHistory(ctx context.Context, playerID, limit int) ([]models.MMRChange, error)
 	SaveThreadID(ctx context.Context, matchID int, threadID string) error
-	SaveBetPost(ctx context.Context, matchID int, chatID, messageID int64) error
-	GetBetPost(ctx context.Context, matchID int) (chatID, messageID int64, ok bool, err error)
 	SaveDiscordBetCard(ctx context.Context, matchID int, channelID, messageID string) error
 	GetDiscordBetCard(ctx context.Context, matchID int) (channelID, messageID string, ok bool, err error)
 	GetByThreadID(ctx context.Context, threadID string) (*models.LobbyMatch, error)
 	GetPlayerNamesByMatchID(ctx context.Context, matchID int) ([]string, error)
-	// IsInActiveMatch reports whether the player is on a team of an ACTIVE match.
 	IsInActiveMatch(ctx context.Context, playerID int) (bool, error)
 	OpenBetting(ctx context.Context, matchID int, window time.Duration) error
 	CloseBetting(ctx context.Context, matchID int) error
@@ -183,15 +73,12 @@ type LobbyMatch interface {
 }
 
 type Bet interface {
-	PlaceBet(ctx context.Context, req models.PlaceBetRequest) error
 	PlaceDiscordBet(ctx context.Context, req models.PlaceDiscordBetRequest) (int, int, error)
 	CancelDiscordBet(ctx context.Context, matchID, playerID int) (int, bool, int, error)
 	GetOpenBetForPlayer(ctx context.Context, matchID, playerID int) (*models.Bet, error)
 	GetBetsByMatch(ctx context.Context, matchID int) ([]models.Bet, error)
 	BetPool(ctx context.Context, matchID int) (models.BetPool, error)
-	PayoutWinners(ctx context.Context, matchID int, winningTeam string) (map[int64]int, error)
 	PayoutWinnersDetailed(ctx context.Context, matchID int, winningTeam string) (*models.PayoutSummary, error)
-	GetPlayerPoints(ctx context.Context, tgUserID int64) (int, error)
 	GetPlayerPointsByID(ctx context.Context, playerID int) (int, error)
 	RefundAllBets(ctx context.Context, matchID int) (int, error)
 	PendingSettlements(ctx context.Context) ([]models.PendingSettlement, error)
@@ -244,8 +131,6 @@ type QueueBan interface {
 
 type Repository struct {
 	Match
-	ProfileLink
-	Telegram
 	LobbyMatch
 	Bet
 	Economy
@@ -260,14 +145,12 @@ func NewRepository(ctx context.Context, cfg *Config, db *sql.DB, cacheSize int) 
 		return nil, err
 	}
 	return &Repository{
-		Match:       matchRepo,
-		ProfileLink: NewProfileLinkPostgres(db),
-		Telegram:    NewTelegramPostgres(db),
-		LobbyMatch:  NewLobbyMatchPostgres(db),
-		Bet:         NewBetPostgres(db),
-		Economy:     NewEconomyPostgres(db),
-		License:     NewLicensePostgres(db),
-		QueueBan:    NewQueueBanPostgres(db),
-		db:          db,
+		Match:      matchRepo,
+		LobbyMatch: NewLobbyMatchPostgres(db),
+		Bet:        NewBetPostgres(db),
+		Economy:    NewEconomyPostgres(db),
+		License:    NewLicensePostgres(db),
+		QueueBan:   NewQueueBanPostgres(db),
+		db:         db,
 	}, nil
 }

@@ -237,43 +237,6 @@ func (b *Bot) newHistoryCommand() *discordgo.ApplicationCommand {
 	}
 }
 
-// newLinkCommand takes no argument on purpose: the profile is the one the
-// caller claimed with /bind. An id here let anyone request a link code for
-// anyone's profile.
-func (b *Bot) newLinkCommand() *discordgo.ApplicationCommand {
-	return &discordgo.ApplicationCommand{
-		Name:        "link",
-		Description: "Получить код для привязки своего Telegram (нужен /bind)",
-	}
-}
-
-func (b *Bot) newUnlinkCommand() *discordgo.ApplicationCommand {
-	return &discordgo.ApplicationCommand{
-		Name:        "unlink",
-		Description: "Отвязать свой Telegram от профиля",
-	}
-}
-
-func (b *Bot) newUnlinkPlayerCommand() *discordgo.ApplicationCommand {
-	return &discordgo.ApplicationCommand{
-		Name:        "unlink_player",
-		Description: "Отвязать Telegram от профиля игрока (Только админы)",
-		Options: []*discordgo.ApplicationCommandOption{
-			{Type: discordgo.ApplicationCommandOptionInteger, Name: "id", Description: "ID игрока", Required: true},
-		},
-	}
-}
-
-func (b *Bot) newTelegramProfileCommand() *discordgo.ApplicationCommand {
-	return &discordgo.ApplicationCommand{
-		Name:        "telegram_profile",
-		Description: "Показать свой Telegram профиль (чужой — только админам)",
-		Options: []*discordgo.ApplicationCommandOption{
-			{Type: discordgo.ApplicationCommandOptionString, Name: "player_name", Description: "Имя игрока (только для админов)", Required: false},
-		},
-	}
-}
-
 func (b *Bot) newUpdateNickCommand() *discordgo.ApplicationCommand {
 	return &discordgo.ApplicationCommand{
 		Name:        "update_nick",

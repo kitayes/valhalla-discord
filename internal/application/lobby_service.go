@@ -116,12 +116,10 @@ type LobbyService struct {
 	queueBanRepo QueueBanRepository
 	sheetSyncer  func(mmrUpdates map[int]int)
 
-	// callbackMu guards the hooks below. They are wired after construction —
-	// the Telegram bot they call into cannot exist before the services do — and
-	// by then the Discord handler goroutines are already reading them.
-	callbackMu        sync.RWMutex
-	notifier          LobbyNotifier
-	matchLiveCallback func(matchID int, capA, capB string, window time.Duration)
+	// callbackMu guards the notifier hook. It is wired after construction so
+	// Discord handler goroutines can read it safely.
+	callbackMu sync.RWMutex
+	notifier   LobbyNotifier
 }
 
 // NewLobbyService creates a LobbyService. The repositories are required
@@ -150,22 +148,6 @@ func (l *LobbyService) SetNotifier(n LobbyNotifier) {
 	l.callbackMu.Lock()
 	defer l.callbackMu.Unlock()
 	l.notifier = n
-}
-
-// SetMatchLiveCallback installs the hook fired when a match goes live.
-func (l *LobbyService) SetMatchLiveCallback(fn func(matchID int, capA, capB string, window time.Duration)) {
-	l.callbackMu.Lock()
-	defer l.callbackMu.Unlock()
-	l.matchLiveCallback = fn
-}
-
-func (l *LobbyService) NotifyMatchLive(matchID int, capA, capB string, window time.Duration) {
-	l.callbackMu.RLock()
-	fn := l.matchLiveCallback
-	l.callbackMu.RUnlock()
-	if fn != nil {
-		fn(matchID, capA, capB, window)
-	}
 }
 
 func (l *LobbyService) IsOpen() bool {

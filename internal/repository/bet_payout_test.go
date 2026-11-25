@@ -6,8 +6,8 @@ import (
 	"blackwatch/internal/models"
 )
 
-func bet(id int, user int64, team string, amount int) models.Bet {
-	return models.Bet{ID: id, TgUserID: user, TeamChosen: team, Amount: amount}
+func bet(id int, playerID int, team string, amount int) models.Bet {
+	return models.Bet{ID: id, PlayerID: playerID, TeamChosen: team, Amount: amount}
 }
 
 func sumShares(shares map[int]int) int {

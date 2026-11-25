@@ -74,11 +74,7 @@ var (
 	// ErrDiscordAlreadyBound reports that the caller's Discord account already
 	// owns a different profile.
 	ErrDiscordAlreadyBound = errors.New("this Discord account is already bound to another profile")
-	// ErrTelegramAlreadyLinked is ErrDiscordAlreadyBound's counterpart for the
-	// Telegram side of the same profile.
-	ErrTelegramAlreadyLinked = errors.New("this Telegram account is already linked to another profile")
-	// ErrDiscordNotBound reports that the caller has not claimed a profile yet,
-	// so there is nothing to link a Telegram account to.
+	// ErrDiscordNotBound reports that the caller has not claimed a profile yet.
 	ErrDiscordNotBound = errors.New("your Discord account is not bound to a profile")
 	// ErrProfileTaken reports that the requested profile belongs to someone else.
 	ErrProfileTaken = errors.New("this profile is already claimed by another Discord account")

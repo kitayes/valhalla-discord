@@ -1321,18 +1321,17 @@ func (r *EconomyPostgres) RevertFinishedMatch(ctx context.Context, matchID int) 
 	// 3. Unwind settled bets so every bettor is refunded back to their original stake.
 	type betRow struct {
 		id       int
-		playerID sql.NullInt64
-		tgUserID sql.NullInt64
+		playerID int
 		amount   int
 		payout   int
 		insured  bool
 	}
 	var betRows []betRow
 	bRows, err := tx.QueryContext(ctx,
-		`SELECT id, player_id, tg_user_id, amount, payout, insured
+		`SELECT id, player_id, amount, payout, insured
 		   FROM match_bets
 		  WHERE match_id = $1 AND settled_at IS NOT NULL
-		  ORDER BY COALESCE(player_id, 0), id
+		  ORDER BY player_id, id
 		    FOR UPDATE`,
 		matchID,
 	)
@@ -1341,7 +1340,7 @@ func (r *EconomyPostgres) RevertFinishedMatch(ctx context.Context, matchID int) 
 	}
 	for bRows.Next() {
 		var br betRow
-		if err := bRows.Scan(&br.id, &br.playerID, &br.tgUserID, &br.amount, &br.payout, &br.insured); err != nil {
+		if err := bRows.Scan(&br.id, &br.playerID, &br.amount, &br.payout, &br.insured); err != nil {
 			_ = bRows.Close()
 			return nil, err
 		}
@@ -1355,21 +1354,13 @@ func (r *EconomyPostgres) RevertFinishedMatch(ctx context.Context, matchID int) 
 	}
 
 	for _, br := range betRows {
-		// Net delta to return bettor to their pre-bet balance:
-		// they paid `amount` and received `payout`, so adding `amount - payout`
-		// refunds lost stakes (+amount) and claws back winning profits (negative).
 		netDelta := br.amount - br.payout
 		restoreIns := 0
 		if br.insured {
 			restoreIns = 1
 		}
 
-		pid := 0
-		if br.playerID.Valid {
-			pid = int(br.playerID.Int64)
-		} else if br.tgUserID.Valid {
-			_ = tx.QueryRowContext(ctx, `SELECT id FROM players WHERE tg_id = $1`, br.tgUserID.Int64).Scan(&pid)
-		}
+		pid := br.playerID
 		if pid > 0 && (netDelta != 0 || restoreIns > 0) {
 			var curBal int
 			if err := tx.QueryRowContext(ctx, `SELECT points FROM players WHERE id = $1 FOR UPDATE`, pid).Scan(&curBal); err != nil {

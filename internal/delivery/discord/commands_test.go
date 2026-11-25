@@ -43,50 +43,6 @@ func commandsByName(t *testing.T, b *Bot) map[string]*discordgo.ApplicationComma
 	return byName
 }
 
-func TestSelfServiceCommandsTakeNoForeignIdentifier(t *testing.T) {
-	// /link handed out a Telegram link code for any player id, and /unlink
-	// released any profile's binding — both public, neither checking ownership.
-	// Chained, they were a two-command profile takeover. The profile now comes
-	// from the caller's own /bind binding, so these commands must carry no
-	// argument naming somebody else.
-	byName := commandsByName(t, initBot(t))
-
-	for _, name := range []string{"link", "unlink"} {
-		cmd, ok := byName[name]
-		if !ok {
-			t.Fatalf("/%s is not registered", name)
-		}
-		if len(cmd.Options) != 0 {
-			t.Errorf("/%s takes %d option(s); it must act on the caller's own profile only",
-				name, len(cmd.Options))
-		}
-	}
-
-	// The admin escape hatch is where naming another profile belongs.
-	unlinkPlayer, ok := byName["unlink_player"]
-	if !ok {
-		t.Fatal("/unlink_player is not registered: admins have no way to release a binding")
-	}
-	if len(unlinkPlayer.Options) == 0 || !unlinkPlayer.Options[0].Required {
-		t.Error("/unlink_player must take a required player id")
-	}
-}
-
-func TestTelegramProfileArgumentIsOptional(t *testing.T) {
-	// A required player_name made looking up a stranger the default. It is now
-	// optional: no argument means your own profile, and naming someone else is
-	// gated on admin in the handler.
-	cmd, ok := commandsByName(t, initBot(t))["telegram_profile"]
-	if !ok {
-		t.Fatal("/telegram_profile is not registered")
-	}
-	for _, opt := range cmd.Options {
-		if opt.Required {
-			t.Errorf("option %q is required; naming another player must be opt-in", opt.Name)
-		}
-	}
-}
-
 func TestBindTakesANicknameNotAnID(t *testing.T) {
 	// A players row is only born from a parsed match screenshot, so a newcomer
 	// has no id to give: the lobby needed a binding, the binding needed a

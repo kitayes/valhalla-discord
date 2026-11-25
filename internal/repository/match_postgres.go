@@ -21,9 +21,6 @@ const pgUniqueViolation = "23505"
 // different player. Callers turn it into a message the user can act on.
 var ErrDiscordIDTaken = errors.New("this Discord account is already linked to another player")
 
-// ErrTelegramIDTaken is ErrDiscordIDTaken's counterpart for players.tg_id.
-var ErrTelegramIDTaken = errors.New("this Telegram account is already linked to another player")
-
 const (
 	defaultSeasonStartYear  = 2025
 	defaultSeasonStartMonth = 1
@@ -963,69 +960,6 @@ func (r *MatchPostgres) CreatePlayerWithDiscord(ctx context.Context, name, disco
 	return id, nil
 }
 
-// SetTelegramID binds a Telegram account to a player.
-//
-// players.tg_id is the column the betting code resolves a bettor through. It is
-// guarded by a unique index, so a Telegram account that already owns another
-// profile is rejected here rather than silently owning two — the same shape as
-// SetDiscordID above, because it is the same kind of binding.
-func (r *MatchPostgres) SetTelegramID(ctx context.Context, playerID int, telegramID int64) error {
-	res, err := r.db.ExecContext(ctx,
-		`UPDATE players SET tg_id = $1 WHERE id = $2 AND is_deleted = FALSE`,
-		telegramID, playerID,
-	)
-	if err != nil {
-		var pqErr *pq.Error
-		if errors.As(err, &pqErr) && pqErr.Code == pgUniqueViolation {
-			return ErrTelegramIDTaken
-		}
-		return fmt.Errorf("failed to bind tg_id to player %d: %w", playerID, err)
-	}
-
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to count bound players: %w", err)
-	}
-	if rows == 0 {
-		return fmt.Errorf("player %d: %w", playerID, domain.ErrPlayerNotFound)
-	}
-	return nil
-}
-
-// ClearTelegramID releases a player's Telegram binding.
-func (r *MatchPostgres) ClearTelegramID(ctx context.Context, playerID int) error {
-	res, err := r.db.ExecContext(ctx,
-		`UPDATE players SET tg_id = NULL WHERE id = $1 AND is_deleted = FALSE`, playerID,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to unlink player %d: %w", playerID, err)
-	}
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to count unlinked players: %w", err)
-	}
-	if rows == 0 {
-		return fmt.Errorf("player %d: %w", playerID, domain.ErrPlayerNotFound)
-	}
-	return nil
-}
-
-// GetPlayerByTelegramID returns the player bound to a Telegram account.
-func (r *MatchPostgres) GetPlayerByTelegramID(ctx context.Context, telegramID int64) (int, string, error) {
-	var id int
-	var name string
-	err := r.db.QueryRowContext(ctx,
-		`SELECT id, name FROM players WHERE tg_id = $1 AND is_deleted = FALSE`, telegramID,
-	).Scan(&id, &name)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, "", fmt.Errorf("tg_id %d: %w", telegramID, domain.ErrPlayerNotFound)
-	}
-	if err != nil {
-		return 0, "", fmt.Errorf("failed to look up player by tg_id: %w", err)
-	}
-	return id, name, nil
-}
-
 // GetPlayerByDiscordID returns the player ID and name for a given discord_id.
 // This is an O(1) direct SQL lookup instead of iterating all players in memory.
 func (r *MatchPostgres) GetPlayerByDiscordID(ctx context.Context, discordID string) (int, string, error) {
@@ -1230,14 +1164,13 @@ func (r *MatchPostgres) MergePlayers(ctx context.Context, sourceID, targetID int
 		id        int
 		name      string
 		discordID sql.NullString
-		tgID      sql.NullInt64
 		mvpCount  int
 		svpCount  int
 		isDeleted bool
 	}
 
 	rows, err := tx.QueryContext(ctx,
-		`SELECT id, name, discord_id, tg_id, COALESCE(mvp_count, 0), COALESCE(svp_count, 0), is_deleted
+		`SELECT id, name, discord_id, COALESCE(mvp_count, 0), COALESCE(svp_count, 0), is_deleted
 		   FROM players
 		  WHERE id IN ($1, $2)
 		  ORDER BY id
@@ -1250,7 +1183,7 @@ func (r *MatchPostgres) MergePlayers(ctx context.Context, sourceID, targetID int
 	locked := make(map[int]lockedPlayer, 2)
 	for rows.Next() {
 		var lp lockedPlayer
-		if err := rows.Scan(&lp.id, &lp.name, &lp.discordID, &lp.tgID, &lp.mvpCount, &lp.svpCount, &lp.isDeleted); err != nil {
+		if err := rows.Scan(&lp.id, &lp.name, &lp.discordID, &lp.mvpCount, &lp.svpCount, &lp.isDeleted); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("failed to scan locked player: %w", err)
 		}
@@ -1275,12 +1208,9 @@ func (r *MatchPostgres) MergePlayers(ctx context.Context, sourceID, targetID int
 	if src.discordID.Valid && dst.discordID.Valid && src.discordID.String != dst.discordID.String {
 		return nil, fmt.Errorf("оба профиля привязаны к разным Discord-аккаунтам — сначала отвяжите лишний через /unbind_player")
 	}
-	if src.tgID.Valid && dst.tgID.Valid && src.tgID.Int64 != dst.tgID.Int64 {
-		return nil, fmt.Errorf("оба профиля привязаны к разным Telegram-аккаунтам — сначала отвяжите лишний через /unlink_player")
-	}
 
-	// Move bindings from source to target only if target has none. Clear source
-	// first to satisfy partial unique indexes on discord_id and tg_id.
+	// Move discord_id binding from source to target only if target has none. Clear source
+	// first to satisfy the partial unique index on discord_id.
 	if src.discordID.Valid && !dst.discordID.Valid {
 		if _, err := tx.ExecContext(ctx, `UPDATE players SET discord_id = NULL WHERE id = $1`, sourceID); err != nil {
 			return nil, fmt.Errorf("failed to clear source discord_id: %w", err)
@@ -1288,34 +1218,6 @@ func (r *MatchPostgres) MergePlayers(ctx context.Context, sourceID, targetID int
 		if _, err := tx.ExecContext(ctx, `UPDATE players SET discord_id = $1 WHERE id = $2`, src.discordID.String, targetID); err != nil {
 			return nil, fmt.Errorf("failed to move discord_id to target: %w", err)
 		}
-	}
-	if src.tgID.Valid && !dst.tgID.Valid {
-		if _, err := tx.ExecContext(ctx, `UPDATE players SET tg_id = NULL WHERE id = $1`, sourceID); err != nil {
-			return nil, fmt.Errorf("failed to clear source tg_id: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE players SET tg_id = $1 WHERE id = $2`, src.tgID.Int64, targetID); err != nil {
-			return nil, fmt.Errorf("failed to move tg_id to target: %w", err)
-		}
-	}
-
-	// Move profile_links if target doesn't already have one; drop stale link codes.
-	var dstHasProfileLink bool
-	if err := tx.QueryRowContext(ctx,
-		`SELECT EXISTS(SELECT 1 FROM profile_links WHERE discord_player_id = $1)`, targetID,
-	).Scan(&dstHasProfileLink); err != nil {
-		return nil, fmt.Errorf("failed to check target profile_links: %w", err)
-	}
-	if !dstHasProfileLink {
-		if _, err := tx.ExecContext(ctx, `UPDATE profile_links SET discord_player_id = $2 WHERE discord_player_id = $1`, sourceID, targetID); err != nil {
-			return nil, fmt.Errorf("failed to move profile_links: %w", err)
-		}
-	} else {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM profile_links WHERE discord_player_id = $1`, sourceID); err != nil {
-			return nil, fmt.Errorf("failed to delete duplicate source profile_links: %w", err)
-		}
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM link_codes WHERE discord_player_id = $1`, sourceID); err != nil {
-		return nil, fmt.Errorf("failed to delete source link_codes: %w", err)
 	}
 
 	// Avoid duplicating a player twice in the same match if both profiles appeared in it.
@@ -1458,9 +1360,9 @@ func (r *MatchPostgres) MergePlayers(ctx context.Context, sourceID, targetID int
 		return nil, fmt.Errorf("failed to move match_bets: %w", err)
 	}
 
-	// Soft-delete source player and release unique binding columns.
+	// Soft-delete source player and release unique binding column.
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE players SET is_deleted = TRUE, deleted_at = NOW(), discord_id = NULL, tg_id = NULL WHERE id = $1`,
+		`UPDATE players SET is_deleted = TRUE, deleted_at = NOW(), discord_id = NULL WHERE id = $1`,
 		sourceID,
 	); err != nil {
 		return nil, fmt.Errorf("failed to soft-delete source player %d: %w", sourceID, err)

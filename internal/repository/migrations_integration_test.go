@@ -38,12 +38,18 @@ func TestIntegrationMigrationsFromScratch(t *testing.T) {
 	}
 
 	for _, table := range []string{
-		"telegram_teams",
-		"telegram_players",
-		"telegram_match_reports",
-		"telegram_bracket_matches",
-		"telegram_match_desks",
+		"players",
 		"player_aliases",
+		"matches",
+		"player_results",
+		"lobby_matches",
+		"match_bets",
+		"currency_ledger",
+		"shop_items",
+		"shop_orders",
+		"mmr_history",
+		"queue_bans",
+		"discord_servers",
 	} {
 		var exists bool
 		if err := db.QueryRow(`SELECT to_regclass('public.' || $1) IS NOT NULL`, table).Scan(&exists); err != nil {
@@ -55,12 +61,12 @@ func TestIntegrationMigrationsFromScratch(t *testing.T) {
 	}
 
 	for table, columns := range map[string][]string{
-		"telegram_teams":           {"status", "challonge_participant_id"},
-		"telegram_match_reports":   {"bracket_match_id", "synced_at"},
-		"telegram_bracket_matches": {"challonge_match_id", "both_notified"},
-		"matches":                  {"lobby_match_id"},
-		"player_aliases":           {"player_id", "alias", "source"},
-		"mmr_history":              {"base_delta", "kda_mod", "medal_bonus"},
+		"players":        {"discord_id", "current_mmr", "points", "xp", "level", "profile_title", "profile_color", "bet_insurance_count"},
+		"lobby_matches":  {"betting_open", "betting_closes_at", "discord_channel_id", "discord_message_id"},
+		"match_bets":     {"player_id", "insured", "settled_at", "payout"},
+		"matches":        {"lobby_match_id", "mvp_player_id", "svp_player_id"},
+		"player_aliases": {"player_id", "alias", "source"},
+		"mmr_history":    {"base_delta", "kda_mod", "medal_bonus"},
 	} {
 		for _, column := range columns {
 			var exists bool

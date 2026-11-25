@@ -105,8 +105,8 @@ func GenerateFileHash(data []byte) string {
 }
 
 // Team names are a cross-service contract: the Discord referee UI writes them,
-// the repository stores them on lobby_matches.winner, and the Telegram betting
-// flow compares against them. They were duplicated as literals in seven places
+// the repository stores them on lobby_matches.winner, and the betting flow
+// compares against them. They were duplicated as literals in seven places
 // across four packages, so any rename would have silently split the payout logic
 // from the match result.
 const (

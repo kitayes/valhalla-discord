@@ -60,10 +60,6 @@ type MatchService interface {
 	GetLifetimeMedals(ctx context.Context, playerID int) (models.Medals, error)
 	InvalidateStatsCache()
 
-	// Shutdown drains in-flight background work (currently Google Sheets syncs)
-	// before the process exits. It is part of the interface rather than
-	// something main sniffs for with a type assertion on an anonymous
-	// interface literal.
 	Shutdown(ctx context.Context) error
 }
 
@@ -75,39 +71,19 @@ type LicenseService interface {
 }
 
 type Service struct {
-	MatchService       MatchService
-	ProfileLinkService ProfileLinkService
-	TelegramService    TelegramService
-	Lobby              *LobbyService
-	EloService         *EloService
-	BettingService     *BettingService
-	EconomyService     *EconomyService
-	LicenseService     LicenseService
-	FAQService         *FAQService
-	Bracket            *BracketService
-	MatchDesk          *MatchDeskService
-}
-
-// SetBracketService enables Challonge-backed reports after the optional
-// provider has been constructed by the entrypoint.
-func (s *Service) SetBracketService(bracket *BracketService) {
-	s.Bracket = bracket
-	if telegram, ok := s.TelegramService.(*TelegramServiceImpl); ok {
-		telegram.WithBracket(bracket)
-	}
-}
-
-// SetMatchDeskService provides the match desk state service to consumers (e.g. web TMA).
-func (s *Service) SetMatchDeskService(desk *MatchDeskService) {
-	s.MatchDesk = desk
+	MatchService   MatchService
+	Lobby          *LobbyService
+	EloService     *EloService
+	BettingService *BettingService
+	EconomyService *EconomyService
+	LicenseService LicenseService
+	FAQService     *FAQService
 }
 
 func NewService(repos *repository.Repository, ai AIProvider, sheetsClient sheets.Client, ownerEmail, spreadsheetID string, httpTimeoutSec int, logger Logger) *Service {
 	matchSvc := NewMatchServiceImpl(repos.Match, ai, sheetsClient, ownerEmail, spreadsheetID, httpTimeoutSec, logger)
 	lobby := NewLobbyService(logger, repos.LobbyMatch, repos.QueueBan)
 
-	// Wire sheet syncer: when MMR updates happen, sync to Google Sheets asynchronously.
-	// The callback runs detached from any request, so it gets its own bounded context.
 	lobby.SetSheetSyncer(func(mmrUpdates map[int]int) {
 		if sheetsClient == nil {
 			return
@@ -122,16 +98,13 @@ func NewService(repos *repository.Repository, ai AIProvider, sheetsClient sheets
 		}
 	})
 
-	// FAQService will be set via SetFAQService after construction if DeepSeek is configured
 	return &Service{
-		MatchService:       matchSvc,
-		ProfileLinkService: NewProfileLinkServiceImpl(repos.ProfileLink, repos.Match, logger),
-		TelegramService:    NewTelegramServiceImpl(repos.Telegram, logger).WithProfileLookup(repos.ProfileLink).WithSheets(sheetsClient, spreadsheetID),
-		Lobby:              lobby,
-		EloService:         NewEloService(logger, matchSvc, repos.LobbyMatch),
-		BettingService:     NewBettingService(logger, repos),
-		EconomyService:     NewEconomyService(logger, repos.Economy, repos.LobbyMatch, matchSvc),
-		LicenseService:     repos.License,
+		MatchService:   matchSvc,
+		Lobby:          lobby,
+		EloService:     NewEloService(logger, matchSvc, repos.LobbyMatch),
+		BettingService: NewBettingService(logger, repos),
+		EconomyService: NewEconomyService(logger, repos.Economy, repos.LobbyMatch, matchSvc),
+		LicenseService: repos.License,
 	}
 }
 

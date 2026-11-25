@@ -9,13 +9,12 @@ const (
 	WinRateGood      = 60.0
 	WinRatePoor      = 40.0
 
-	ColorGold         = 0xFFD700
-	ColorGreen        = 0x2ECC71
-	ColorPurple       = 0x9B59B6
-	ColorRed          = 0xE74C3C
-	ColorGray         = 0x95A5A6
-	ColorBlue         = 0x3498DB
-	ColorTelegramBlue = 0x0088CC
+	ColorGold   = 0xFFD700
+	ColorGreen  = 0x2ECC71
+	ColorPurple = 0x9B59B6
+	ColorRed    = 0xE74C3C
+	ColorGray   = 0x95A5A6
+	ColorBlue   = 0x3498DB
 
 	MinDeathsForKDA = 1
 
