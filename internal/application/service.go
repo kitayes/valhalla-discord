@@ -58,6 +58,7 @@ type MatchService interface {
 	GetPlayerStats(ctx context.Context, name string) (*PlayerStats, error)
 	GetPlayerStatsByID(ctx context.Context, id int) (*PlayerStats, error)
 	GetLifetimeMedals(ctx context.Context, playerID int) (models.Medals, error)
+	InvalidateStatsCache()
 
 	// Shutdown drains in-flight background work (currently Google Sheets syncs)
 	// before the process exits. It is part of the interface rather than

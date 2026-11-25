@@ -128,6 +128,8 @@ func (b *Bot) openMatchThread(
 		cardID = card.ID
 	}
 
+	b.setMatchCard(matchID, i.ChannelID, cardID)
+
 	if b.cfg.BettingChannelID == "" && b.services != nil && b.services.BettingService != nil && i.ChannelID != "" && cardID != "" {
 		if err := b.services.BettingService.SaveDiscordBetCard(ctx, matchID, i.ChannelID, cardID); err != nil {
 			b.logger.Warn("match: failed to save discord bet card for #%d: %v", matchID, err)
@@ -366,6 +368,7 @@ func (b *Bot) onMatchResultButton(s *discordgo.Session, i *discordgo.Interaction
 	}
 
 	// Update the original public match card if we have its message ID; otherwise post the result embed.
+	b.popMatchCard(matchID)
 	if cardMsgID != "" && i.ChannelID != "" {
 		embeds := []*discordgo.MessageEmbed{embed}
 		if _, editErr := s.ChannelMessageEditComplex(&discordgo.MessageEdit{
@@ -471,6 +474,23 @@ func (b *Bot) handleCancelMatch(ctx context.Context, s *discordgo.Session, i *di
 		b.logger.Error("cancel_match: failed to refund bets for #%d, left for the sweep: %v", matchID, refundErr)
 	} else {
 		b.logger.Info("cancel_match: refunded %d bets for #%d", refunded, matchID)
+	}
+
+	if ref, ok := b.popMatchCard(matchID); ok {
+		empty := []discordgo.MessageComponent{}
+		embeds := []*discordgo.MessageEmbed{{
+			Title:       fmt.Sprintf("МАТЧ #%d ОТМЕНЁН", matchID),
+			Description: "Матч отменён судьёй. Игроки возвращены в лобби, ставки возвращены.",
+			Color:       colorBettingClosed,
+		}}
+		if _, editErr := s.ChannelMessageEditComplex(&discordgo.MessageEdit{
+			Channel:    ref.ChannelID,
+			ID:         ref.MessageID,
+			Embeds:     &embeds,
+			Components: &empty,
+		}); editErr != nil {
+			b.logger.Warn("cancel_match: failed to update parent match card for #%d: %v", matchID, editErr)
+		}
 	}
 
 	refundNote := fmt.Sprintf("ставки возвращены (%d)", refunded)

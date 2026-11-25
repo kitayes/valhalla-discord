@@ -200,4 +200,32 @@ func TestEconomyCommandsRegistered(t *testing.T) {
 			t.Errorf("/shop_admin is missing %q subcommand", sub)
 		}
 	}
+
+	// Verify /wallet uses nickname (autocomplete) + user options, matching resolveTargetPlayer.
+	walletOpts := map[string]bool{}
+	for _, opt := range cmds["wallet"].Options {
+		walletOpts[opt.Name] = opt.Autocomplete
+	}
+	if auto, ok := walletOpts["nickname"]; !ok || !auto {
+		t.Errorf("/wallet missing autocomplete nickname option: %+v", walletOpts)
+	}
+	if _, ok := walletOpts["user"]; !ok {
+		t.Errorf("/wallet missing user option: %+v", walletOpts)
+	}
+	if _, hasOldID := walletOpts["id"]; hasOldID {
+		t.Error("/wallet should not expose unused 'id' option")
+	}
+
+	// Verify /top supports MMR, KDA, and WinRate choices.
+	topChoices := map[string]bool{}
+	for _, ch := range cmds["top"].Options[0].Choices {
+		if v, ok := ch.Value.(string); ok {
+			topChoices[v] = true
+		}
+	}
+	for _, want := range []string{"mmr", "kda", "winrate"} {
+		if !topChoices[want] {
+			t.Errorf("/top missing sort choice %q", want)
+		}
+	}
 }

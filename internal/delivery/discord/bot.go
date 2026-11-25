@@ -63,7 +63,14 @@ type Bot struct {
 	clanCheckCache    map[string]clanVerdict           // userID -> last applied clan verdict
 	pendingReviews    map[int]*pendingScoreboardReview // matchID -> awaiting referee confirmation
 	betCards          map[int]*discordBetCard          // matchID -> dedicated betting channel card
+	matchCards        map[int]matchCardRef             // matchID -> parent lobby channel match card
 	activity          *activityTracker
+}
+
+type matchCardRef struct {
+	ChannelID string
+	MessageID string
+	CreatedAt time.Time
 }
 
 // cachedThread and cachedMatch carry an insertion time so entries can be evicted
@@ -107,6 +114,7 @@ func NewBot(cfg *config.Config, services *application.Service, logger applicatio
 		clanCheckCache:    make(map[string]clanVerdict),
 		pendingReviews:    make(map[int]*pendingScoreboardReview),
 		betCards:          make(map[int]*discordBetCard),
+		matchCards:        make(map[int]matchCardRef),
 		activity:          newActivityTracker(),
 	}
 }
@@ -663,6 +671,31 @@ func (b *Bot) evictStaleCachesLocked(now time.Time) {
 			delete(b.betCards, id)
 		}
 	}
+	for id, entry := range b.matchCards {
+		if now.Sub(entry.CreatedAt) > matchCacheTTL {
+			delete(b.matchCards, id)
+		}
+	}
+}
+
+func (b *Bot) setMatchCard(matchID int, channelID, messageID string) {
+	if matchID <= 0 || channelID == "" || messageID == "" {
+		return
+	}
+	b.cacheMu.Lock()
+	b.evictStaleCachesLocked(time.Now())
+	b.matchCards[matchID] = matchCardRef{ChannelID: channelID, MessageID: messageID, CreatedAt: time.Now()}
+	b.cacheMu.Unlock()
+}
+
+func (b *Bot) popMatchCard(matchID int) (matchCardRef, bool) {
+	b.cacheMu.Lock()
+	ref, ok := b.matchCards[matchID]
+	if ok {
+		delete(b.matchCards, matchID)
+	}
+	b.cacheMu.Unlock()
+	return ref, ok
 }
 
 func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {

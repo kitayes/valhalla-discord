@@ -277,5 +277,12 @@ func (s *EconomyService) AdminRefundShopOrder(ctx context.Context, orderID int, 
 
 func (s *EconomyService) RevertFinishedMatch(ctx context.Context, matchID int) (*models.MatchRevertSummary, error) {
 	s.logger.Warn("economy: reverting finished match #%d", matchID)
-	return s.repo.RevertFinishedMatch(ctx, matchID)
+	summary, err := s.repo.RevertFinishedMatch(ctx, matchID)
+	if err != nil {
+		return nil, err
+	}
+	if s.matchSvc != nil {
+		s.matchSvc.InvalidateStatsCache()
+	}
+	return summary, nil
 }

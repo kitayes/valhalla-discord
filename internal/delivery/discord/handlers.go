@@ -5,10 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 
+	"blackwatch/internal/application"
 	"blackwatch/internal/domain"
 	"blackwatch/internal/models"
 
@@ -16,7 +18,7 @@ import (
 )
 
 func (b *Bot) handleTop(ctx context.Context, s *discordgo.Session, i *discordgo.Interaction) {
-	sortBy := "kda"
+	sortBy := "mmr"
 	options := i.ApplicationCommandData().Options
 	if len(options) > 0 {
 		sortBy = options[0].StringValue()
@@ -28,40 +30,100 @@ func (b *Bot) handleTop(ctx context.Context, s *discordgo.Session, i *discordgo.
 		return
 	}
 
-	if len(stats) == 0 {
-		b.respondMessage(s, i, "Статистики пока нет. Сыграйте матч!", false)
-		return
+	players, pErr := b.services.MatchService.GetPlayerList(ctx)
+	if pErr != nil {
+		b.logger.Warn("top: failed to load players for MMR enrichment: %v", pErr)
 	}
 
-	topCount := topPlayersLimit
-	if len(stats) < topCount {
-		topCount = len(stats)
+	mmrByID := make(map[int]int, len(players))
+	for _, pl := range players {
+		mmrByID[pl.ID] = pl.CurrentMMR
 	}
 
 	var sb strings.Builder
-	for idx, p := range stats[:topCount] {
-		medal := getMedalEmoji(idx)
-		wr := calculateWinRate(p)
-		kda := calculateKDA(p.Kills, p.Deaths, p.Assists)
+	title := "Таблица лидеров (по MMR)"
 
-		sb.WriteString(fmt.Sprintf("%s %s — WR: `%.0f%%` | KDA: `%.2f` (%d игр)",
-			medal, p.Name, wr, kda, p.Matches))
-		if p.MVP > 0 {
-			sb.WriteString(fmt.Sprintf(" [MVP×%d]", p.MVP))
+	if sortBy == "mmr" {
+		if len(players) == 0 {
+			b.respondMessage(s, i, "Игроков пока нет. Зарегистрируйтесь через `/bind`!", false)
+			return
 		}
-		sb.WriteString("\n")
-	}
+		statsByID := make(map[int]*application.PlayerStats, len(stats))
+		for _, st := range stats {
+			statsByID[st.ID] = st
+		}
 
-	title := "Таблица лидеров (по KDA)"
-	if sortBy == "winrate" {
-		title = "Таблица лидеров (по Винрейту)"
+		sort.Slice(players, func(a, c int) bool {
+			if players[a].CurrentMMR != players[c].CurrentMMR {
+				return players[a].CurrentMMR > players[c].CurrentMMR
+			}
+			ma, mc := 0, 0
+			if st := statsByID[players[a].ID]; st != nil {
+				ma = st.Matches
+			}
+			if st := statsByID[players[c].ID]; st != nil {
+				mc = st.Matches
+			}
+			if ma != mc {
+				return ma > mc
+			}
+			return players[a].ID < players[c].ID
+		})
+
+		topCount := topPlayersLimit
+		if len(players) < topCount {
+			topCount = len(players)
+		}
+		for idx, pl := range players[:topCount] {
+			medal := getMedalEmoji(idx)
+			tier := domain.DetermineTier(pl.CurrentMMR)
+			fmt.Fprintf(&sb, "%s **%s** — **%d MMR** (%s)", medal, pl.Name, pl.CurrentMMR, tier)
+			if st := statsByID[pl.ID]; st != nil && st.Matches > 0 {
+				wr := calculateWinRate(st)
+				kda := calculateKDA(st.Kills, st.Deaths, st.Assists)
+				fmt.Fprintf(&sb, " | WR: `%.0f%%` (%dW/%dL) | KDA: `%.2f`", wr, st.Wins, st.Losses, kda)
+				if st.MVP > 0 {
+					fmt.Fprintf(&sb, " [MVP×%d]", st.MVP)
+				}
+			}
+			sb.WriteByte('\n')
+		}
+	} else {
+		if len(stats) == 0 {
+			b.respondMessage(s, i, "Сезонной статистики по скриншотам пока нет. Посмотрите рейтинг через `/top sort:По MMR (Рейтинг)`!", false)
+			return
+		}
+		if sortBy == "winrate" {
+			title = "Таблица лидеров (по Винрейту)"
+		} else {
+			title = "Таблица лидеров (по KDA)"
+		}
+		topCount := topPlayersLimit
+		if len(stats) < topCount {
+			topCount = len(stats)
+		}
+		for idx, p := range stats[:topCount] {
+			medal := getMedalEmoji(idx)
+			wr := calculateWinRate(p)
+			kda := calculateKDA(p.Kills, p.Deaths, p.Assists)
+			mmrPart := ""
+			if mmr, ok := mmrByID[p.ID]; ok {
+				mmrPart = fmt.Sprintf(" | `%d MMR`", mmr)
+			}
+			fmt.Fprintf(&sb, "%s **%s** — WR: `%.0f%%` | KDA: `%.2f` (%d игр)%s",
+				medal, p.Name, wr, kda, p.Matches, mmrPart)
+			if p.MVP > 0 {
+				fmt.Fprintf(&sb, " [MVP×%d]", p.MVP)
+			}
+			sb.WriteByte('\n')
+		}
 	}
 
 	embed := &discordgo.MessageEmbed{
 		Title:       title,
 		Description: sb.String(),
 		Color:       colorGold,
-		Footer:      &discordgo.MessageEmbedFooter{Text: "Valhalla Ranked Season"},
+		Footer:      &discordgo.MessageEmbedFooter{Text: "Valhalla Ranked Season • /rich — топ по ValCoins и уровню XP"},
 	}
 
 	b.respond(s, i, &discordgo.InteractionResponse{
@@ -134,38 +196,49 @@ func (b *Bot) handleProfile(ctx context.Context, s *discordgo.Session, i *discor
 
 	wr := calculateWinRate(p)
 	kda := calculateKDA(p.Kills, p.Deaths, p.Assists)
-	color := getColorByWinRate(wr)
+	color := colorGold
+	if p.Matches > 0 {
+		color = getColorByWinRate(wr)
+	}
 
 	embed := &discordgo.MessageEmbed{
-		Title: fmt.Sprintf("Профиль: %s (ID: %d)", p.Name, id),
-		Color: color,
-		Fields: []*discordgo.MessageEmbedField{
-			{Name: "Матчей", Value: fmt.Sprintf("%d", p.Matches), Inline: true},
-			{Name: "Винрейт", Value: fmt.Sprintf("%.1f%%", wr), Inline: true},
-			{Name: "KDA", Value: fmt.Sprintf("%.2f", kda), Inline: true},
-			{Name: "Статистика", Value: fmt.Sprintf("K: %d | D: %d | A: %d", p.Kills, p.Deaths, p.Assists), Inline: false},
-			{Name: "Результаты", Value: fmt.Sprintf("Побед: %d | Поражений: %d", p.Wins, p.Losses), Inline: false},
-			{Name: "Медали (сезон)", Value: fmt.Sprintf("MVP: %d | SVPG: %d", p.MVP, p.SVP), Inline: false},
-		},
+		Title:  fmt.Sprintf("Профиль: %s (ID: %d)", p.Name, id),
+		Color:  color,
+		Footer: &discordgo.MessageEmbedFooter{Text: "/wallet — история монет • /history — история матчей • /shop — кастомизация"},
 	}
 
-	// Economy, activity XP/level, custom title & frame color.
+	// 1. Ranked MMR & Tier right at the top.
+	b.appendMMRHeaderField(ctx, embed, id)
+
+	// 2. Seasonal match & KDA summary (compact + per-game averages).
+	matchesVal := "Нет игр по скриншотам"
+	kdaVal := "—"
+	if p.Matches > 0 {
+		matchesVal = fmt.Sprintf("**%d** (`%dW / %dL` • **%.1f%%**)", p.Matches, p.Wins, p.Losses, wr)
+		avgK := float64(p.Kills) / float64(p.Matches)
+		avgD := float64(p.Deaths) / float64(p.Matches)
+		avgA := float64(p.Assists) / float64(p.Matches)
+		kdaVal = fmt.Sprintf("**%.2f** (`%.1f / %.1f / %.1f` ср.)", kda, avgK, avgD, avgA)
+	}
+
+	medalsVal := fmt.Sprintf("MVP: **%d** | SVPG: **%d**", p.MVP, p.SVP)
+	if lifetime, lErr := b.services.MatchService.GetLifetimeMedals(ctx, id); lErr != nil {
+		b.logger.Warn("profile: failed to get lifetime medals for player %d: %v", id, lErr)
+	} else if lifetime.MVP > p.MVP || lifetime.SVP > p.SVP {
+		medalsVal += fmt.Sprintf("\n*(за всё время: %d / %d)*", lifetime.MVP, lifetime.SVP)
+	}
+
+	embed.Fields = append(embed.Fields,
+		&discordgo.MessageEmbedField{Name: "Матчи (сезон)", Value: matchesVal, Inline: true},
+		&discordgo.MessageEmbedField{Name: "KDA (сезон)", Value: kdaVal, Inline: true},
+		&discordgo.MessageEmbedField{Name: "Медали", Value: medalsVal, Inline: true},
+	)
+
+	// 3. Economy, activity XP/level, custom title & frame color.
 	b.appendEconomyFields(ctx, embed, id)
 
-	// Rating and its recent movement. The profile used to show kills and a
-	// win rate but never the number a ranked ladder is actually about, because
-	// current_mmr was a single overwritten column with no past to read.
-	b.appendMMRFields(ctx, embed, id)
-
-	if lifetime, err := b.services.MatchService.GetLifetimeMedals(ctx, id); err != nil {
-		b.logger.Warn("profile: failed to get lifetime medals for player %d: %v", id, err)
-	} else if lifetime.MVP > p.MVP || lifetime.SVP > p.SVP {
-		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
-			Name:   "Медали (за всё время)",
-			Value:  fmt.Sprintf("MVP: %d | SVPG: %d", lifetime.MVP, lifetime.SVP),
-			Inline: false,
-		})
-	}
+	// 4. Recent MMR movement (last 5 matches with base + KDA + medal breakdown).
+	b.appendMMRHistoryField(ctx, embed, id)
 
 	b.respond(s, i, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
@@ -209,12 +282,7 @@ func (b *Bot) appendEconomyFields(ctx context.Context, embed *discordgo.MessageE
 	)
 }
 
-// appendMMRFields adds the rating and its recent movement to a profile embed.
-//
-// Neither is fatal to the profile: a player whose rating cannot be read still
-// gets their match statistics, so a failure here is logged and skipped rather
-// than turned into an error page.
-func (b *Bot) appendMMRFields(ctx context.Context, embed *discordgo.MessageEmbed, playerID int) {
+func (b *Bot) appendMMRHeaderField(ctx context.Context, embed *discordgo.MessageEmbed, playerID int) {
 	mmrs, err := b.services.Lobby.GetPlayerMMRsBatch(ctx, []int{playerID})
 	if err != nil {
 		b.logger.Warn("profile: failed to read MMR for player %d: %v", playerID, err)
@@ -224,14 +292,15 @@ func (b *Bot) appendMMRFields(ctx context.Context, embed *discordgo.MessageEmbed
 	if !ok {
 		return
 	}
-
 	tier := domain.DetermineTier(mmr)
 	embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
 		Name:   "Рейтинг",
-		Value:  fmt.Sprintf("**%d** MMR — %s", mmr, domain.FormatTierDisplay(tier)),
+		Value:  fmt.Sprintf("**%d MMR** — %s", mmr, domain.FormatTierDisplay(tier)),
 		Inline: false,
 	})
+}
 
+func (b *Bot) appendMMRHistoryField(ctx context.Context, embed *discordgo.MessageEmbed, playerID int) {
 	history, err := b.services.Lobby.GetMMRHistory(ctx, playerID, mmrHistoryInProfile)
 	if err != nil {
 		b.logger.Warn("profile: failed to read MMR history for player %d: %v", playerID, err)
@@ -247,7 +316,7 @@ func (b *Bot) appendMMRFields(ctx context.Context, embed *discordgo.MessageEmbed
 		sb.WriteByte('\n')
 	}
 	embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
-		Name:   fmt.Sprintf("Последние изменения (%d)", len(history)),
+		Name:   fmt.Sprintf("Последние изменения MMR (%d)", len(history)),
 		Value:  sb.String(),
 		Inline: false,
 	})

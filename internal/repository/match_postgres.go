@@ -641,7 +641,7 @@ func levenshteinDistance(a, b string) int {
 }
 
 func (r *MatchPostgres) GetAllPlayers(ctx context.Context) ([]models.Player, error) {
-	rows, err := r.db.QueryContext(ctx, "SELECT id, name FROM players WHERE is_deleted = FALSE ORDER BY id")
+	rows, err := r.db.QueryContext(ctx, "SELECT id, name, COALESCE(current_mmr, 1000) FROM players WHERE is_deleted = FALSE ORDER BY id")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get all players: %w", err)
 	}
@@ -650,7 +650,7 @@ func (r *MatchPostgres) GetAllPlayers(ctx context.Context) ([]models.Player, err
 	var players []models.Player
 	for rows.Next() {
 		var p models.Player
-		if err := rows.Scan(&p.ID, &p.Name); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.CurrentMMR); err != nil {
 			return nil, fmt.Errorf("failed to scan player: %w", err)
 		}
 		players = append(players, p)

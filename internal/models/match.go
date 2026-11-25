@@ -41,9 +41,10 @@ type AIImageResponse struct {
 }
 
 type Player struct {
-	ID        int       `json:"id"`
-	Name      string    `json:"name"`
-	CreatedAt time.Time `json:"created_at"`
+	ID         int       `json:"id"`
+	Name       string    `json:"name"`
+	CurrentMMR int       `json:"current_mmr"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 // Medals counts how many MVP and SVPG awards a player earned.

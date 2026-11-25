@@ -59,11 +59,33 @@ func (f *fakeEconomyLobbyRepo) GetByID(_ context.Context, _ int) (*models.LobbyM
 
 type fakeEconomyMatchSvc struct {
 	MatchService
-	names map[int]string
+	names       map[int]string
+	invalidated bool
 }
 
 func (f *fakeEconomyMatchSvc) GetPlayerNamesByIDs(_ context.Context, _ []int) (map[int]string, error) {
 	return f.names, nil
+}
+
+func (f *fakeEconomyMatchSvc) InvalidateStatsCache() {
+	f.invalidated = true
+}
+
+func (f *fakeEconomyRepo) RevertFinishedMatch(_ context.Context, matchID int) (*models.MatchRevertSummary, error) {
+	return &models.MatchRevertSummary{MatchID: matchID, OldWinner: domain.TeamA}, nil
+}
+
+func TestRevertFinishedMatchInvalidatesStatsCache(t *testing.T) {
+	repo := &fakeEconomyRepo{}
+	matchSvc := &fakeEconomyMatchSvc{}
+	svc := NewEconomyService(nopLogger{}, repo, nil, matchSvc)
+
+	if _, err := svc.RevertFinishedMatch(context.Background(), 7); err != nil {
+		t.Fatalf("RevertFinishedMatch: %v", err)
+	}
+	if !matchSvc.invalidated {
+		t.Fatal("expected RevertFinishedMatch to invalidate statsCache")
+	}
 }
 
 func TestAwardMatchCoinsWinLossMVPSVPAndIdempotency(t *testing.T) {

@@ -180,7 +180,7 @@ func (b *Bot) newPlayersCommand() *discordgo.ApplicationCommand {
 func (b *Bot) newTopCommand() *discordgo.ApplicationCommand {
 	return &discordgo.ApplicationCommand{
 		Name:        "top",
-		Description: "Таблица лидеров",
+		Description: "Таблица лидеров (по умолчанию — по MMR)",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
@@ -188,6 +188,7 @@ func (b *Bot) newTopCommand() *discordgo.ApplicationCommand {
 				Description: "Критерий сортировки",
 				Required:    false,
 				Choices: []*discordgo.ApplicationCommandOptionChoice{
+					{Name: "По MMR (Рейтинг)", Value: "mmr"},
 					{Name: "По KDA", Value: "kda"},
 					{Name: "По Винрейту", Value: "winrate"},
 				},
@@ -378,10 +379,7 @@ func (b *Bot) newWalletCommand() *discordgo.ApplicationCommand {
 	return &discordgo.ApplicationCommand{
 		Name:        "wallet",
 		Description: "Кошелёк, уровень XP, страховки ставок и история ValCoins (без аргументов — свой)",
-		Options: []*discordgo.ApplicationCommandOption{
-			{Type: discordgo.ApplicationCommandOptionInteger, Name: "id", Description: "ID игрока (необязательно)", Required: false},
-			{Type: discordgo.ApplicationCommandOptionUser, Name: "user", Description: "Пользователь Discord (необязательно)", Required: false},
-		},
+		Options:     targetPlayerOptions(),
 	}
 }
 

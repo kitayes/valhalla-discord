@@ -639,7 +639,21 @@ func (s *MatchServiceImpl) GetPlayerStatsByID(ctx context.Context, id int) (*Pla
 			return st, nil
 		}
 	}
-	return nil, fmt.Errorf("player %d: %w", id, domain.ErrPlayerNotFound)
+
+	// Bound/active players who have not appeared in an OCR-parsed scoreboard yet
+	// still have a valid profile (MMR, ValCoins, XP/level, cosmetics), so return
+	// zeroed seasonal match stats instead of reporting them as missing.
+	name, err := s.repo.GetPlayerNameByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("player %d: %w", id, domain.ErrPlayerNotFound)
+	}
+	return &PlayerStats{ID: id, Name: name}, nil
+}
+
+// InvalidateStatsCache forces the next /top or /profile call to recompute
+// seasonal stats from Postgres (used after /revert_match soft-deletes a match).
+func (s *MatchServiceImpl) InvalidateStatsCache() {
+	s.statsCache.Invalidate()
 }
 
 func (s *MatchServiceImpl) SyncToGoogleSheet(ctx context.Context) (string, error) {

@@ -680,17 +680,35 @@ func (b *Bot) handleScoreboardConfirm(ctx context.Context, s *discordgo.Session,
 			Inline: false,
 		})
 	}
+	requeueComps := []discordgo.MessageComponent{
+		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			discordgo.Button{Label: "Встать в очередь лобби", Style: discordgo.SecondaryButton, CustomID: fmt.Sprintf("requeue_%d", matchID)},
+		}},
+	}
 	b.respond(s, i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
-			Embeds: []*discordgo.MessageEmbed{finalEmbed},
-			Components: []discordgo.MessageComponent{
-				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-					discordgo.Button{Label: "Встать в очередь лобби", Style: discordgo.SecondaryButton, CustomID: fmt.Sprintf("requeue_%d", matchID)},
-				}},
-			},
+			Embeds:     []*discordgo.MessageEmbed{finalEmbed},
+			Components: requeueComps,
 		},
 	})
+
+	// Also update the original match card in the parent lobby channel so the
+	// old Team A WIN / Team B WIN buttons do not stay active after OCR closure.
+	if ref, ok := b.popMatchCard(matchID); ok {
+		embeds := []*discordgo.MessageEmbed{finalEmbed}
+		comps := requeueComps
+		b.goBackground("update-parent-match-card", backgroundTimeout, func(context.Context) {
+			if _, editErr := s.ChannelMessageEditComplex(&discordgo.MessageEdit{
+				Channel:    ref.ChannelID,
+				ID:         ref.MessageID,
+				Embeds:     &embeds,
+				Components: &comps,
+			}); editErr != nil {
+				b.logger.Warn("scoreboard confirm: failed to update parent match card %s for #%d: %v", ref.MessageID, matchID, editErr)
+			}
+		})
+	}
 
 	if lobbyMatch != nil && lobbyMatch.ThreadID != "" {
 		threadID := lobbyMatch.ThreadID
