@@ -563,3 +563,35 @@ func (r *LobbyMatchPostgres) IsInActiveMatch(ctx context.Context, playerID int) 
 	}
 	return playing, nil
 }
+
+// SaveDiscordBetCard stores the Discord channel and message ID of a match card
+// so live betting pool updates and settlement can edit or announce next to it.
+func (r *LobbyMatchPostgres) SaveDiscordBetCard(ctx context.Context, matchID int, channelID, messageID string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE lobby_matches SET discord_channel_id = $2, discord_message_id = $3 WHERE id = $1`,
+		matchID, channelID, messageID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to save discord bet card for match %d: %w", matchID, err)
+	}
+	return nil
+}
+
+// GetDiscordBetCard returns the saved Discord channel and message ID for a match card.
+func (r *LobbyMatchPostgres) GetDiscordBetCard(ctx context.Context, matchID int) (string, string, bool, error) {
+	var ch, msg sql.NullString
+	err := r.db.QueryRowContext(ctx,
+		`SELECT discord_channel_id, discord_message_id FROM lobby_matches WHERE id = $1`,
+		matchID,
+	).Scan(&ch, &msg)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, fmt.Errorf("failed to get discord bet card for match %d: %w", matchID, err)
+	}
+	if !ch.Valid || ch.String == "" || !msg.Valid || msg.String == "" {
+		return "", "", false, nil
+	}
+	return ch.String, msg.String, true, nil
+}

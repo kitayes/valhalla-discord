@@ -373,3 +373,262 @@ func (b *Bot) newCancelMatchCommand() *discordgo.ApplicationCommand {
 		},
 	}
 }
+
+func (b *Bot) newWalletCommand() *discordgo.ApplicationCommand {
+	return &discordgo.ApplicationCommand{
+		Name:        "wallet",
+		Description: "Кошелёк, уровень XP, страховки ставок и история ValCoins (без аргументов — свой)",
+		Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionInteger, Name: "id", Description: "ID игрока (необязательно)", Required: false},
+			{Type: discordgo.ApplicationCommandOptionUser, Name: "user", Description: "Пользователь Discord (необязательно)", Required: false},
+		},
+	}
+}
+
+func (b *Bot) newDailyCommand() *discordgo.ApplicationCommand {
+	return &discordgo.ApplicationCommand{
+		Name:        "daily",
+		Description: "Забрать ежедневный бонус ValCoins (серия увеличивает награду)",
+	}
+}
+
+func (b *Bot) newTipCommand() *discordgo.ApplicationCommand {
+	minVal := float64(5)
+	return &discordgo.ApplicationCommand{
+		Name:        "tip",
+		Description: "Перевести ValCoins другому игроку (комиссия 5%)",
+		Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionUser, Name: "user", Description: "Получатель", Required: true},
+			{Type: discordgo.ApplicationCommandOptionInteger, Name: "amount", Description: "Сумма ValCoins (от 5)", Required: true, MinValue: &minVal},
+		},
+	}
+}
+
+func (b *Bot) newRichCommand() *discordgo.ApplicationCommand {
+	return &discordgo.ApplicationCommand{
+		Name:        "rich",
+		Description: "Таблица лидеров по ValCoins или по уровню/опыту XP",
+		Options: []*discordgo.ApplicationCommandOption{
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "mode",
+				Description: "Режим рейтинга",
+				Required:    false,
+				Choices: []*discordgo.ApplicationCommandOptionChoice{
+					{Name: "Монеты (ValCoins)", Value: "coins"},
+					{Name: "Актив (Уровень и XP)", Value: "xp"},
+				},
+			},
+		},
+	}
+}
+
+func (b *Bot) newShopCommand() *discordgo.ApplicationCommand {
+	return &discordgo.ApplicationCommand{
+		Name:        "shop",
+		Description: "Магазин ValCoins: титулы, рамки профиля, страховки ставок, роли и призы",
+	}
+}
+
+func (b *Bot) newCoinsAdminCommand() *discordgo.ApplicationCommand {
+	minVal := float64(1)
+	return &discordgo.ApplicationCommand{
+		Name:        "coins_admin",
+		Description: "Выдать или списать ValCoins игрока (Только админы)",
+		Options: []*discordgo.ApplicationCommandOption{
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "add",
+				Description: "Начислить ValCoins игроку",
+				Options: []*discordgo.ApplicationCommandOption{
+					{Type: discordgo.ApplicationCommandOptionInteger, Name: "player", Description: "ID игрока", Required: true},
+					{Type: discordgo.ApplicationCommandOptionInteger, Name: "amount", Description: "Сумма", Required: true, MinValue: &minVal},
+					{Type: discordgo.ApplicationCommandOptionString, Name: "reason", Description: "Комментарий", Required: false},
+				},
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "remove",
+				Description: "Списать ValCoins у игрока",
+				Options: []*discordgo.ApplicationCommandOption{
+					{Type: discordgo.ApplicationCommandOptionInteger, Name: "player", Description: "ID игрока", Required: true},
+					{Type: discordgo.ApplicationCommandOptionInteger, Name: "amount", Description: "Сумма", Required: true, MinValue: &minVal},
+					{Type: discordgo.ApplicationCommandOptionString, Name: "reason", Description: "Комментарий", Required: false},
+				},
+			},
+		},
+	}
+}
+
+func (b *Bot) newShopAdminCommand() *discordgo.ApplicationCommand {
+	minPrice := float64(1)
+	minStock := float64(0)
+	return &discordgo.ApplicationCommand{
+		Name:        "shop_admin",
+		Description: "Управление каталогом магазина ValCoins (Только админы)",
+		Options: []*discordgo.ApplicationCommandOption{
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "add",
+				Description: "Добавить или обновить товар в магазине",
+				Options: []*discordgo.ApplicationCommandOption{
+					{Type: discordgo.ApplicationCommandOptionString, Name: "code", Description: "Уникальный код (латиница, напр. vip_role)", Required: true},
+					{Type: discordgo.ApplicationCommandOptionString, Name: "name", Description: "Название товара", Required: true},
+					{
+						Type:        discordgo.ApplicationCommandOptionString,
+						Name:        "kind",
+						Description: "Тип товара",
+						Required:    true,
+						Choices: []*discordgo.ApplicationCommandOptionChoice{
+							{Name: "Discord-роль", Value: "discord_role"},
+							{Name: "Призовой лот (выдаёт админ)", Value: "prize"},
+							{Name: "Цвет рамки профиля (HEX)", Value: "profile_color"},
+							{Name: "Кастомный титул", Value: "title"},
+							{Name: "Страховка ставки", Value: "bet_insurance"},
+						},
+					},
+					{Type: discordgo.ApplicationCommandOptionInteger, Name: "price", Description: "Цена в ValCoins", Required: true, MinValue: &minPrice},
+					{Type: discordgo.ApplicationCommandOptionString, Name: "description", Description: "Описание товара", Required: false},
+					{Type: discordgo.ApplicationCommandOptionRole, Name: "role", Description: "Discord-роль (для типа discord_role)", Required: false},
+					{Type: discordgo.ApplicationCommandOptionString, Name: "payload", Description: "HEX-цвет (для profile_color) или доп. данные", Required: false},
+					{Type: discordgo.ApplicationCommandOptionInteger, Name: "stock", Description: "Лимит штук (оставьте пустым для безлимита)", Required: false, MinValue: &minStock},
+				},
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "toggle",
+				Description: "Включить или выключить товар",
+				Options: []*discordgo.ApplicationCommandOption{
+					{Type: discordgo.ApplicationCommandOptionString, Name: "code", Description: "Код товара", Required: true},
+					{Type: discordgo.ApplicationCommandOptionBoolean, Name: "enabled", Description: "Включён?", Required: true},
+				},
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "list",
+				Description: "Показать все товары (включая выключенные)",
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "post",
+				Description: "Опубликовать постоянную интерактивную витрину магазина в канале магазина",
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "orders",
+				Description: "Показать последние покупки игрока (для получения ID заказа)",
+				Options: []*discordgo.ApplicationCommandOption{
+					{Type: discordgo.ApplicationCommandOptionInteger, Name: "player", Description: "ID игрока", Required: true},
+				},
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "refund",
+				Description: "Отменить заказ, вернуть монеты/сток и откатить эффект (роль/титул/цвет)",
+				Options: []*discordgo.ApplicationCommandOption{
+					{Type: discordgo.ApplicationCommandOptionInteger, Name: "order_id", Description: "ID заказа из /shop_admin orders", Required: true},
+				},
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "delete",
+				Description: "Удалить товар из каталога (если по нему ещё не было покупок)",
+				Options: []*discordgo.ApplicationCommandOption{
+					{Type: discordgo.ApplicationCommandOptionString, Name: "code", Description: "Код товара", Required: true},
+				},
+			},
+		},
+	}
+}
+
+func (b *Bot) newRevertMatchCommand() *discordgo.ApplicationCommand {
+	return &discordgo.ApplicationCommand{
+		Name:        "revert_match",
+		Description: "Откатить ошибочно закрытый матч: MMR, монеты, ставки и скриншот (Только админы)",
+		Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionInteger, Name: "id", Description: "ID матча", Required: true},
+		},
+	}
+}
+
+func (b *Bot) newQueueUnbanCommand() *discordgo.ApplicationCommand {
+	return &discordgo.ApplicationCommand{
+		Name:        "queue_unban",
+		Description: "Снять бан очереди с игрока раньше срока (Только админы)",
+		Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionInteger, Name: "id", Description: "ID игрока", Required: true},
+		},
+	}
+}
+
+func (b *Bot) newXPAdminCommand() *discordgo.ApplicationCommand {
+	minVal := float64(1)
+	maxLvl := float64(200)
+	return &discordgo.ApplicationCommand{
+		Name:        "xp_admin",
+		Description: "Скорректировать XP или уровень игрока (Только админы)",
+		Options: []*discordgo.ApplicationCommandOption{
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "add",
+				Description: "Добавить XP игроку",
+				Options: []*discordgo.ApplicationCommandOption{
+					{Type: discordgo.ApplicationCommandOptionInteger, Name: "player", Description: "ID игрока", Required: true},
+					{Type: discordgo.ApplicationCommandOptionInteger, Name: "amount", Description: "Сколько XP добавить", Required: true, MinValue: &minVal},
+				},
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "remove",
+				Description: "Снять XP у игрока",
+				Options: []*discordgo.ApplicationCommandOption{
+					{Type: discordgo.ApplicationCommandOptionInteger, Name: "player", Description: "ID игрока", Required: true},
+					{Type: discordgo.ApplicationCommandOptionInteger, Name: "amount", Description: "Сколько XP снять", Required: true, MinValue: &minVal},
+				},
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "set_level",
+				Description: "Установить точный уровень игрока (без начисления монет)",
+				Options: []*discordgo.ApplicationCommandOption{
+					{Type: discordgo.ApplicationCommandOptionInteger, Name: "player", Description: "ID игрока", Required: true},
+					{Type: discordgo.ApplicationCommandOptionInteger, Name: "level", Description: "Уровень (1..200)", Required: true, MinValue: &minVal, MaxValue: maxLvl},
+				},
+			},
+		},
+	}
+}
+
+func (b *Bot) newProfileAdminCommand() *discordgo.ApplicationCommand {
+	return &discordgo.ApplicationCommand{
+		Name:        "profile_admin",
+		Description: "Модерация титула и цвета рамки профиля игрока (Только админы)",
+		Options: []*discordgo.ApplicationCommandOption{
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "clear_title",
+				Description: "Сбросить кастомный титул игрока",
+				Options: []*discordgo.ApplicationCommandOption{
+					{Type: discordgo.ApplicationCommandOptionInteger, Name: "player", Description: "ID игрока", Required: true},
+				},
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "set_title",
+				Description: "Поправить/установить титул игрока (например, исправить опечатку)",
+				Options: []*discordgo.ApplicationCommandOption{
+					{Type: discordgo.ApplicationCommandOptionInteger, Name: "player", Description: "ID игрока", Required: true},
+					{Type: discordgo.ApplicationCommandOptionString, Name: "title", Description: "Новый титул (до 40 символов)", Required: true},
+				},
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "clear_color",
+				Description: "Сбросить цвет рамки профиля игрока к стандартному",
+				Options: []*discordgo.ApplicationCommandOption{
+					{Type: discordgo.ApplicationCommandOptionInteger, Name: "player", Description: "ID игрока", Required: true},
+				},
+			},
+		},
+	}
+}

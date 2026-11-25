@@ -45,6 +45,7 @@ type LobbyMatchRepository interface {
 // QueueBanRepository is the subset of repository needed for queue bans.
 type QueueBanRepository interface {
 	BanPlayer(ctx context.Context, discordID, reason string, bannedUntil time.Time) error
+	UnbanPlayer(ctx context.Context, discordID string) (bool, error)
 	IsBanned(ctx context.Context, discordID string) (bool, error)
 	GetBanInfo(ctx context.Context, discordID string) (string, time.Time, error)
 	PurgeExpired(ctx context.Context) (int, error)
@@ -527,6 +528,11 @@ func (l *LobbyService) removePlayerLocked(playerID int) ([]notice, bool) {
 func (l *LobbyService) QueueBan(ctx context.Context, discordID, reason string, duration time.Duration) error {
 	until := time.Now().Add(duration)
 	return l.queueBanRepo.BanPlayer(ctx, discordID, reason, until)
+}
+
+// QueueUnban lifts any active queue ban for discordID.
+func (l *LobbyService) QueueUnban(ctx context.Context, discordID string) (bool, error) {
+	return l.queueBanRepo.UnbanPlayer(ctx, discordID)
 }
 
 // FormatPlayerList formats the main queue.

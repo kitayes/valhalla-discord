@@ -38,6 +38,11 @@ func (r *banRepoStub) BanPlayer(ctx context.Context, discordID, reason string, u
 	return nil
 }
 
+func (r *banRepoStub) UnbanPlayer(ctx context.Context, discordID string) (bool, error) {
+	r.recordContext(ctx)
+	return true, nil
+}
+
 func (r *banRepoStub) IsBanned(ctx context.Context, discordID string) (bool, error) {
 	r.recordContext(ctx)
 	if r.block {

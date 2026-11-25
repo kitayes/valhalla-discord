@@ -82,6 +82,22 @@ var (
 	ErrDiscordNotBound = errors.New("your Discord account is not bound to a profile")
 	// ErrProfileTaken reports that the requested profile belongs to someone else.
 	ErrProfileTaken = errors.New("this profile is already claimed by another Discord account")
+
+	// Economy, XP, daily, tips and shop errors.
+	ErrDailyAlreadyClaimed      = errors.New("daily reward already claimed")
+	ErrShopItemNotFound         = errors.New("shop item not found")
+	ErrShopItemUnavailable      = errors.New("shop item is currently disabled")
+	ErrShopOutOfStock           = errors.New("shop item is out of stock")
+	ErrShopOrderNotFound        = errors.New("shop order not found")
+	ErrShopOrderAlreadyResolved = errors.New("shop order is already resolved")
+	ErrNoBetInsurance           = errors.New("no bet insurance coupons available")
+	ErrSelfTip                  = errors.New("cannot tip yourself")
+	ErrInvalidAmount            = errors.New("invalid amount")
+	ErrInvalidProfileTitle      = errors.New("invalid profile title")
+	ErrInvalidProfileColor      = errors.New("invalid profile color")
+	ErrBetNotFound              = errors.New("no active bet found for this match")
+	ErrShopItemHasOrders        = errors.New("shop item has existing orders and cannot be deleted")
+	ErrMatchNotRevertible       = errors.New("match is not finished with a winner and cannot be reverted")
 )
 
 type ValidationError struct {

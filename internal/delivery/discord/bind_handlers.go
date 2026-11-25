@@ -37,6 +37,7 @@ func (b *Bot) handleBind(ctx context.Context, s *discordgo.Session, i *discordgo
 		b.reportFailure(s, i, "bind", bindFailureMessage(err, nickname), err)
 		return
 	}
+	b.activity.invalidatePlayer(member.User.ID)
 
 	if created {
 		b.respondMessage(s, i, bindCreatedMessage(nickname, playerID), true)
@@ -102,6 +103,7 @@ func (b *Bot) handleBindPlayer(ctx context.Context, s *discordgo.Session, i *dis
 		b.reportFailure(s, i, "bind_player", bindFailureMessage(err, nickname), err)
 		return
 	}
+	b.activity.invalidatePlayer(target.ID)
 
 	verb := "привязан к профилю"
 	if created {

@@ -62,6 +62,8 @@ type Bot struct {
 	matchPlayerCache  map[int]cachedMatch              // matchID -> player IDs (for requeue)
 	clanCheckCache    map[string]clanVerdict           // userID -> last applied clan verdict
 	pendingReviews    map[int]*pendingScoreboardReview // matchID -> awaiting referee confirmation
+	betCards          map[int]*discordBetCard          // matchID -> dedicated betting channel card
+	activity          *activityTracker
 }
 
 // cachedThread and cachedMatch carry an insertion time so entries can be evicted
@@ -104,6 +106,8 @@ func NewBot(cfg *config.Config, services *application.Service, logger applicatio
 		matchPlayerCache:  make(map[int]cachedMatch),
 		clanCheckCache:    make(map[string]clanVerdict),
 		pendingReviews:    make(map[int]*pendingScoreboardReview),
+		betCards:          make(map[int]*discordBetCard),
+		activity:          newActivityTracker(),
 	}
 }
 
@@ -196,8 +200,19 @@ func (b *Bot) Init() error {
 		b.newLobbyClearCommand(),
 		b.newLobbyStatusCommand(),
 		b.newQueueBanCommand(),
+		b.newQueueUnbanCommand(),
 		b.newCancelMatchCommand(),
+		b.newRevertMatchCommand(),
 		b.newBalanceCommand(),
+		b.newWalletCommand(),
+		b.newDailyCommand(),
+		b.newTipCommand(),
+		b.newRichCommand(),
+		b.newShopCommand(),
+		b.newCoinsAdminCommand(),
+		b.newShopAdminCommand(),
+		b.newXPAdminCommand(),
+		b.newProfileAdminCommand(),
 	)
 
 	// Wrap interaction handler with panic recovery
@@ -211,6 +226,18 @@ func (b *Bot) Init() error {
 
 	// Register match button handlers (Team A WIN / Team B WIN)
 	b.RegisterMatchHandlers()
+
+	// Register Discord betting button handlers and payout callbacks
+	b.RegisterBettingHandlers()
+
+	// Register economy component handlers (large /tip confirmation)
+	b.RegisterEconomyComponentHandlers()
+
+	// Register shop select menu and admin prize approval button handlers
+	b.RegisterShopHandlers()
+
+	// Register activity XP handlers (voice state & guild snapshot)
+	b.RegisterActivityHandlers()
 
 	// Register scoreboard screenshot review handlers (Confirm / Flip / Edit / Assign)
 	b.RegisterScoreboardReviewHandlers()
@@ -244,6 +271,7 @@ func (b *Bot) Run(ctx context.Context) error {
 
 	b.sweepBetting()
 	b.startLobbyMaintenance()
+	b.startVoiceXPTracker()
 
 	b.logger.Info("Discord Bot Started. Cleaning up and registering slash commands...")
 
@@ -453,6 +481,21 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 	case "whoami":
 		b.handleWhoami(ctx, s, i.Interaction)
 		return
+	case "wallet":
+		b.handleWallet(ctx, s, i.Interaction)
+		return
+	case "daily":
+		b.handleDaily(ctx, s, i.Interaction)
+		return
+	case "tip":
+		b.handleTip(ctx, s, i.Interaction)
+		return
+	case "rich":
+		b.handleRich(ctx, s, i.Interaction)
+		return
+	case "shop":
+		b.handleShop(ctx, s, i.Interaction)
+		return
 	}
 
 	// Match lifecycle: referee OR admin. Kept out of the admin-only switch below
@@ -524,6 +567,10 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 		b.handleLobbyClear(ctx, s, i.Interaction)
 	case "queue_ban":
 		b.handleQueueBan(ctx, s, i.Interaction)
+	case "queue_unban":
+		b.handleQueueUnban(ctx, s, i.Interaction)
+	case "revert_match":
+		b.handleRevertMatch(ctx, s, i.Interaction)
 	case "lobby_status":
 		b.handleLobbyStatus(ctx, s, i.Interaction)
 	case "bind_player":
@@ -532,6 +579,14 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 		b.handleUnlinkPlayer(ctx, s, i.Interaction)
 	case "unbind_player":
 		b.handleUnbindPlayer(ctx, s, i.Interaction)
+	case "coins_admin":
+		b.handleCoinsAdmin(ctx, s, i.Interaction)
+	case "shop_admin":
+		b.handleShopAdmin(ctx, s, i.Interaction)
+	case "xp_admin":
+		b.handleXPAdmin(ctx, s, i.Interaction)
+	case "profile_admin":
+		b.handleProfileAdmin(ctx, s, i.Interaction)
 	}
 }
 
@@ -603,6 +658,11 @@ func (b *Bot) evictStaleCachesLocked(now time.Time) {
 			delete(b.pendingReviews, id)
 		}
 	}
+	for id, entry := range b.betCards {
+		if now.Sub(entry.CreatedAt) > matchCacheTTL {
+			delete(b.betCards, id)
+		}
+	}
 }
 
 func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
@@ -613,6 +673,10 @@ func (b *Bot) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if m.Author.Bot {
 		return
 	}
+
+	// Award chat XP across all guild text channels before restricting to the
+	// screenshot/FAQ channels below.
+	b.onChatActivity(s, m)
 
 	ctx, cancel := b.opContext(screenshotTimeout)
 	defer cancel()

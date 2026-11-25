@@ -10,6 +10,10 @@ DROP TABLE IF EXISTS telegram_players;
 DROP TABLE IF EXISTS telegram_teams;
 DROP TABLE IF EXISTS telegram_settings;
 
+DROP TABLE IF EXISTS shop_orders;
+DROP TABLE IF EXISTS shop_items;
+DROP TABLE IF EXISTS currency_ledger;
+
 DROP TABLE IF EXISTS player_results;
 DROP TABLE IF EXISTS matches;
 DROP TABLE IF EXISTS mmr_history;

@@ -78,6 +78,12 @@ func (b *Bot) onModalSubmit(s *discordgo.Session, i *discordgo.InteractionCreate
 		b.handleScoreboardKDAModal(s, i)
 		return
 	}
+	if strings.HasPrefix(data.CustomID, modalShopTitlePrefix) || strings.HasPrefix(data.CustomID, modalShopPrizePrefix) {
+		ctx, cancel := b.opContext(interactionTimeout)
+		defer cancel()
+		b.handleShopModalSubmit(ctx, s, i.Interaction)
+		return
+	}
 	if data.CustomID != modalBind {
 		return
 	}
@@ -98,6 +104,7 @@ func (b *Bot) onModalSubmit(s *discordgo.Session, i *discordgo.InteractionCreate
 		b.reportFailure(s, i.Interaction, "bind modal", bindFailureMessage(err, nickname), err)
 		return
 	}
+	b.activity.invalidatePlayer(member.User.ID)
 
 	if created {
 		b.respondMessage(s, i.Interaction, bindCreatedMessage(nickname, playerID), true)

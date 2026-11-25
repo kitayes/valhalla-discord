@@ -607,8 +607,12 @@ func (b *Bot) handleScoreboardConfirm(ctx context.Context, s *discordgo.Session,
 	}
 
 	b.closeBettingWindow(ctx, matchID)
-	b.goBackground("telegram-payout", backgroundTimeout, func(bg context.Context) {
-		b.processTelegramPayout(bg, matchID, winner)
+
+	mvpName := playerNameForID(rowsCopy, mvpID)
+	svpName := playerNameForID(rowsCopy, svpID)
+	matchRewards, coinSummary := b.awardAndFormatMatchCoins(ctx, matchID, winner, mvpID, svpID, mvpName, svpName)
+	b.goBackground("settle-match-economy", backgroundTimeout, func(bg context.Context) {
+		b.settleAndAnnounceMatchEconomy(bg, matchID, winner, matchRewards)
 	})
 
 	var commitWarning string
@@ -629,8 +633,6 @@ func (b *Bot) handleScoreboardConfirm(ctx context.Context, s *discordgo.Session,
 		}
 	}
 
-	mvpName := playerNameForID(rowsCopy, mvpID)
-	svpName := playerNameForID(rowsCopy, svpID)
 	if err := b.services.Lobby.SaveMedals(ctx, matchID, mvpName, svpName); err != nil {
 		b.logger.Error("scoreboard confirm: failed to save medals for #%d: %v", matchID, err)
 	}
@@ -671,6 +673,13 @@ func (b *Bot) handleScoreboardConfirm(ctx context.Context, s *discordgo.Session,
 	}
 
 	finalEmbed := buildConfirmedScoreboardEmbed(matchID, &resSnapshot, finalBreakdowns, commitWarning)
+	if coinSummary != "" {
+		finalEmbed.Fields = append(finalEmbed.Fields, &discordgo.MessageEmbedField{
+			Name:   fmt.Sprintf("Награды (%s)", domain.CurrencyName),
+			Value:  coinSummary,
+			Inline: false,
+		})
+	}
 	b.respond(s, i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{

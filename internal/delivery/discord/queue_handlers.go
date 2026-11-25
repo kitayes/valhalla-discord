@@ -345,6 +345,37 @@ func (b *Bot) handleQueueBan(ctx context.Context, s *discordgo.Session, i *disco
 	b.respondMessage(s, i, fmt.Sprintf("Игрок **%s** забанен в очереди на %s. Причина: %s", name, durationStr, reason), false)
 }
 
+func (b *Bot) handleQueueUnban(ctx context.Context, s *discordgo.Session, i *discordgo.Interaction) {
+	playerID := int(i.ApplicationCommandData().Options[0].IntValue())
+
+	discordID, err := b.services.MatchService.GetDiscordIDByPlayerID(ctx, playerID)
+	if err != nil {
+		if errors.Is(err, domain.ErrPlayerNotFound) || errors.Is(err, domain.ErrDiscordNotLinked) {
+			b.respondMessage(s, i, "Игрок не найден или не привязан к Discord.", true)
+			return
+		}
+		b.reportFailure(s, i, "queue_unban", "Ошибка обращения к базе.", err)
+		return
+	}
+
+	name, _ := b.services.MatchService.GetPlayerNameByID(ctx, playerID)
+	if name == "" {
+		name = fmt.Sprintf("ID:%d", playerID)
+	}
+
+	removed, err := b.services.Lobby.QueueUnban(ctx, discordID)
+	if err != nil {
+		b.reportFailure(s, i, "queue_unban", "Не удалось снять бан.", err)
+		return
+	}
+	if !removed {
+		b.respondMessage(s, i, fmt.Sprintf("У игрока **%s** (ID: %d) нет активного бана очереди.", name, playerID), true)
+		return
+	}
+	b.logger.Info("queue_unban: lifted queue ban for %s (ID: %d, discord %s)", name, playerID, discordID)
+	b.respondMessage(s, i, fmt.Sprintf("✅ Бан очереди снят с игрока **%s** (ID: %d).", name, playerID), false)
+}
+
 // maxQueueBanDuration caps a ban so a typo cannot exile somebody until the next
 // century. Nothing else bounds the value: it goes straight into banned_until.
 const maxQueueBanDuration = 365 * 24 * time.Hour

@@ -64,11 +64,11 @@ type Config struct {
 	// BetAmounts are the stake buttons drawn under a match's betting post.
 	// Sent to Telegram in ascending order with duplicates dropped; see
 	// StakeOptions.
-	BetAmounts []int `env:"BET_AMOUNTS" envSeparator:"," envDefault:"10,25,50"`
+	BetAmounts []int `env:"BET_AMOUNTS" envSeparator:"," envDefault:"25,50,100"`
 	// BetMax caps a single stake, the "Макс" button included. It is enforced
 	// server-side on every bet: callback data is client-supplied and a modified
 	// client can send whatever number it likes.
-	BetMax       int    `env:"BET_MAX" envDefault:"100"`
+	BetMax       int    `env:"BET_MAX" envDefault:"250"`
 	DeepSeekKey  string `env:"DEEPSEEK_KEY" envDefault:""`
 	FAQChannelID string `env:"FAQ_CHANNEL_ID" envDefault:""`
 	FAQFilePath  string `env:"FAQ_FILE_PATH" envDefault:"assets/faq.md"`
@@ -96,6 +96,23 @@ type Config struct {
 	// TierAnnounceChannelID receives promotion/demotion embeds. When empty, the
 	// channel the match was closed in is used.
 	TierAnnounceChannelID string `env:"TIER_ANNOUNCE_CHANNEL_ID" envDefault:""`
+
+	// LevelAnnounceChannelID receives level-up announcements (for chat & voice XP).
+	// When empty, chat level-ups are announced in the channel the message was sent in.
+	LevelAnnounceChannelID string `env:"LEVEL_ANNOUNCE_CHANNEL_ID" envDefault:""`
+
+	// BettingChannelID is the dedicated Discord channel for match betting cards,
+	// live pools, match outcomes, player coin rewards, and bet payouts.
+	// When empty, betting buttons are attached directly to the match card.
+	BettingChannelID string `env:"BETTING_CHANNEL_ID" envDefault:""`
+
+	// ShopChannelID is the dedicated Discord channel for /shop and the pinned
+	// shop showcase (/shop_admin post). When empty, /shop works in any channel.
+	ShopChannelID string `env:"SHOP_CHANNEL_ID" envDefault:""`
+
+	// ShopAdminChannelID receives pending prize redemption requests from /shop
+	// with Approve/Cancel buttons. Falls back to the channel where /shop was used.
+	ShopAdminChannelID string `env:"SHOP_ADMIN_CHANNEL_ID" envDefault:""`
 }
 
 // TierRoleIDs maps each configured tier to its Discord role ID, skipping tiers

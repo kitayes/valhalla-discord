@@ -169,6 +169,8 @@ type LobbyMatch interface {
 	SaveThreadID(ctx context.Context, matchID int, threadID string) error
 	SaveBetPost(ctx context.Context, matchID int, chatID, messageID int64) error
 	GetBetPost(ctx context.Context, matchID int) (chatID, messageID int64, ok bool, err error)
+	SaveDiscordBetCard(ctx context.Context, matchID int, channelID, messageID string) error
+	GetDiscordBetCard(ctx context.Context, matchID int) (channelID, messageID string, ok bool, err error)
 	GetByThreadID(ctx context.Context, threadID string) (*models.LobbyMatch, error)
 	GetPlayerNamesByMatchID(ctx context.Context, matchID int) ([]string, error)
 	// IsInActiveMatch reports whether the player is on a team of an ACTIVE match.
@@ -182,12 +184,47 @@ type LobbyMatch interface {
 
 type Bet interface {
 	PlaceBet(ctx context.Context, req models.PlaceBetRequest) error
+	PlaceDiscordBet(ctx context.Context, req models.PlaceDiscordBetRequest) (int, int, error)
+	CancelDiscordBet(ctx context.Context, matchID, playerID int) (int, bool, int, error)
+	GetOpenBetForPlayer(ctx context.Context, matchID, playerID int) (*models.Bet, error)
 	GetBetsByMatch(ctx context.Context, matchID int) ([]models.Bet, error)
 	BetPool(ctx context.Context, matchID int) (models.BetPool, error)
 	PayoutWinners(ctx context.Context, matchID int, winningTeam string) (map[int64]int, error)
+	PayoutWinnersDetailed(ctx context.Context, matchID int, winningTeam string) (*models.PayoutSummary, error)
 	GetPlayerPoints(ctx context.Context, tgUserID int64) (int, error)
+	GetPlayerPointsByID(ctx context.Context, playerID int) (int, error)
 	RefundAllBets(ctx context.Context, matchID int) (int, error)
 	PendingSettlements(ctx context.Context) ([]models.PendingSettlement, error)
+}
+
+type Economy interface {
+	GetPlayerEconomy(ctx context.Context, playerID int) (*models.PlayerEconomy, error)
+	GetLedger(ctx context.Context, playerID, limit int) ([]models.LedgerEntry, error)
+	GrantXP(ctx context.Context, playerID int, xpDelta, voiceSecondsDelta, messagesDelta int64) (*models.XPGrantResult, error)
+	AdminAdjustXP(ctx context.Context, playerID int, xpDelta int64) (*models.XPGrantResult, error)
+	AdminSetLevel(ctx context.Context, playerID, targetLevel int) (*models.XPGrantResult, error)
+	AdminSetProfileTitle(ctx context.Context, playerID int, title string) error
+	AdminClearProfileColor(ctx context.Context, playerID int) error
+	GrantCoins(ctx context.Context, playerID, amount int, reason, refKey, note string) (int, int, bool, error)
+	AdminAdjustCoins(ctx context.Context, playerID, delta int, note string) (int, int, error)
+	ClaimDaily(ctx context.Context, playerID int, now time.Time) (*models.DailyClaimResult, error)
+	TipCoins(ctx context.Context, senderID, receiverID, amount, burnAmount int) (*models.TipResult, error)
+	GetRichLeaderboard(ctx context.Context, limit int) ([]models.RichPlayer, error)
+	GetXPLeaderboard(ctx context.Context, limit int) ([]models.RichPlayer, error)
+	GetPlayerBetStats(ctx context.Context, playerID int) (models.PlayerBetStats, error)
+
+	ListShopItems(ctx context.Context, includeDisabled bool) ([]models.ShopItem, error)
+	GetShopItemByID(ctx context.Context, itemID int) (*models.ShopItem, error)
+	UpsertShopItem(ctx context.Context, item *models.ShopItem) (*models.ShopItem, error)
+	SetShopItemEnabled(ctx context.Context, code string, enabled bool) (*models.ShopItem, error)
+	DeleteShopItem(ctx context.Context, code string) error
+	PurchaseShopItem(ctx context.Context, playerID, itemID int, customInput string) (*models.ShopOrder, error)
+	ResolveShopOrder(ctx context.Context, orderID int, approve bool, adminDiscordID string) (*models.ShopOrder, error)
+	AdminRefundShopOrder(ctx context.Context, orderID int, adminDiscordID string) (*models.ShopOrder, error)
+	RefundFulfilledOrder(ctx context.Context, orderID int, reason string) error
+	GetPlayerOrders(ctx context.Context, playerID, limit int) ([]models.ShopOrder, error)
+
+	RevertFinishedMatch(ctx context.Context, matchID int) (*models.MatchRevertSummary, error)
 }
 
 type License interface {
@@ -199,6 +236,7 @@ type License interface {
 
 type QueueBan interface {
 	BanPlayer(ctx context.Context, discordID, reason string, bannedUntil time.Time) error
+	UnbanPlayer(ctx context.Context, discordID string) (bool, error)
 	IsBanned(ctx context.Context, discordID string) (bool, error)
 	GetBanInfo(ctx context.Context, discordID string) (reason string, until time.Time, err error)
 	PurgeExpired(ctx context.Context) (int, error)
@@ -210,6 +248,7 @@ type Repository struct {
 	Telegram
 	LobbyMatch
 	Bet
+	Economy
 	License
 	QueueBan
 	db *sql.DB
@@ -226,6 +265,7 @@ func NewRepository(ctx context.Context, cfg *Config, db *sql.DB, cacheSize int) 
 		Telegram:    NewTelegramPostgres(db),
 		LobbyMatch:  NewLobbyMatchPostgres(db),
 		Bet:         NewBetPostgres(db),
+		Economy:     NewEconomyPostgres(db),
 		License:     NewLicensePostgres(db),
 		QueueBan:    NewQueueBanPostgres(db),
 		db:          db,

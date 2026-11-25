@@ -80,6 +80,7 @@ type Service struct {
 	Lobby              *LobbyService
 	EloService         *EloService
 	BettingService     *BettingService
+	EconomyService     *EconomyService
 	LicenseService     LicenseService
 	FAQService         *FAQService
 	Bracket            *BracketService
@@ -128,6 +129,7 @@ func NewService(repos *repository.Repository, ai AIProvider, sheetsClient sheets
 		Lobby:              lobby,
 		EloService:         NewEloService(logger, matchSvc, repos.LobbyMatch),
 		BettingService:     NewBettingService(logger, repos),
+		EconomyService:     NewEconomyService(logger, repos.Economy, repos.LobbyMatch, matchSvc),
 		LicenseService:     repos.License,
 	}
 }

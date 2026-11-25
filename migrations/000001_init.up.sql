@@ -44,24 +44,35 @@ CREATE INDEX idx_queue_bans_banned_until ON queue_bans(banned_until);
 -- =====================================================================
 
 CREATE TABLE players (
-    id             SERIAL PRIMARY KEY,
-    name           VARCHAR(255) NOT NULL UNIQUE,
-    created_at     TIMESTAMPTZ DEFAULT NOW(),
-    is_deleted     BOOLEAN DEFAULT FALSE,
-    deleted_at     TIMESTAMPTZ,
-    discord_id     VARCHAR(64),
-    name_embedding vector(768),
-    current_mmr    INT DEFAULT 1000,
-    points         INT DEFAULT 100,
-    tg_id          BIGINT,
-    mvp_count      INT DEFAULT 0,
-    svp_count      INT DEFAULT 0
+    id                  SERIAL PRIMARY KEY,
+    name                VARCHAR(255) NOT NULL UNIQUE,
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    is_deleted          BOOLEAN DEFAULT FALSE,
+    deleted_at          TIMESTAMPTZ,
+    discord_id          VARCHAR(64),
+    name_embedding      vector(768),
+    current_mmr         INT DEFAULT 1000,
+    points              INT NOT NULL DEFAULT 100,
+    tg_id               BIGINT,
+    mvp_count           INT DEFAULT 0,
+    svp_count           INT DEFAULT 0,
+    xp                  BIGINT NOT NULL DEFAULT 0,
+    level               INT NOT NULL DEFAULT 1,
+    voice_seconds       BIGINT NOT NULL DEFAULT 0,
+    messages_count      BIGINT NOT NULL DEFAULT 0,
+    last_daily_at       TIMESTAMPTZ,
+    daily_streak        INT NOT NULL DEFAULT 0,
+    profile_title       VARCHAR(64) NOT NULL DEFAULT '',
+    profile_color       INT NOT NULL DEFAULT 0,
+    bet_insurance_count INT NOT NULL DEFAULT 0
 );
 
 CREATE INDEX idx_players_is_deleted ON players(is_deleted);
 CREATE INDEX idx_players_name_embedding ON players USING hnsw (name_embedding vector_cosine_ops);
 CREATE UNIQUE INDEX idx_players_discord_id_unique ON players(discord_id) WHERE discord_id IS NOT NULL;
 CREATE UNIQUE INDEX idx_players_tg_id_unique ON players(tg_id) WHERE tg_id IS NOT NULL;
+CREATE INDEX idx_players_points ON players(points DESC) WHERE is_deleted = FALSE;
+CREATE INDEX idx_players_xp ON players(xp DESC) WHERE is_deleted = FALSE;
 
 CREATE TABLE player_aliases (
     id         SERIAL PRIMARY KEY,
@@ -115,24 +126,26 @@ CREATE INDEX idx_link_codes_expires ON link_codes(expires_at);
 -- =====================================================================
 
 CREATE TABLE lobby_matches (
-    id                SERIAL PRIMARY KEY,
-    guild_id          VARCHAR(64) NOT NULL,
-    captain_a_id      INT NOT NULL REFERENCES players(id),
-    captain_b_id      INT NOT NULL REFERENCES players(id),
-    team_a_ids        INT[] NOT NULL DEFAULT '{}',
-    team_b_ids        INT[] NOT NULL DEFAULT '{}',
-    winner            VARCHAR(8) DEFAULT NULL
+    id                 SERIAL PRIMARY KEY,
+    guild_id           VARCHAR(64) NOT NULL,
+    captain_a_id       INT NOT NULL REFERENCES players(id),
+    captain_b_id       INT NOT NULL REFERENCES players(id),
+    team_a_ids         INT[] NOT NULL DEFAULT '{}',
+    team_b_ids         INT[] NOT NULL DEFAULT '{}',
+    winner             VARCHAR(8) DEFAULT NULL
         CHECK (winner IS NULL OR winner IN ('Team A', 'Team B')),
-    status            VARCHAR(16) NOT NULL DEFAULT 'ACTIVE'
+    status             VARCHAR(16) NOT NULL DEFAULT 'ACTIVE'
         CHECK (status IN ('ACTIVE', 'PROCESSING', 'FINISHED')),
-    created_at        TIMESTAMPTZ DEFAULT NOW(),
-    thread_id         VARCHAR(64),
-    betting_open      BOOLEAN DEFAULT FALSE,
-    mvp_name          VARCHAR(255),
-    svp_name          VARCHAR(255),
-    betting_closes_at TIMESTAMPTZ,
-    tg_bet_chat_id    BIGINT,
-    tg_bet_message_id BIGINT
+    created_at         TIMESTAMPTZ DEFAULT NOW(),
+    thread_id          VARCHAR(64),
+    betting_open       BOOLEAN DEFAULT FALSE,
+    mvp_name           VARCHAR(255),
+    svp_name           VARCHAR(255),
+    betting_closes_at  TIMESTAMPTZ,
+    tg_bet_chat_id     BIGINT,
+    tg_bet_message_id  BIGINT,
+    discord_channel_id VARCHAR(64),
+    discord_message_id VARCHAR(64)
 );
 
 CREATE INDEX idx_lobby_matches_guild_id ON lobby_matches(guild_id);
@@ -143,18 +156,85 @@ CREATE INDEX idx_lobby_matches_betting_open ON lobby_matches(betting_closes_at) 
 CREATE TABLE match_bets (
     id          SERIAL PRIMARY KEY,
     match_id    INT NOT NULL REFERENCES lobby_matches(id) ON DELETE CASCADE,
-    tg_user_id  BIGINT NOT NULL,
+    player_id   INT REFERENCES players(id) ON DELETE CASCADE,
+    tg_user_id  BIGINT,
     team_chosen VARCHAR(8) NOT NULL CHECK (team_chosen IN ('Team A', 'Team B')),
     amount      INT NOT NULL CHECK (amount > 0),
+    insured     BOOLEAN NOT NULL DEFAULT FALSE,
     created_at  TIMESTAMPTZ DEFAULT NOW(),
     settled_at  TIMESTAMPTZ,
-    payout      INT NOT NULL DEFAULT 0
+    payout      INT NOT NULL DEFAULT 0,
+    CHECK (player_id IS NOT NULL OR tg_user_id IS NOT NULL)
 );
 
 CREATE INDEX idx_match_bets_match_id ON match_bets(match_id);
-CREATE INDEX idx_match_bets_tg_user_id ON match_bets(tg_user_id);
+CREATE INDEX idx_match_bets_player_id ON match_bets(player_id) WHERE player_id IS NOT NULL;
+CREATE INDEX idx_match_bets_tg_user_id ON match_bets(tg_user_id) WHERE tg_user_id IS NOT NULL;
 CREATE INDEX idx_match_bets_unsettled ON match_bets(match_id) WHERE settled_at IS NULL;
-CREATE UNIQUE INDEX idx_match_bets_one_per_user ON match_bets(match_id, tg_user_id) WHERE settled_at IS NULL;
+CREATE UNIQUE INDEX idx_match_bets_one_per_user ON match_bets(match_id, tg_user_id) WHERE settled_at IS NULL AND tg_user_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_match_bets_one_per_player ON match_bets(match_id, player_id) WHERE settled_at IS NULL AND player_id IS NOT NULL;
+
+-- =====================================================================
+-- Economy: currency ledger, shop catalog, and shop orders
+-- =====================================================================
+
+CREATE TABLE currency_ledger (
+    id         SERIAL PRIMARY KEY,
+    player_id  INT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    amount     INT NOT NULL,
+    balance    INT NOT NULL,
+    reason     VARCHAR(32) NOT NULL,
+    ref_key    VARCHAR(128),
+    note       TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_currency_ledger_player ON currency_ledger(player_id, created_at DESC);
+CREATE UNIQUE INDEX idx_currency_ledger_idempotent
+    ON currency_ledger(player_id, reason, ref_key)
+    WHERE ref_key IS NOT NULL;
+
+CREATE TABLE shop_items (
+    id          SERIAL PRIMARY KEY,
+    code        VARCHAR(64) NOT NULL UNIQUE,
+    name        VARCHAR(128) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    kind        VARCHAR(32) NOT NULL
+        CHECK (kind IN ('title', 'profile_color', 'discord_role', 'bet_insurance', 'prize')),
+    price       INT NOT NULL CHECK (price > 0),
+    payload     TEXT NOT NULL DEFAULT '',
+    stock       INT CHECK (stock IS NULL OR stock >= 0),
+    enabled     BOOLEAN NOT NULL DEFAULT TRUE,
+    sort_order  INT NOT NULL DEFAULT 100,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO shop_items (code, name, description, kind, price, payload, sort_order) VALUES
+    ('custom_title',  'Кастомный титул в профиле',   'Свой уникальный титул в /profile и таблице лидеров (до 40 символов)', 'title',         750, '',       10),
+    ('color_gold',    'Золотая рамка профиля',       'Золотой цвет карточки /profile (#F1C40F)',                              'profile_color', 400, 'F1C40F', 20),
+    ('color_crimson', 'Алая рамка профиля',          'Алый цвет карточки /profile (#E74C3C)',                                 'profile_color', 400, 'E74C3C', 21),
+    ('color_violet',  'Неоновая рамка профиля',      'Фиолетово-неоновый цвет карточки /profile (#9B59B6)',                   'profile_color', 400, '9B59B6', 22),
+    ('color_emerald', 'Изумрудная рамка профиля',    'Изумрудный цвет карточки /profile (#2ECC71)',                           'profile_color', 400, '2ECC71', 23),
+    ('bet_insurance', 'Страховка ставки (50%)',      'Одноразовый купон: возвращает 50% ставки при проигрыше',                'bet_insurance',  75, '',       30)
+ON CONFLICT (code) DO NOTHING;
+
+CREATE TABLE shop_orders (
+    id           SERIAL PRIMARY KEY,
+    player_id    INT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    item_id      INT NOT NULL REFERENCES shop_items(id) ON DELETE RESTRICT,
+    item_name    VARCHAR(128) NOT NULL,
+    item_kind    VARCHAR(32) NOT NULL,
+    price_paid   INT NOT NULL,
+    custom_input TEXT NOT NULL DEFAULT '',
+    status       VARCHAR(24) NOT NULL DEFAULT 'fulfilled'
+        CHECK (status IN ('pending', 'fulfilled', 'cancelled')),
+    handled_by   VARCHAR(64),
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    resolved_at  TIMESTAMPTZ
+);
+
+CREATE INDEX idx_shop_orders_player ON shop_orders(player_id, created_at DESC);
+CREATE INDEX idx_shop_orders_pending ON shop_orders(status) WHERE status = 'pending';
 
 CREATE TABLE mmr_history (
     id          SERIAL PRIMARY KEY,

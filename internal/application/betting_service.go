@@ -15,12 +15,19 @@ import (
 // BettingRepository is the subset of repository needed by BettingService.
 type BettingRepository interface {
 	PlaceBet(ctx context.Context, req models.PlaceBetRequest) error
+	PlaceDiscordBet(ctx context.Context, req models.PlaceDiscordBetRequest) (int, int, error)
+	CancelDiscordBet(ctx context.Context, matchID, playerID int) (int, bool, int, error)
+	GetOpenBetForPlayer(ctx context.Context, matchID, playerID int) (*models.Bet, error)
 	GetBetsByMatch(ctx context.Context, matchID int) ([]models.Bet, error)
 	BetPool(ctx context.Context, matchID int) (models.BetPool, error)
 	SaveBetPost(ctx context.Context, matchID int, chatID, messageID int64) error
 	GetBetPost(ctx context.Context, matchID int) (chatID, messageID int64, ok bool, err error)
+	SaveDiscordBetCard(ctx context.Context, matchID int, channelID, messageID string) error
+	GetDiscordBetCard(ctx context.Context, matchID int) (channelID, messageID string, ok bool, err error)
 	PayoutWinners(ctx context.Context, matchID int, winningTeam string) (map[int64]int, error)
+	PayoutWinnersDetailed(ctx context.Context, matchID int, winningTeam string) (*models.PayoutSummary, error)
 	GetPlayerPoints(ctx context.Context, tgUserID int64) (int, error)
+	GetPlayerPointsByID(ctx context.Context, playerID int) (int, error)
 	RefundAllBets(ctx context.Context, matchID int) (int, error)
 	PendingSettlements(ctx context.Context) ([]models.PendingSettlement, error)
 }
@@ -31,8 +38,14 @@ type BettingRepository interface {
 type PayoutResult struct {
 	MatchID     int
 	WinningTeam string
-	// Payouts maps tgUserID to the points credited.
+	// Payouts maps tgUserID to the points credited (Telegram consumers).
 	Payouts map[int64]int
+	// PlayerPayouts maps internal playerID to the winning payout credited.
+	PlayerPayouts map[int]int
+	// InsuranceRefunds maps internal playerID to 50% insurance refund on losing insured bets.
+	InsuranceRefunds map[int]int
+	// TotalPool is the total staked amount across all settled bets.
+	TotalPool int
 	// BetCount is how many live bets were settled. Zero payouts with a non-zero
 	// BetCount means everybody backed the losing side.
 	BetCount int
@@ -41,17 +54,18 @@ type PayoutResult struct {
 // HadBets reports whether anyone had a stake on the match.
 func (r PayoutResult) HadBets() bool { return r.BetCount > 0 }
 
-// BettingService handles the Telegram betting economy.
+// BettingService handles both Discord and Telegram betting economies.
 type BettingService struct {
 	logger Logger
 	repo   BettingRepository
 
 	// callbackMu guards the notification hooks: they are wired once the
-	// Telegram bot exists, by which point the Discord handlers that fire them
-	// are already running.
-	callbackMu     sync.RWMutex
-	payoutCallback func(PayoutResult)
-	refundCallback func(matchID int, refundedCount int)
+	// Discord and Telegram bots exist.
+	callbackMu            sync.RWMutex
+	payoutCallback        func(PayoutResult)
+	refundCallback        func(matchID int, refundedCount int)
+	discordPayoutCallback func(PayoutResult)
+	discordRefundCallback func(matchID int, refundedCount int)
 }
 
 // NewBettingService creates a new BettingService.
@@ -69,11 +83,25 @@ func (s *BettingService) SetPayoutCallback(fn func(PayoutResult)) {
 	s.payoutCallback = fn
 }
 
-// SetRefundCallback installs the hook fired after bets are refunded.
+// SetRefundCallback installs the Telegram hook fired after bets are refunded.
 func (s *BettingService) SetRefundCallback(fn func(matchID int, refundedCount int)) {
 	s.callbackMu.Lock()
 	defer s.callbackMu.Unlock()
 	s.refundCallback = fn
+}
+
+// SetDiscordPayoutCallback installs the Discord hook fired after a payout settles.
+func (s *BettingService) SetDiscordPayoutCallback(fn func(PayoutResult)) {
+	s.callbackMu.Lock()
+	defer s.callbackMu.Unlock()
+	s.discordPayoutCallback = fn
+}
+
+// SetDiscordRefundCallback installs the Discord hook fired after bets are refunded.
+func (s *BettingService) SetDiscordRefundCallback(fn func(matchID int, refundedCount int)) {
+	s.callbackMu.Lock()
+	defer s.callbackMu.Unlock()
+	s.discordRefundCallback = fn
 }
 
 // PlaceBet validates and places a bet for a Telegram user.
@@ -92,26 +120,79 @@ func (s *BettingService) PlaceBet(ctx context.Context, req models.PlaceBetReques
 	return s.repo.PlaceBet(ctx, req)
 }
 
+// PlaceDiscordBet validates and places a bet directly for a Discord-bound player.
+// Returns (betID, newBalance, err).
+func (s *BettingService) PlaceDiscordBet(ctx context.Context, req models.PlaceDiscordBetRequest) (int, int, error) {
+	if req.Amount <= 0 {
+		return 0, 0, fmt.Errorf("bet amount must be positive, got %d: %w", req.Amount, domain.ErrInvalidAmount)
+	}
+	if !domain.IsValidTeam(req.TeamChosen) {
+		return 0, 0, fmt.Errorf("team must be %q or %q, got %q", domain.TeamA, domain.TeamB, req.TeamChosen)
+	}
+
+	s.logger.Info("bet(discord): player %d places %d coins on %s (match #%d, insured=%v)",
+		req.PlayerID, req.Amount, req.TeamChosen, req.MatchID, req.UseInsurance)
+
+	return s.repo.PlaceDiscordBet(ctx, req)
+}
+
+// CancelDiscordBet cancels a player's live bet while the betting window is still open.
+func (s *BettingService) CancelDiscordBet(ctx context.Context, matchID, playerID int) (int, bool, int, error) {
+	s.logger.Info("bet(discord): player %d cancels bet on match #%d", playerID, matchID)
+	return s.repo.CancelDiscordBet(ctx, matchID, playerID)
+}
+
+// GetOpenBetForPlayer returns the player's unsettled bet on matchID, or nil.
+func (s *BettingService) GetOpenBetForPlayer(ctx context.Context, matchID, playerID int) (*models.Bet, error) {
+	return s.repo.GetOpenBetForPlayer(ctx, matchID, playerID)
+}
+
+// SaveDiscordBetCard stores the Discord match card coordinates for pool updates & announcements.
+func (s *BettingService) SaveDiscordBetCard(ctx context.Context, matchID int, channelID, messageID string) error {
+	return s.repo.SaveDiscordBetCard(ctx, matchID, channelID, messageID)
+}
+
+// DiscordBetCard returns the saved Discord match card coordinates.
+func (s *BettingService) DiscordBetCard(ctx context.Context, matchID int) (string, string, bool, error) {
+	return s.repo.GetDiscordBetCard(ctx, matchID)
+}
+
+// GetPlayerPointsByID returns the current coin balance for an internal player ID.
+func (s *BettingService) GetPlayerPointsByID(ctx context.Context, playerID int) (int, error) {
+	return s.repo.GetPlayerPointsByID(ctx, playerID)
+}
+
 // ProcessPayout calculates and distributes winnings after a match finishes.
-// Returns the payout summary: map of tgUserID -> points received.
+// Returns the Telegram payout summary: map of tgUserID -> points received.
 func (s *BettingService) ProcessPayout(ctx context.Context, matchID int, winningTeam string) (map[int64]int, error) {
+	result, err := s.settlePayout(ctx, matchID, winningTeam, true)
+	if err != nil {
+		return nil, err
+	}
+	if !result.HadBets() {
+		return nil, nil
+	}
+	return result.Payouts, nil
+}
+
+// ProcessPayoutDetailed settles all bets for a finished match, notifies
+// Telegram if bets existed, and returns the complete PayoutResult so the
+// Discord betting channel can render a single combined match+betting summary.
+func (s *BettingService) ProcessPayoutDetailed(ctx context.Context, matchID int, winningTeam string) (PayoutResult, error) {
+	return s.settlePayout(ctx, matchID, winningTeam, false)
+}
+
+func (s *BettingService) settlePayout(ctx context.Context, matchID int, winningTeam string, fireDiscordCallback bool) (PayoutResult, error) {
 	bets, err := s.repo.GetBetsByMatch(ctx, matchID)
 	if err != nil {
-		return nil, fmt.Errorf("betting: failed to get bets for match #%d: %w", matchID, err)
+		return PayoutResult{}, fmt.Errorf("betting: failed to get bets for match #%d: %w", matchID, err)
 	}
 
 	if len(bets) == 0 {
 		s.logger.Info("betting: no bets for match #%d — skipping payout", matchID)
-		return nil, nil
+		return PayoutResult{MatchID: matchID, WinningTeam: winningTeam}, nil
 	}
 
-	// Counters only: the actual distribution is computed inside the payout
-	// transaction. Collecting winners and losers into slices copied every bet
-	// twice just to take their lengths for one log line.
-	//
-	// Settled bets are skipped so this line describes the same pool the
-	// transaction will actually distribute. Counting all of them meant a second
-	// call logged the full pool next to a payout of zero.
 	totalPool, winningPool, liveCount, winnerCount := 0, 0, 0, 0
 	for _, b := range bets {
 		if b.IsSettled() {
@@ -128,24 +209,33 @@ func (s *BettingService) ProcessPayout(ctx context.Context, matchID int, winning
 	s.logger.Info("betting: match #%d | %d live bets | total pool: %d | winning pool: %d | %d winners, %d losers",
 		matchID, liveCount, totalPool, winningPool, winnerCount, liveCount-winnerCount)
 
-	payouts, err := s.repo.PayoutWinners(ctx, matchID, winningTeam)
+	summary, err := s.repo.PayoutWinnersDetailed(ctx, matchID, winningTeam)
 	if err != nil {
-		return nil, fmt.Errorf("betting: payout failed: %w", err)
+		return PayoutResult{}, fmt.Errorf("betting: payout failed: %w", err)
+	}
+
+	result := PayoutResult{
+		MatchID:          matchID,
+		WinningTeam:      winningTeam,
+		Payouts:          summary.TgPayouts,
+		PlayerPayouts:    summary.PlayerPayouts,
+		InsuranceRefunds: summary.InsuranceRefunds,
+		TotalPool:        summary.TotalPool,
+		BetCount:         liveCount,
 	}
 
 	s.callbackMu.RLock()
-	fn := s.payoutCallback
+	tgFn := s.payoutCallback
+	dcFn := s.discordPayoutCallback
 	s.callbackMu.RUnlock()
-	if fn != nil {
-		fn(PayoutResult{
-			MatchID:     matchID,
-			WinningTeam: winningTeam,
-			Payouts:     payouts,
-			BetCount:    liveCount,
-		})
+	if tgFn != nil {
+		tgFn(result)
+	}
+	if fireDiscordCallback && dcFn != nil {
+		dcFn(result)
 	}
 
-	return payouts, nil
+	return result, nil
 }
 
 // SettlePending finishes settlements that were started and never completed:
@@ -223,10 +313,14 @@ func (s *BettingService) RefundAllBets(ctx context.Context, matchID int) (int, e
 	}
 
 	s.callbackMu.RLock()
-	fn := s.refundCallback
+	tgFn := s.refundCallback
+	dcFn := s.discordRefundCallback
 	s.callbackMu.RUnlock()
-	if fn != nil {
-		fn(matchID, refunded)
+	if tgFn != nil {
+		tgFn(matchID, refunded)
+	}
+	if dcFn != nil {
+		dcFn(matchID, refunded)
 	}
 	return refunded, nil
 }

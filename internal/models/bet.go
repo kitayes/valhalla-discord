@@ -6,13 +6,15 @@ import (
 	"blackwatch/internal/domain"
 )
 
-// Bet represents a Telegram user's bet on a lobby match.
+// Bet represents a user's bet on a lobby match (placed from Discord or Telegram).
 type Bet struct {
 	ID         int        `json:"id"`
 	MatchID    int        `json:"match_id"`
-	TgUserID   int64      `json:"tg_user_id"`
+	PlayerID   int        `json:"player_id"`
+	TgUserID   int64      `json:"tg_user_id,omitempty"`
 	TeamChosen string     `json:"team_chosen"` // "Team A" or "Team B"
 	Amount     int        `json:"amount"`
+	Insured    bool       `json:"insured"`
 	CreatedAt  time.Time  `json:"created_at"`
 	SettledAt  *time.Time `json:"settled_at,omitempty"` // nil while the bet is still live
 	Payout     int        `json:"payout"`               // points credited back on settlement
@@ -32,12 +34,31 @@ type PendingSettlement struct {
 	Cancelled bool
 }
 
-// PlaceBetRequest is the input for placing a bet.
+// PlaceBetRequest is the input for placing a bet from Telegram.
 type PlaceBetRequest struct {
 	MatchID    int
 	TgUserID   int64
 	TeamChosen string
 	Amount     int
+}
+
+// PlaceDiscordBetRequest is the input for placing a bet directly from Discord.
+type PlaceDiscordBetRequest struct {
+	MatchID      int
+	PlayerID     int
+	TeamChosen   string
+	Amount       int
+	UseInsurance bool
+}
+
+// PayoutSummary carries the complete outcome of settling a match's bets across
+// both Telegram and Discord bettors, including any 50% insurance refunds.
+type PayoutSummary struct {
+	TgPayouts        map[int64]int
+	PlayerPayouts    map[int]int
+	InsuranceRefunds map[int]int
+	TotalPool        int
+	BetCount         int
 }
 
 // BetPool is the live money staked on one match, split by side.

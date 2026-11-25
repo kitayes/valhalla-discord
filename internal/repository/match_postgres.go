@@ -1407,6 +1407,57 @@ func (r *MatchPostgres) MergePlayers(ctx context.Context, sourceID, targetID int
 		return nil, fmt.Errorf("failed to delete source player_resets: %w", err)
 	}
 
+	// Merge economy & XP counters cleanly and reparent ledger/bets/orders.
+	var srcXP, srcVoice, srcMsgs int64
+	var srcInsurance int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT xp, voice_seconds, messages_count, bet_insurance_count FROM players WHERE id = $1`, sourceID,
+	).Scan(&srcXP, &srcVoice, &srcMsgs, &srcInsurance); err != nil {
+		return nil, fmt.Errorf("failed to read source economy fields: %w", err)
+	}
+	if srcXP > 0 || srcVoice > 0 || srcMsgs > 0 || srcInsurance > 0 {
+		var mergedXP int64
+		if err := tx.QueryRowContext(ctx,
+			`UPDATE players
+			    SET xp = xp + $1,
+			        voice_seconds = voice_seconds + $2,
+			        messages_count = messages_count + $3,
+			        bet_insurance_count = bet_insurance_count + $4
+			  WHERE id = $5
+			  RETURNING xp`,
+			srcXP, srcVoice, srcMsgs, srcInsurance, targetID,
+		).Scan(&mergedXP); err != nil {
+			return nil, fmt.Errorf("failed to fold economy counters: %w", err)
+		}
+		mergedLevel, _, _ := domain.LevelFromXP(mergedXP)
+		if _, err := tx.ExecContext(ctx, `UPDATE players SET level = GREATEST(level, $1) WHERE id = $2`, mergedLevel, targetID); err != nil {
+			return nil, fmt.Errorf("failed to update merged level: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM currency_ledger
+		  WHERE player_id = $1
+		    AND ref_key IS NOT NULL
+		    AND (reason, ref_key) IN (SELECT reason, ref_key FROM currency_ledger WHERE player_id = $2 AND ref_key IS NOT NULL)`,
+		sourceID, targetID,
+	); err != nil {
+		return nil, fmt.Errorf("failed to deduplicate currency_ledger: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE currency_ledger SET player_id = $2 WHERE player_id = $1`, sourceID, targetID); err != nil {
+		return nil, fmt.Errorf("failed to move currency_ledger: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE shop_orders SET player_id = $2 WHERE player_id = $1`, sourceID, targetID); err != nil {
+		return nil, fmt.Errorf("failed to move shop_orders: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE match_bets SET player_id = $2
+		  WHERE player_id = $1
+		    AND NOT (settled_at IS NULL AND match_id IN (SELECT match_id FROM match_bets WHERE player_id = $2 AND settled_at IS NULL))`,
+		sourceID, targetID,
+	); err != nil {
+		return nil, fmt.Errorf("failed to move match_bets: %w", err)
+	}
+
 	// Soft-delete source player and release unique binding columns.
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE players SET is_deleted = TRUE, deleted_at = NOW(), discord_id = NULL, tg_id = NULL WHERE id = $1`,

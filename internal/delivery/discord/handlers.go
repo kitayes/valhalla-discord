@@ -149,6 +149,9 @@ func (b *Bot) handleProfile(ctx context.Context, s *discordgo.Session, i *discor
 		},
 	}
 
+	// Economy, activity XP/level, custom title & frame color.
+	b.appendEconomyFields(ctx, embed, id)
+
 	// Rating and its recent movement. The profile used to show kills and a
 	// win rate but never the number a ranked ladder is actually about, because
 	// current_mmr was a single overwritten column with no past to read.
@@ -172,6 +175,39 @@ func (b *Bot) handleProfile(ctx context.Context, s *discordgo.Session, i *discor
 
 // mmrHistoryInProfile is how many recent rating changes the profile shows.
 const mmrHistoryInProfile = 5
+
+// appendEconomyFields applies custom profile title/color and adds ValCoins and XP level.
+func (b *Bot) appendEconomyFields(ctx context.Context, embed *discordgo.MessageEmbed, playerID int) {
+	if b.services == nil || b.services.EconomyService == nil {
+		return
+	}
+	econ, err := b.services.EconomyService.GetPlayerEconomy(ctx, playerID)
+	if err != nil {
+		b.logger.Warn("profile: failed to read economy for player %d: %v", playerID, err)
+		return
+	}
+	if econ.ProfileTitle != "" {
+		embed.Description = fmt.Sprintf("🏷️ **«%s»**", econ.ProfileTitle)
+	}
+	if econ.ProfileColor > 0 {
+		embed.Color = econ.ProfileColor
+	}
+
+	lvl, curXP, needXP := domain.LevelFromXP(econ.XP)
+	bar := domain.FormatProgressBar(curXP, needXP, 10)
+	embed.Fields = append(embed.Fields,
+		&discordgo.MessageEmbedField{
+			Name:   fmt.Sprintf("Кошелёк (%s)", domain.CurrencyName),
+			Value:  fmt.Sprintf("**%s** • 🛡️ Страховок: %d", domain.FormatCoins(econ.Points), econ.BetInsuranceCount),
+			Inline: true,
+		},
+		&discordgo.MessageEmbedField{
+			Name:   "Уровень и актив",
+			Value:  fmt.Sprintf("**%d ур.** (`%s`)\n💬 %d • 🎙️ %s", lvl, bar, econ.MessagesCount, domain.FormatVoiceDuration(econ.VoiceSeconds)),
+			Inline: true,
+		},
+	)
+}
 
 // appendMMRFields adds the rating and its recent movement to a profile embed.
 //
@@ -1090,6 +1126,13 @@ func (b *Bot) onDangerButton(s *discordgo.Session, i *discordgo.InteractionCreat
 			return
 		}
 		b.executeMergePlayer(ctx, s, i.Interaction, srcID, dstID)
+	case strings.HasPrefix(data.CustomID, "confirm_revert_match_"):
+		matchID, ok := parseIDFromPrefix(data.CustomID, "confirm_revert_match_")
+		if !ok {
+			b.rejectMalformedDangerButton(s, i.Interaction, data.CustomID)
+			return
+		}
+		b.executeRevertMatch(ctx, s, i.Interaction, matchID)
 	case strings.HasPrefix(data.CustomID, "confirm_reset_player_"):
 		id, ok := parseIDFromPrefix(data.CustomID, "confirm_reset_player_")
 		if !ok {
@@ -1151,6 +1194,69 @@ func (b *Bot) executeMergePlayer(ctx context.Context, s *discordgo.Session, i *d
 					"Перенесено: матчей `%d`, медалей `%d`, записей MMR `%d`.%s",
 				summary.SourceName, summary.SourceID, summary.TargetName, summary.TargetID,
 				summary.MovedResults, summary.MovedMedals, summary.MovedHistory, aliasNote,
+			),
+			Components: []discordgo.MessageComponent{},
+		},
+	})
+}
+
+func (b *Bot) executeRevertMatch(ctx context.Context, s *discordgo.Session, i *discordgo.Interaction, matchID int) {
+	summary, err := b.services.EconomyService.RevertFinishedMatch(ctx, matchID)
+	if err != nil {
+		msg := "Не удалось откатить матч."
+		if errors.Is(err, domain.ErrMatchNotFound) {
+			msg = fmt.Sprintf("Матч #%d не найден.", matchID)
+		} else if errors.Is(err, domain.ErrMatchNotRevertible) {
+			msg = fmt.Sprintf("Матч #%d уже не закрыт с победителем — откатывать нечего.", matchID)
+		}
+		b.logger.Error("revert_match: failed for #%d: %v", matchID, err)
+		b.updateWithError(s, i, msg)
+		return
+	}
+
+	if len(summary.RestoredMMRs) > 0 {
+		guildID := b.guildID(i.GuildID)
+		restored := summary.RestoredMMRs
+		b.goBackground("sync-reverted-mmr", backgroundTimeout, func(bg context.Context) {
+			b.syncTierRoles(bg, s, guildID, restored)
+			b.services.Lobby.SyncMMRToSheet(restored)
+		})
+	}
+
+	if summary.ThreadID != "" {
+		archived := false
+		if _, err := s.ChannelEditComplex(summary.ThreadID, &discordgo.ChannelEdit{Archived: &archived}); err != nil {
+			b.logger.Warn("revert_match: failed to unarchive thread %s for #%d: %v", summary.ThreadID, matchID, err)
+		}
+	}
+
+	if b.cfg.BettingChannelID != "" {
+		chID := b.cfg.BettingChannelID
+		b.goBackground("announce-revert-match", backgroundTimeout, func(context.Context) {
+			_, _ = s.ChannelMessageSendEmbed(chID, &discordgo.MessageEmbed{
+				Title: fmt.Sprintf("↩️ Матч #%d откачен администратором", matchID),
+				Description: fmt.Sprintf(
+					"Предыдущий результат (**%s**) отменён.\n• Откачен MMR у **%d** игроков\n• Откачено монет за матч: **%s**\n• Пересчитано/возвращено ставок: **%d**\n\nМатч снова в статусе `ACTIVE` — судья может закрыть его с верным победителем.",
+					summary.OldWinner, summary.RevertedMMRCount, domain.FormatCoins(summary.RevertedMatchCoins), summary.RevertedBetsCount,
+				),
+				Color: colorBettingClosed,
+			})
+		})
+	}
+
+	b.respond(s, i, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseUpdateMessage,
+		Data: &discordgo.InteractionResponseData{
+			Content: fmt.Sprintf(
+				"↩️ **Матч #%d откачен** (был победитель: `%s`).\n"+
+					"• Откачен MMR у **%d** игроков (ранговые роли и таблица синхронизируются)\n"+
+					"• Возвращено монет за матч: **%s**\n"+
+					"• Возвращено ставок: **%d**\n"+
+					"• Скрыто OCR-таблиц: **%d**\n\n"+
+					"Матч снова `ACTIVE` — можно закрыть его верной кнопкой WIN или заново скинуть скриншот в ветку.",
+				summary.MatchID, summary.OldWinner,
+				summary.RevertedMMRCount, domain.FormatCoins(summary.RevertedMatchCoins),
+				summary.RevertedBetsCount, summary.DeletedScoreboards,
 			),
 			Components: []discordgo.MessageComponent{},
 		},

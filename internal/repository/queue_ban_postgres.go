@@ -81,3 +81,16 @@ func (r *QueueBanPostgres) PurgeExpired(ctx context.Context) (int, error) {
 	}
 	return int(n), nil
 }
+
+// UnbanPlayer removes any queue ban for discordID and reports whether a ban was deleted.
+func (r *QueueBanPostgres) UnbanPlayer(ctx context.Context, discordID string) (bool, error) {
+	res, err := r.db.ExecContext(ctx, `DELETE FROM queue_bans WHERE discord_id = $1`, discordID)
+	if err != nil {
+		return false, fmt.Errorf("failed to unban player %s: %w", discordID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("failed to count unbanned rows: %w", err)
+	}
+	return n > 0, nil
+}

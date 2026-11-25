@@ -23,8 +23,11 @@ import (
 // =====================================================================
 
 const (
-	buttonTeamAWin = "match_team_a_win"
-	buttonTeamBWin = "match_team_b_win"
+	buttonTeamAWin       = "match_team_a_win"
+	buttonTeamBWin       = "match_team_b_win"
+	buttonMatchConfirmA  = "match_confirm_a"
+	buttonMatchConfirmB  = "match_confirm_b"
+	buttonMatchCancelWin = "match_confirm_cancel"
 
 	matchEmbedColor = 0x9B59B6
 	winColor        = 0x2ECC71
@@ -76,7 +79,7 @@ func (b *Bot) publishCreatedMatch(
 		Type: respType,
 		Data: &discordgo.InteractionResponseData{
 			Embeds:     []*discordgo.MessageEmbed{embed},
-			Components: matchResultButtons(matchID),
+			Components: matchResultButtons(matchID, b.cfg.BettingChannelID == ""),
 		},
 	})
 
@@ -89,6 +92,13 @@ func (b *Bot) publishCreatedMatch(
 	b.openMatchThread(ctx, s, i, cardID, matchID, captainAName, captainBName, roster)
 	b.openBettingWindow(ctx, matchID)
 	b.startBettingTimer(matchID)
+	if b.cfg.BettingChannelID != "" {
+		teamACopy := append([]int(nil), teamAIDs...)
+		teamBCopy := append([]int(nil), teamBIDs...)
+		b.goBackground("discord-bet-card", backgroundTimeout, func(bg context.Context) {
+			b.publishDiscordBetCard(bg, matchID, captainAName, captainBName, teamACopy, teamBCopy)
+		})
+	}
 	b.notifyTelegramMatchLive(matchID, captainAName, captainBName)
 }
 
@@ -118,6 +128,12 @@ func (b *Bot) openMatchThread(
 		cardID = card.ID
 	}
 
+	if b.cfg.BettingChannelID == "" && b.services != nil && b.services.BettingService != nil && i.ChannelID != "" && cardID != "" {
+		if err := b.services.BettingService.SaveDiscordBetCard(ctx, matchID, i.ChannelID, cardID); err != nil {
+			b.logger.Warn("match: failed to save discord bet card for #%d: %v", matchID, err)
+		}
+	}
+
 	name := threadName(fmt.Sprintf("Матч #%d: %s vs %s", matchID, captainAName, captainBName))
 	thread, err := s.MessageThreadStart(i.ChannelID, cardID, name, 1440)
 	if err != nil {
@@ -137,14 +153,20 @@ func (b *Bot) openMatchThread(
 	b.logger.Info("match: thread %s opened for #%d", thread.ID, matchID)
 }
 
-// matchResultButtons builds the referee's WIN buttons for a match.
-func matchResultButtons(matchID int) []discordgo.MessageComponent {
-	return []discordgo.MessageComponent{
+// matchResultButtons builds the referee's WIN buttons for a live match card.
+// When BETTING_CHANNEL_ID is unset (includeBetting=true), Discord betting
+// buttons are attached right beneath the WIN row as a fallback.
+func matchResultButtons(matchID int, includeBetting bool) []discordgo.MessageComponent {
+	rows := []discordgo.MessageComponent{
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 			discordgo.Button{Label: "Team A WIN", Style: discordgo.SuccessButton, CustomID: fmt.Sprintf("%s_%d", buttonTeamAWin, matchID)},
 			discordgo.Button{Label: "Team B WIN", Style: discordgo.DangerButton, CustomID: fmt.Sprintf("%s_%d", buttonTeamBWin, matchID)},
 		}},
 	}
+	if includeBetting {
+		rows = append(rows, bettingCardButtons(matchID)...)
+	}
+	return rows
 }
 
 // =====================================================================
@@ -158,7 +180,11 @@ func (b *Bot) onMatchResultButton(s *discordgo.Session, i *discordgo.Interaction
 
 	data := i.MessageComponentData()
 	customID := data.CustomID
-	if !strings.HasPrefix(customID, buttonTeamAWin) && !strings.HasPrefix(customID, buttonTeamBWin) {
+
+	isInitialWin := strings.HasPrefix(customID, buttonTeamAWin+"_") || strings.HasPrefix(customID, buttonTeamBWin+"_")
+	isConfirmWin := strings.HasPrefix(customID, buttonMatchConfirmA+"_") || strings.HasPrefix(customID, buttonMatchConfirmB+"_")
+	isCancelWin := customID == buttonMatchCancelWin
+	if !isInitialWin && !isConfirmWin && !isCancelWin {
 		return
 	}
 
@@ -172,15 +198,83 @@ func (b *Bot) onMatchResultButton(s *discordgo.Session, i *discordgo.Interaction
 		return
 	}
 
-	winner := domain.TeamA
-	prefix := buttonTeamAWin
-	if strings.HasPrefix(customID, buttonTeamBWin) {
-		winner, prefix = domain.TeamB, buttonTeamBWin
+	if isCancelWin {
+		b.respond(s, i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseUpdateMessage,
+			Data: &discordgo.InteractionResponseData{
+				Content:    "Закрытие матча отменено.",
+				Components: []discordgo.MessageComponent{},
+			},
+		})
+		return
 	}
-	matchID := parseID(strings.TrimPrefix(customID, prefix+"_"))
+
+	// Step 1: initial click on Team A WIN / Team B WIN asks for an ephemeral confirmation
+	// so a single referee misclick cannot immediately settle MMR, coins, and bets.
+	if isInitialWin {
+		winner := domain.TeamA
+		confirmPrefix := buttonMatchConfirmA
+		rawID := strings.TrimPrefix(customID, buttonTeamAWin+"_")
+		if strings.HasPrefix(customID, buttonTeamBWin+"_") {
+			winner = domain.TeamB
+			confirmPrefix = buttonMatchConfirmB
+			rawID = strings.TrimPrefix(customID, buttonTeamBWin+"_")
+		}
+		matchID := parseID(rawID)
+		if matchID <= 0 {
+			b.logger.Error("match: malformed win button custom ID %q", customID)
+			b.respondMessage(s, i.Interaction, "Некорректная кнопка. Обновите сообщение матча.", true)
+			return
+		}
+		cardMsgID := ""
+		if i.Message != nil {
+			cardMsgID = i.Message.ID
+		}
+		b.respond(s, i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: fmt.Sprintf(
+					"⚠️ **Подтвердите закрытие матча #%d**\nПобедитель: **%s**\n\n"+
+						"После подтверждения начислится MMR, монеты за матч и рассчитаются ставки.\n"+
+						"*(Если есть скриншот результата — лучше загрузите его в ветку матча, чтобы учлись KDA и MVP/SVPG.)*",
+					matchID, winner,
+				),
+				Components: []discordgo.MessageComponent{
+					discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+						discordgo.Button{
+							Label:    fmt.Sprintf("Подтвердить %s WIN", winner),
+							Style:    discordgo.DangerButton,
+							CustomID: fmt.Sprintf("%s_%d_%s", confirmPrefix, matchID, cardMsgID),
+						},
+						discordgo.Button{
+							Label:    "Отмена",
+							Style:    discordgo.SecondaryButton,
+							CustomID: buttonMatchCancelWin,
+						},
+					}},
+				},
+				Flags: discordgo.MessageFlagsEphemeral,
+			},
+		})
+		return
+	}
+
+	// Step 2: confirmed closure — parse "<prefix>_<matchID>_<cardMsgID>".
+	winner := domain.TeamA
+	rest := strings.TrimPrefix(customID, buttonMatchConfirmA+"_")
+	if strings.HasPrefix(customID, buttonMatchConfirmB+"_") {
+		winner = domain.TeamB
+		rest = strings.TrimPrefix(customID, buttonMatchConfirmB+"_")
+	}
+	parts := strings.SplitN(rest, "_", 2)
+	matchID := parseID(parts[0])
+	cardMsgID := ""
+	if len(parts) == 2 {
+		cardMsgID = parts[1]
+	}
 	if matchID <= 0 {
-		b.logger.Error("match: malformed win button custom ID %q", customID)
-		b.respondMessage(s, i.Interaction, "Некорректная кнопка. Обновите сообщение матча.", true)
+		b.logger.Error("match: malformed confirm win custom ID %q", customID)
+		b.respondMessage(s, i.Interaction, "Некорректная кнопка подтверждения.", true)
 		return
 	}
 
@@ -188,15 +282,15 @@ func (b *Bot) onMatchResultButton(s *discordgo.Session, i *discordgo.Interaction
 	if err != nil {
 		b.logger.Error("match: atomic closure failed for #%d: %v", matchID, err)
 		b.respond(s, i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{Content: "Ошибка системы при закрытии матча.", Flags: discordgo.MessageFlagsEphemeral},
+			Type: discordgo.InteractionResponseUpdateMessage,
+			Data: &discordgo.InteractionResponseData{Content: "Ошибка системы при закрытии матча.", Components: []discordgo.MessageComponent{}},
 		})
 		return
 	}
 	if !success {
 		b.respond(s, i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{Content: "Этот матч уже обрабатывается или завершён.", Flags: discordgo.MessageFlagsEphemeral},
+			Type: discordgo.InteractionResponseUpdateMessage,
+			Data: &discordgo.InteractionResponseData{Content: "Этот матч уже обрабатывается или завершён.", Components: []discordgo.MessageComponent{}},
 		})
 		return
 	}
@@ -204,27 +298,27 @@ func (b *Bot) onMatchResultButton(s *discordgo.Session, i *discordgo.Interaction
 	// Stop taking bets before settling them; the 5-minute timer may still be pending.
 	b.closeBettingWindow(ctx, matchID)
 
-	// The pool is settled first and independently of the rating. The two share
-	// nothing but the winner, and hanging the payout off a successful Elo update
-	// meant a failure there left every stake deducted on a match that can never
-	// be replayed — AtomicSetWinner refuses a second attempt and /cancel_match
-	// only takes ACTIVE matches.
-	b.goBackground("telegram-payout", backgroundTimeout, func(bg context.Context) {
-		b.processTelegramPayout(bg, matchID, winner)
+	// Award match coins immediately (idempotent) and settle all bets + post the
+	// combined match/betting result card to BETTING_CHANNEL_ID independently of Elo.
+	matchRewards, coinSummary := b.awardAndFormatMatchCoins(ctx, matchID, winner, 0, 0, "", "")
+	b.goBackground("settle-match-economy", backgroundTimeout, func(bg context.Context) {
+		b.settleAndAnnounceMatchEconomy(bg, matchID, winner, matchRewards)
 	})
 
 	// MVP/SVP are read off the match screenshot and stored on the match, so an
 	// empty pair here means "use whatever was recognised".
 	newMMRs, tierChanges, err := b.services.EloService.ProcessMatchResult(ctx, matchID, winner, "", "")
 	if err != nil {
-		// The winner is already committed and AtomicSetWinner will refuse a
-		// second attempt, so the rating for this match cannot be replayed by
-		// clicking again. Say so instead of rendering a clean "match finished"
-		// embed over a rating that was never applied.
 		b.logger.Error("elo: failed to process match #%d: %v", matchID, err)
-		b.respondMessage(s, i.Interaction, fmt.Sprintf(
-			"Матч #%d закрыт (%s), но рейтинг применён не полностью — требуется ручная проверка. "+
-				"Ставки рассчитываются отдельно.", matchID, winner), false)
+		b.respond(s, i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseUpdateMessage,
+			Data: &discordgo.InteractionResponseData{
+				Content: fmt.Sprintf(
+					"Матч #%d закрыт (%s), но рейтинг применён не полностью — требуется ручная проверка. Ставки рассчитываются отдельно.",
+					matchID, winner),
+				Components: []discordgo.MessageComponent{},
+			},
+		})
 		return
 	}
 
@@ -247,23 +341,57 @@ func (b *Bot) onMatchResultButton(s *discordgo.Session, i *discordgo.Interaction
 	match, err := b.services.Lobby.GetMatch(ctx, matchID)
 	if err != nil {
 		b.logger.Error("match: closed #%d but failed to reload it for the result embed: %v", matchID, err)
-		b.respondMessage(s, i.Interaction, fmt.Sprintf("Матч #%d закрыт (%s), но карточку результата отрисовать не удалось.", matchID, winner), false)
+		b.respond(s, i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseUpdateMessage,
+			Data: &discordgo.InteractionResponseData{
+				Content:    fmt.Sprintf("Матч #%d закрыт (%s), но карточку результата отрисовать не удалось.", matchID, winner),
+				Components: []discordgo.MessageComponent{},
+			},
+		})
 		return
 	}
 
-	// The requeue button rides on the result card instead of arriving as its own
-	// message. One match used to leave two messages in the channel, and the
-	// second one carried nothing but a button.
 	embed := b.buildMatchResultEmbed(ctx, match, winner)
+	if coinSummary != "" {
+		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+			Name:   fmt.Sprintf("Награды (%s)", domain.CurrencyName),
+			Value:  coinSummary,
+			Inline: false,
+		})
+	}
+	resultComponents := []discordgo.MessageComponent{
+		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			discordgo.Button{Label: "Встать в очередь лобби", Style: discordgo.SecondaryButton, CustomID: fmt.Sprintf("requeue_%d", matchID)},
+		}},
+	}
+
+	// Update the original public match card if we have its message ID; otherwise post the result embed.
+	if cardMsgID != "" && i.ChannelID != "" {
+		embeds := []*discordgo.MessageEmbed{embed}
+		if _, editErr := s.ChannelMessageEditComplex(&discordgo.MessageEdit{
+			Channel:    i.ChannelID,
+			ID:         cardMsgID,
+			Embeds:     &embeds,
+			Components: &resultComponents,
+		}); editErr != nil {
+			b.logger.Warn("match: failed to edit original match card %s for #%d: %v", cardMsgID, matchID, editErr)
+			_, _ = s.ChannelMessageSendComplex(i.ChannelID, &discordgo.MessageSend{
+				Embeds:     embeds,
+				Components: resultComponents,
+			})
+		}
+	} else if i.ChannelID != "" {
+		_, _ = s.ChannelMessageSendComplex(i.ChannelID, &discordgo.MessageSend{
+			Embeds:     []*discordgo.MessageEmbed{embed},
+			Components: resultComponents,
+		})
+	}
+
 	b.respond(s, i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
-			Embeds: []*discordgo.MessageEmbed{embed},
-			Components: []discordgo.MessageComponent{
-				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-					discordgo.Button{Label: "Встать в очередь лобби", Style: discordgo.SecondaryButton, CustomID: fmt.Sprintf("requeue_%d", matchID)},
-				}},
-			},
+			Content:    fmt.Sprintf("✅ Матч **#%d** закрыт (**%s WIN**). Если ошиблись — админ может откатить через `/revert_match %d`.", matchID, winner, matchID),
+			Components: []discordgo.MessageComponent{},
 		},
 	})
 
@@ -273,6 +401,48 @@ func (b *Bot) onMatchResultButton(s *discordgo.Session, i *discordgo.Interaction
 			b.archiveThreadIfMatchFinished(bg, s, threadID)
 		})
 	}
+}
+
+func (b *Bot) handleRevertMatch(ctx context.Context, s *discordgo.Session, i *discordgo.Interaction) {
+	matchID := int(i.ApplicationCommandData().Options[0].IntValue())
+	if matchID <= 0 {
+		b.respondMessage(s, i, "Укажите корректный ID матча.", true)
+		return
+	}
+
+	match, err := b.services.Lobby.GetMatch(ctx, matchID)
+	if err != nil {
+		b.respondMessage(s, i, fmt.Sprintf("Матч #%d не найден.", matchID), true)
+		return
+	}
+	if match.Status != models.LobbyMatchStatusFinished || match.Winner == "" {
+		b.respondMessage(s, i, fmt.Sprintf("Матч #%d не закрыт с победителем (статус: `%s`). Для активного матча используйте `/cancel_match`.", matchID, match.Status), true)
+		return
+	}
+
+	b.respond(s, i, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: fmt.Sprintf(
+				"⚠️ **Откат закрытого матча #%d (победитель был: %s)**\n\n"+
+					"Будут выполнены действия:\n"+
+					"• Откат MMR всех участников по `mmr_history`\n"+
+					"• Возврат выданных за матч ValCoins\n"+
+					"• Откат выплат ставок (ставки и страховки вернутся игрокам)\n"+
+					"• Удаление привязанного OCR-скриншота (если был)\n"+
+					"• Матч вернётся в статус `ACTIVE`, чтобы судья мог закрыть его с верным победителем.\n\n"+
+					"Подтвердите действие:",
+				matchID, match.Winner,
+			),
+			Components: []discordgo.MessageComponent{
+				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+					discordgo.Button{Label: fmt.Sprintf("Откатить матч #%d", matchID), Style: discordgo.DangerButton, CustomID: fmt.Sprintf("confirm_revert_match_%d", matchID)},
+					discordgo.Button{Label: "Отмена", Style: discordgo.SecondaryButton, CustomID: "cancel_danger"},
+				}},
+			},
+			Flags: discordgo.MessageFlagsEphemeral,
+		},
+	})
 }
 
 // =====================================================================
@@ -620,6 +790,7 @@ func (b *Bot) closeBettingWindow(ctx context.Context, matchID int) {
 	if err := b.services.Lobby.CloseBetting(ctx, matchID); err != nil {
 		b.logger.Error("match: failed to close betting for #%d: %v", matchID, err)
 	}
+	b.closeDiscordBetCard(ctx, matchID, "🔒 Приём ставок закрыт — матч в игре!", true)
 }
 
 // concatIDs joins two ID slices into a freshly allocated one. Plain
@@ -638,20 +809,6 @@ func concatNames(a, b []string) []string {
 	out = append(out, a...)
 	out = append(out, b...)
 	return out
-}
-
-// processTelegramPayout settles the bets on a finished match.
-//
-// A failure here means bettors were never credited. The bets stay unsettled
-// (settled_at IS NULL), which is what BettingService.SettlePending looks for on
-// the sweep driven by sweepBetting — so the money still moves, just late.
-func (b *Bot) processTelegramPayout(ctx context.Context, matchID int, winningTeam string) {
-	payouts, err := b.services.BettingService.ProcessPayout(ctx, matchID, winningTeam)
-	if err != nil {
-		b.logger.Error("betting: payout for match #%d (%s) failed, bets left unsettled: %v", matchID, winningTeam, err)
-		return
-	}
-	b.logger.Info("betting: match #%d paid out to %d bettors", matchID, len(payouts))
 }
 
 // =====================================================================
