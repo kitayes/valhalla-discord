@@ -256,3 +256,72 @@ CREATE TABLE player_results (
 
 CREATE INDEX idx_player_results_is_deleted ON player_results(is_deleted);
 CREATE INDEX idx_player_results_player_id ON player_results(player_id);
+
+-- =====================================================================
+-- Quests (daily/weekly progress & idempotent claims)
+-- =====================================================================
+
+CREATE TABLE player_quest_progress (
+    player_id  INT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    period_key VARCHAR(32) NOT NULL,
+    quest_code VARCHAR(64) NOT NULL,
+    progress   INT NOT NULL DEFAULT 0 CHECK (progress >= 0),
+    claimed_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (player_id, period_key, quest_code)
+);
+
+CREATE INDEX idx_player_quest_progress_period ON player_quest_progress(period_key);
+
+-- =====================================================================
+-- Ranked seasons & Hall of Fame standings
+-- =====================================================================
+
+CREATE TABLE seasons (
+    id             SERIAL PRIMARY KEY,
+    number         INT NOT NULL UNIQUE,
+    name           VARCHAR(100) NOT NULL,
+    status         VARCHAR(16) NOT NULL DEFAULT 'ACTIVE'
+        CHECK (status IN ('ACTIVE', 'ARCHIVED')),
+    started_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    ended_at       TIMESTAMPTZ,
+    matches_played INT NOT NULL DEFAULT 0,
+    mmr_reset_mode VARCHAR(16) NOT NULL DEFAULT 'full'
+        CHECK (mmr_reset_mode IN ('full', 'soft', 'none')),
+    closed_by      VARCHAR(64)
+);
+
+CREATE UNIQUE INDEX idx_seasons_one_active ON seasons(status) WHERE status = 'ACTIVE';
+
+INSERT INTO seasons (number, name, status, started_at)
+VALUES (
+    1,
+    'Сезон 1',
+    'ACTIVE',
+    COALESCE(
+        NULLIF((SELECT value FROM bot_settings WHERE key = 'season_start_date'), '')::timestamptz,
+        NOW()
+    )
+)
+ON CONFLICT (number) DO NOTHING;
+
+CREATE TABLE season_standings (
+    id           SERIAL PRIMARY KEY,
+    season_id    INT NOT NULL REFERENCES seasons(id) ON DELETE CASCADE,
+    rank         INT NOT NULL CHECK (rank > 0),
+    player_id    INT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    player_name  VARCHAR(255) NOT NULL,
+    final_mmr    INT NOT NULL,
+    tier         VARCHAR(32) NOT NULL,
+    matches      INT NOT NULL DEFAULT 0,
+    wins         INT NOT NULL DEFAULT 0,
+    losses       INT NOT NULL DEFAULT 0,
+    mvp_count    INT NOT NULL DEFAULT 0,
+    svp_count    INT NOT NULL DEFAULT 0,
+    kda          DOUBLE PRECISION NOT NULL DEFAULT 0,
+    reward_coins INT NOT NULL DEFAULT 0,
+    UNIQUE (season_id, player_id),
+    UNIQUE (season_id, rank)
+);
+
+CREATE INDEX idx_season_standings_player ON season_standings(player_id, rank);

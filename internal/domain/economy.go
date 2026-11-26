@@ -79,6 +79,8 @@ const (
 	LedgerReasonShopBuy      = "shop_buy"
 	LedgerReasonOrderRefund  = "order_refund"
 	LedgerReasonAdminGrant   = "admin_grant"
+	LedgerReasonQuestReward  = "quest_reward"
+	LedgerReasonSeasonReward = "season_reward"
 )
 
 // Shop item kinds stored in shop_items.kind.

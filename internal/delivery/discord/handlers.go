@@ -237,7 +237,10 @@ func (b *Bot) handleProfile(ctx context.Context, s *discordgo.Session, i *discor
 	// 3. Economy, activity XP/level, custom title & frame color.
 	b.appendEconomyFields(ctx, embed, id)
 
-	// 4. Recent MMR movement (last 5 matches with base + KDA + medal breakdown).
+	// 4. Hall of Fame podium trophies from archived seasons.
+	b.appendSeasonTrophiesField(ctx, embed, id)
+
+	// 5. Recent MMR movement (last 5 matches with base + KDA + medal breakdown).
 	b.appendMMRHistoryField(ctx, embed, id)
 
 	b.respond(s, i, &discordgo.InteractionResponse{

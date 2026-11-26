@@ -65,6 +65,7 @@ type Bot struct {
 	betCards          map[int]*discordBetCard          // matchID -> dedicated betting channel card
 	matchCards        map[int]matchCardRef             // matchID -> parent lobby channel match card
 	activity          *activityTracker
+	seasonCloses      *seasonCloseStore
 }
 
 type matchCardRef struct {
@@ -116,6 +117,7 @@ func NewBot(cfg *config.Config, services *application.Service, logger applicatio
 		betCards:          make(map[int]*discordBetCard),
 		matchCards:        make(map[int]matchCardRef),
 		activity:          newActivityTracker(),
+		seasonCloses:      newSeasonCloseStore(),
 	}
 }
 
@@ -217,6 +219,9 @@ func (b *Bot) Init() error {
 		b.newShopAdminCommand(),
 		b.newXPAdminCommand(),
 		b.newProfileAdminCommand(),
+		b.newQuestsCommand(),
+		b.newSeasonCommand(),
+		b.newSeasonAdminCommand(),
 	)
 
 	// Wrap interaction handler with panic recovery
@@ -239,6 +244,9 @@ func (b *Bot) Init() error {
 
 	// Register shop select menu and admin prize approval button handlers
 	b.RegisterShopHandlers()
+
+	// Register quests & seasons component handlers (/quests, /season, /season_admin)
+	b.RegisterQuestSeasonHandlers()
 
 	// Register activity XP handlers (voice state & guild snapshot)
 	b.RegisterActivityHandlers()
@@ -491,6 +499,12 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 	case "shop":
 		b.handleShop(ctx, s, i.Interaction)
 		return
+	case "quests":
+		b.handleQuests(ctx, s, i.Interaction)
+		return
+	case "season":
+		b.handleSeason(ctx, s, i.Interaction)
+		return
 	}
 
 	// Match lifecycle: referee OR admin. Kept out of the admin-only switch below
@@ -580,6 +594,8 @@ func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate
 		b.handleXPAdmin(ctx, s, i.Interaction)
 	case "profile_admin":
 		b.handleProfileAdmin(ctx, s, i.Interaction)
+	case "season_admin":
+		b.handleSeasonAdmin(ctx, s, i.Interaction)
 	}
 }
 

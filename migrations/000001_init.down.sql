@@ -1,3 +1,7 @@
+DROP TABLE IF EXISTS season_standings;
+DROP TABLE IF EXISTS seasons;
+DROP TABLE IF EXISTS player_quest_progress;
+
 DROP TABLE IF EXISTS player_results;
 DROP TABLE IF EXISTS matches;
 DROP TABLE IF EXISTS mmr_history;

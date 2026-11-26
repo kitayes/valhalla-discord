@@ -1,6 +1,10 @@
 package discord
 
-import "github.com/bwmarrin/discordgo"
+import (
+	"blackwatch/internal/domain"
+
+	"github.com/bwmarrin/discordgo"
+)
 
 func (b *Bot) addCommands(commands ...*discordgo.ApplicationCommand) {
 	b.commands = append(b.commands, commands...)
@@ -588,6 +592,72 @@ func (b *Bot) newProfileAdminCommand() *discordgo.ApplicationCommand {
 				Description: "Сбросить цвет рамки профиля игрока к стандартному",
 				Options: []*discordgo.ApplicationCommandOption{
 					{Type: discordgo.ApplicationCommandOptionInteger, Name: "player", Description: "ID игрока", Required: true},
+				},
+			},
+		},
+	}
+}
+
+func (b *Bot) newQuestsCommand() *discordgo.ApplicationCommand {
+	return &discordgo.ApplicationCommand{
+		Name:        "quests",
+		Description: "Ежедневные и еженедельные квесты: прогресс и получение ValCoins + XP",
+	}
+}
+
+func (b *Bot) newSeasonCommand() *discordgo.ApplicationCommand {
+	minSeason := float64(1)
+	return &discordgo.ApplicationCommand{
+		Name:        "season",
+		Description: "Текущий рейтинговый сезон и Зал Славы прошлых сезонов",
+		Options: []*discordgo.ApplicationCommandOption{
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "current",
+				Description: "Статус текущего сезона, Топ-5 и призовой фонд",
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "history",
+				Description: "Зал Славы прошлых сезонов (подиум, MMR, медали)",
+				Options: []*discordgo.ApplicationCommandOption{
+					{Type: discordgo.ApplicationCommandOptionInteger, Name: "number", Description: "Номер архивного сезона (пусто — последний)", Required: false, MinValue: &minSeason},
+				},
+			},
+		},
+	}
+}
+
+func (b *Bot) newSeasonAdminCommand() *discordgo.ApplicationCommand {
+	return &discordgo.ApplicationCommand{
+		Name:        "season_admin",
+		Description: "Управление сезонами: закрыть сезон с архивом и сбросом MMR или переименовать (Только админы)",
+		Options: []*discordgo.ApplicationCommandOption{
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "close",
+				Description: "Закрыть текущий сезон, сохранить Зал Славы, выдать призы Топ-3 и сбросить MMR",
+				Options: []*discordgo.ApplicationCommandOption{
+					{Type: discordgo.ApplicationCommandOptionString, Name: "next_name", Description: "Название нового сезона (пусто — Сезон N+1)", Required: false},
+					{
+						Type:        discordgo.ApplicationCommandOptionString,
+						Name:        "reset_mode",
+						Description: "Режим сброса MMR (по умолчанию: полный сброс на 1000)",
+						Required:    false,
+						Choices: []*discordgo.ApplicationCommandOptionChoice{
+							{Name: "Полный сброс всем на 1000 MMR (по умолчанию)", Value: domain.SeasonResetModeFull},
+							{Name: "Софт-ресет 50% к 1000 MMR", Value: domain.SeasonResetModeSoft},
+							{Name: "Без сброса MMR (только архив и статы)", Value: domain.SeasonResetModeNone},
+						},
+					},
+				},
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "rename",
+				Description: "Переименовать текущий активный сезон",
+				Options: []*discordgo.ApplicationCommandOption{
+					{Type: discordgo.ApplicationCommandOptionString, Name: "name", Description: "Новое название сезона (до 60 символов)", Required: true},
 				},
 			},
 		},

@@ -76,6 +76,8 @@ type Service struct {
 	EloService     *EloService
 	BettingService *BettingService
 	EconomyService *EconomyService
+	QuestService   *QuestService
+	SeasonService  *SeasonService
 	LicenseService LicenseService
 	FAQService     *FAQService
 }
@@ -98,12 +100,21 @@ func NewService(repos *repository.Repository, ai AIProvider, sheetsClient sheets
 		}
 	})
 
+	questSvc := NewQuestService(logger, repos.QuestSeason)
+	seasonSvc := NewSeasonService(logger, repos.QuestSeason, matchSvc)
+	bettingSvc := NewBettingService(logger, repos)
+	economySvc := NewEconomyService(logger, repos.Economy, repos.LobbyMatch, matchSvc)
+	bettingSvc.SetQuestService(questSvc)
+	economySvc.SetQuestService(questSvc)
+
 	return &Service{
 		MatchService:   matchSvc,
 		Lobby:          lobby,
 		EloService:     NewEloService(logger, matchSvc, repos.LobbyMatch),
-		BettingService: NewBettingService(logger, repos),
-		EconomyService: NewEconomyService(logger, repos.Economy, repos.LobbyMatch, matchSvc),
+		BettingService: bettingSvc,
+		EconomyService: economySvc,
+		QuestService:   questSvc,
+		SeasonService:  seasonSvc,
 		LicenseService: repos.License,
 	}
 }

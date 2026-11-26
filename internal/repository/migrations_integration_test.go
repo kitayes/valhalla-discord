@@ -50,6 +50,9 @@ func TestIntegrationMigrationsFromScratch(t *testing.T) {
 		"mmr_history",
 		"queue_bans",
 		"discord_servers",
+		"player_quest_progress",
+		"seasons",
+		"season_standings",
 	} {
 		var exists bool
 		if err := db.QueryRow(`SELECT to_regclass('public.' || $1) IS NOT NULL`, table).Scan(&exists); err != nil {

@@ -94,6 +94,10 @@ var (
 	ErrBetNotFound              = errors.New("no active bet found for this match")
 	ErrShopItemHasOrders        = errors.New("shop item has existing orders and cannot be deleted")
 	ErrMatchNotRevertible       = errors.New("match is not finished with a winner and cannot be reverted")
+	ErrNothingToClaim           = errors.New("no completed unclaimed quests available")
+	ErrSeasonNotFound           = errors.New("season not found")
+	ErrInvalidSeasonName        = errors.New("invalid season name")
+	ErrInvalidSeasonResetMode   = errors.New("invalid season MMR reset mode")
 )
 
 type ValidationError struct {

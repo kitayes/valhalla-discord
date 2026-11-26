@@ -50,6 +50,21 @@ func FormatTierDisplay(t Tier) string {
 	}
 }
 
+func FormatTierShort(t Tier) string {
+	switch t {
+	case TierObsidian:
+		return "OBSIDIAN"
+	case TierOnyx:
+		return "ONYX"
+	case TierCarbon:
+		return "CARBON"
+	case TierGraphite:
+		return "GRAPHITE"
+	default:
+		return "Unranked"
+	}
+}
+
 func FormatTierWithMMR(mmr int) string {
 	tier := DetermineTier(mmr)
 	return fmt.Sprintf("%s (%d MMR)", FormatTierDisplay(tier), mmr)

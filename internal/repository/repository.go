@@ -129,6 +129,21 @@ type QueueBan interface {
 	PurgeExpired(ctx context.Context) (int, error)
 }
 
+type QuestSeason interface {
+	IncrementQuestProgress(ctx context.Context, playerID int, periodKey string, questCodes []string, delta int) error
+	GetQuestProgress(ctx context.Context, playerID int, periodKeys []string) ([]models.QuestProgressRow, error)
+	ClaimQuestRewards(ctx context.Context, playerID int, claims []models.QuestClaimSpec) (*models.QuestClaimResult, error)
+
+	GetActiveSeason(ctx context.Context) (*models.Season, error)
+	GetSeasonByNumber(ctx context.Context, number int) (*models.Season, error)
+	ListArchivedSeasons(ctx context.Context, limit int) ([]models.Season, error)
+	RenameActiveSeason(ctx context.Context, newName string) (*models.Season, error)
+	GetSeasonStandings(ctx context.Context, seasonID, limit int) ([]models.SeasonStanding, error)
+	GetPlayerTrophies(ctx context.Context, playerID int) ([]models.PlayerTrophy, error)
+	CountMatchesSince(ctx context.Context, since time.Time) (int, error)
+	CloseSeasonAndReset(ctx context.Context, standings []models.SeasonStanding, matchesPlayed int, nextName, resetMode, closedBy string, now time.Time) (*models.CloseSeasonResult, error)
+}
+
 type Repository struct {
 	Match
 	LobbyMatch
@@ -136,6 +151,7 @@ type Repository struct {
 	Economy
 	License
 	QueueBan
+	QuestSeason
 	db *sql.DB
 }
 
@@ -145,12 +161,13 @@ func NewRepository(ctx context.Context, cfg *Config, db *sql.DB, cacheSize int) 
 		return nil, err
 	}
 	return &Repository{
-		Match:      matchRepo,
-		LobbyMatch: NewLobbyMatchPostgres(db),
-		Bet:        NewBetPostgres(db),
-		Economy:    NewEconomyPostgres(db),
-		License:    NewLicensePostgres(db),
-		QueueBan:   NewQueueBanPostgres(db),
-		db:         db,
+		Match:       matchRepo,
+		LobbyMatch:  NewLobbyMatchPostgres(db),
+		Bet:         NewBetPostgres(db),
+		Economy:     NewEconomyPostgres(db),
+		License:     NewLicensePostgres(db),
+		QueueBan:    NewQueueBanPostgres(db),
+		QuestSeason: NewQuestSeasonPostgres(db),
+		db:          db,
 	}, nil
 }

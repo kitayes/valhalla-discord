@@ -18,6 +18,7 @@ type EconomyService struct {
 	repo       repository.Economy
 	lobbyMatch LobbyMatchRepository
 	matchSvc   MatchService
+	quests     *QuestService
 }
 
 func NewEconomyService(logger Logger, repo repository.Economy, lobbyMatch LobbyMatchRepository, matchSvc MatchService) *EconomyService {
@@ -27,6 +28,11 @@ func NewEconomyService(logger Logger, repo repository.Economy, lobbyMatch LobbyM
 		lobbyMatch: lobbyMatch,
 		matchSvc:   matchSvc,
 	}
+}
+
+// SetQuestService connects automatic quest progress tracking to economy events.
+func (s *EconomyService) SetQuestService(q *QuestService) {
+	s.quests = q
 }
 
 func (s *EconomyService) GetPlayerEconomy(ctx context.Context, playerID int) (*models.PlayerEconomy, error) {
@@ -55,12 +61,31 @@ func (s *EconomyService) GrantActivityXP(ctx context.Context, playerID int, xpDe
 	if xpDelta <= 0 && voiceSeconds <= 0 && messages <= 0 {
 		return nil, nil
 	}
-	return s.repo.GrantXP(ctx, playerID, xpDelta, voiceSeconds, messages)
+	res, err := s.repo.GrantXP(ctx, playerID, xpDelta, voiceSeconds, messages)
+	if err != nil {
+		return nil, err
+	}
+	if s.quests != nil {
+		if messages > 0 {
+			s.quests.RecordEvent(ctx, playerID, domain.QuestMetricChatMessages, int(messages))
+		}
+		if mins := int(voiceSeconds / 60); mins > 0 {
+			s.quests.RecordEvent(ctx, playerID, domain.QuestMetricVoiceMinutes, mins)
+		}
+	}
+	return res, nil
 }
 
 // ClaimDaily grants the player's daily streak bonus.
 func (s *EconomyService) ClaimDaily(ctx context.Context, playerID int) (*models.DailyClaimResult, error) {
-	return s.repo.ClaimDaily(ctx, playerID, time.Now())
+	res, err := s.repo.ClaimDaily(ctx, playerID, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	if s.quests != nil {
+		s.quests.RecordEvent(ctx, playerID, domain.QuestMetricClaimDaily, 1)
+	}
+	return res, nil
 }
 
 // TipCoins transfers coins from senderID to receiverID with a 5% anti-inflation burn.
@@ -176,6 +201,15 @@ func (s *EconomyService) AwardMatchCoins(
 			} else if xpRes != nil {
 				xpAwarded = xpRes.XPGained
 				bal = xpRes.NewBalance
+			}
+		}
+		if applied && s.quests != nil {
+			s.quests.RecordEvent(ctx, pid, domain.QuestMetricPlayMatches, 1)
+			if won {
+				s.quests.RecordEvent(ctx, pid, domain.QuestMetricWinMatches, 1)
+			}
+			if isMVP || isSVP {
+				s.quests.RecordEvent(ctx, pid, domain.QuestMetricEarnMedals, 1)
 			}
 		}
 

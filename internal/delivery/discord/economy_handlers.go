@@ -639,6 +639,10 @@ func formatLedgerReason(reason string) string {
 		return "Возврат заказа"
 	case domain.LedgerReasonAdminGrant:
 		return "Корректировка админа"
+	case domain.LedgerReasonQuestReward:
+		return "Награда за квест"
+	case domain.LedgerReasonSeasonReward:
+		return "Приз за сезон"
 	default:
 		return reason
 	}

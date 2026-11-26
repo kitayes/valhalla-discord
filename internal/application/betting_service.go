@@ -42,6 +42,7 @@ func (r PayoutResult) HadBets() bool { return r.BetCount > 0 }
 type BettingService struct {
 	logger Logger
 	repo   BettingRepository
+	quests *QuestService
 
 	callbackMu            sync.RWMutex
 	discordPayoutCallback func(PayoutResult)
@@ -53,6 +54,11 @@ func NewBettingService(logger Logger, repo BettingRepository) *BettingService {
 		logger: logger,
 		repo:   repo,
 	}
+}
+
+// SetQuestService connects automatic quest progress tracking to betting events.
+func (s *BettingService) SetQuestService(q *QuestService) {
+	s.quests = q
 }
 
 func (s *BettingService) SetDiscordPayoutCallback(fn func(PayoutResult)) {
@@ -78,7 +84,14 @@ func (s *BettingService) PlaceDiscordBet(ctx context.Context, req models.PlaceDi
 	s.logger.Info("bet: player %d places %d coins on %s (match #%d, insured=%v)",
 		req.PlayerID, req.Amount, req.TeamChosen, req.MatchID, req.UseInsurance)
 
-	return s.repo.PlaceDiscordBet(ctx, req)
+	betID, newBal, err := s.repo.PlaceDiscordBet(ctx, req)
+	if err != nil {
+		return 0, 0, err
+	}
+	if s.quests != nil {
+		s.quests.RecordEvent(ctx, req.PlayerID, domain.QuestMetricPlaceBets, 1)
+	}
+	return betID, newBal, nil
 }
 
 func (s *BettingService) CancelDiscordBet(ctx context.Context, matchID, playerID int) (int, bool, int, error) {
@@ -139,6 +152,14 @@ func (s *BettingService) settlePayout(ctx context.Context, matchID int, winningT
 	summary, err := s.repo.PayoutWinnersDetailed(ctx, matchID, winningTeam)
 	if err != nil {
 		return PayoutResult{}, fmt.Errorf("betting: payout failed: %w", err)
+	}
+
+	if s.quests != nil {
+		for pid, payout := range summary.PlayerPayouts {
+			if payout > 0 {
+				s.quests.RecordEvent(ctx, pid, domain.QuestMetricWinBets, 1)
+			}
+		}
 	}
 
 	result := PayoutResult{
